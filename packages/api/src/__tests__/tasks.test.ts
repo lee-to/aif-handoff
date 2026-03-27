@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createTestDb, tasks, taskComments, projects } from "@aif/shared";
 
 // Mock the shared db module to use test db
@@ -170,6 +173,61 @@ describe("tasks API", () => {
       });
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("POST /tasks/:id/sync-plan", () => {
+    it("should sync db plan from physical PLAN.md", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-sync-plan-"));
+      const aiFactoryDir = join(rootPath, ".ai-factory");
+      mkdirSync(aiFactoryDir, { recursive: true });
+      writeFileSync(join(aiFactoryDir, "PLAN.md"), "## Synced Plan\n- Step from file\n", "utf8");
+
+      db.insert(projects).values({
+        id: "project-sync",
+        name: "Project Sync",
+        rootPath,
+      }).run();
+      db.insert(tasks).values({
+        id: "task-sync",
+        projectId: "project-sync",
+        title: "Sync task",
+        plan: "## Old Plan\n- old step",
+      }).run();
+
+      const res = await app.request("/tasks/task-sync/sync-plan", {
+        method: "POST",
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plan).toBe("## Synced Plan\n- Step from file\n");
+    });
+
+    it("should return 404 when physical plan file is missing", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-sync-plan-missing-"));
+      mkdirSync(join(rootPath, ".ai-factory"), { recursive: true });
+
+      db.insert(projects).values({
+        id: "project-sync-missing",
+        name: "Project Sync Missing",
+        rootPath,
+      }).run();
+      db.insert(tasks).values({
+        id: "task-sync-missing",
+        projectId: "project-sync-missing",
+        title: "Sync task missing",
+      }).run();
+
+      const res = await app.request("/tasks/task-sync-missing/sync-plan", {
+        method: "POST",
+      });
+
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.error).toMatch(/Plan file not found/);
     });
   });
 

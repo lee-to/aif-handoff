@@ -140,4 +140,11 @@ export const api = {
       body: JSON.stringify({ position }),
     });
   },
+
+  syncTaskPlan(id: string): Promise<Task> {
+    console.debug("[api] POST /tasks/%s/sync-plan", id);
+    return request<Task>(`${API_BASE}/${id}/sync-plan`, {
+      method: "POST",
+    });
+  },
 };

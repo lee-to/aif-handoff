@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { eq, asc } from "drizzle-orm";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { applyHumanTaskEvent, getDb, tasks, taskComments, projects, logger } from "@aif/shared";
 import type { Task } from "@aif/shared";
@@ -395,6 +395,48 @@ tasksRouter.put("/:id", zValidator("json", updateTaskSchema), async (c) => {
 
   const updated = db.select().from(tasks).where(eq(tasks.id, id)).get();
   log.debug({ taskId: id, fields: Object.keys(body) }, "Task updated");
+
+  broadcast({
+    type: "task:updated",
+    payload: toTaskResponse(updated!),
+  });
+  return c.json(toTaskResponse(updated!));
+});
+
+// POST /tasks/:id/sync-plan — sync DB plan with physical plan file
+tasksRouter.post("/:id/sync-plan", (c) => {
+  const { id } = c.req.param();
+  const { db, task: existing } = getTaskById(id);
+  if (!existing) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  const project = db.select().from(projects).where(eq(projects.id, existing.projectId)).get();
+  if (!project) {
+    return c.json({ error: "Project not found for task" }, 404);
+  }
+
+  const canonicalPlanPath = resolve(
+    project.rootPath,
+    existing.isFix ? ".ai-factory/FIX_PLAN.md" : ".ai-factory/PLAN.md"
+  );
+  if (!existsSync(canonicalPlanPath)) {
+    return c.json({ error: `Plan file not found: ${canonicalPlanPath}` }, 404);
+  }
+
+  const filePlan = readFileSync(canonicalPlanPath, "utf8");
+  const normalizedPlan = filePlan.trim().length > 0 ? filePlan : null;
+
+  db.update(tasks)
+    .set({
+      plan: normalizedPlan,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(tasks.id, id))
+    .run();
+
+  const updated = db.select().from(tasks).where(eq(tasks.id, id)).get();
+  log.debug({ taskId: id, canonicalPlanPath }, "Task plan synced from physical file");
 
   broadcast({
     type: "task:updated",

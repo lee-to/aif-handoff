@@ -117,3 +117,14 @@ export function useReorderTask() {
     },
   });
 }
+
+export function useSyncTaskPlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.syncTaskPlan(id),
+    onSuccess: (task) => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["task", task.id] });
+    },
+  });
+}

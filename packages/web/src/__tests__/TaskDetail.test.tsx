@@ -84,6 +84,7 @@ const mutateTaskEvent = vi.fn();
 const mutateCreateComment = vi.fn();
 const mutateTaskEventAsync = vi.fn();
 const mutateCreateCommentAsync = vi.fn();
+const mutateSyncTaskPlan = vi.fn();
 
 vi.mock("@/hooks/useTasks", () => ({
   useTask: (id: string | null) => ({
@@ -109,6 +110,7 @@ vi.mock("@/hooks/useTasks", () => ({
   useTaskEvent: () => ({ mutate: mutateTaskEvent, mutateAsync: mutateTaskEventAsync, isPending: false }),
   useTaskComments: () => ({ data: [], isLoading: false }),
   useCreateTaskComment: () => ({ mutate: mutateCreateComment, mutateAsync: mutateCreateCommentAsync, isPending: false }),
+  useSyncTaskPlan: () => ({ mutate: mutateSyncTaskPlan, isPending: false }),
 }));
 
 const { TaskDetail } = await import("@/components/task/TaskDetail");
@@ -128,8 +130,10 @@ describe("TaskDetail", () => {
     mutateCreateComment.mockClear();
     mutateTaskEventAsync.mockReset();
     mutateCreateCommentAsync.mockReset();
+    mutateSyncTaskPlan.mockClear();
     mutateTaskEventAsync.mockResolvedValue(undefined);
     mutateCreateCommentAsync.mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   it("should render nothing when taskId is null", () => {
@@ -175,6 +179,40 @@ describe("TaskDetail", () => {
     expect(screen.getAllByText("Read").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Write").length).toBeGreaterThan(0);
     expect(screen.getAllByText("TOOL").length).toBeGreaterThan(0);
+  });
+
+  it("should clear agent activity log with confirmation", () => {
+    render(
+      <TaskDetail taskId="detail-1" onClose={vi.fn()} />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByText("Activity"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear log" }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(mutateUpdateTask).toHaveBeenCalledWith(
+      {
+        id: "detail-1",
+        input: { agentActivityLog: null },
+      },
+      expect.any(Object)
+    );
+  });
+
+  it("should sync plan from file with confirmation", () => {
+    render(
+      <TaskDetail taskId="detail-1" onClose={vi.fn()} />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(mutateSyncTaskPlan).toHaveBeenCalledWith(
+      "detail-1",
+      expect.any(Object)
+    );
   });
 
   it("should show delete button", () => {

@@ -18,6 +18,7 @@ import {
   useDeleteTask,
   useTaskEvent,
   useCreateTaskComment,
+  useSyncTaskPlan,
 } from "@/hooks/useTasks";
 import { TaskDescription } from "./TaskDescription";
 import { TaskPlan } from "./TaskPlan";
@@ -89,12 +90,15 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
   const deleteTask = useDeleteTask();
   const taskEvent = useTaskEvent();
   const createTaskComment = useCreateTaskComment();
+  const syncTaskPlan = useSyncTaskPlan();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showReplanModal, setShowReplanModal] = useState(false);
   const [planChangeMode, setPlanChangeMode] = useState<PlanChangeMode>("replanning");
   const [isSubmittingPlanChange, setIsSubmittingPlanChange] = useState(false);
   const [planChangeError, setPlanChangeError] = useState<string | null>(null);
   const [planChangeSuccess, setPlanChangeSuccess] = useState<string | null>(null);
+  const [maintenanceSuccess, setMaintenanceSuccess] = useState<string | null>(null);
+  const [maintenanceError, setMaintenanceError] = useState<string | null>(null);
   const [replanComment, setReplanComment] = useState("");
   const [replanFiles, setReplanFiles] = useState<File[]>([]);
   const [attachmentsDragOver, setAttachmentsDragOver] = useState(false);
@@ -238,6 +242,46 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
     event.preventDefault();
     setAttachmentsDragOver(false);
     void handleTaskAttachmentsSelected(event.dataTransfer.files);
+  };
+
+  const handleClearActivityLog = () => {
+    if (!task) return;
+    const shouldClear = confirm("Clear agent activity log? This action cannot be undone.");
+    if (!shouldClear) return;
+
+    setMaintenanceSuccess(null);
+    setMaintenanceError(null);
+    updateTask.mutate(
+      {
+        id: task.id,
+        input: { agentActivityLog: null },
+      },
+      {
+        onSuccess: () => {
+          setMaintenanceSuccess("Agent activity log cleared.");
+        },
+        onError: (error) => {
+          setMaintenanceError(error instanceof Error ? error.message : "Failed to clear agent activity log");
+        },
+      }
+    );
+  };
+
+  const handleSyncPlanFromFile = () => {
+    if (!task) return;
+    const shouldSync = confirm("Sync plan from physical file into DB? Current DB plan will be overwritten.");
+    if (!shouldSync) return;
+
+    setMaintenanceSuccess(null);
+    setMaintenanceError(null);
+    syncTaskPlan.mutate(task.id, {
+      onSuccess: () => {
+        setMaintenanceSuccess("Plan synced from physical file.");
+      },
+      onError: (error) => {
+        setMaintenanceError(error instanceof Error ? error.message : "Failed to sync plan from physical file");
+      },
+    });
   };
 
   return (
@@ -434,7 +478,21 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                     </div>
                   </Section>
 
-                  <Section title="Plan">
+                  <Section
+                    title="Plan"
+                    actions={(
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={handleSyncPlanFromFile}
+                        disabled={syncTaskPlan.isPending}
+                      >
+                        {syncTaskPlan.isPending ? "Syncing..." : "Sync"}
+                      </Button>
+                    )}
+                  >
                     <TaskPlan plan={task.plan} />
                   </Section>
 
@@ -469,7 +527,21 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                   )}
 
                   {activeTab === "activity" && (
-                    <Section title="Agent Activity">
+                    <Section
+                      title="Agent Activity"
+                      actions={(
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-6 px-2 text-[10px]"
+                          onClick={handleClearActivityLog}
+                          disabled={updateTask.isPending}
+                        >
+                          {updateTask.isPending ? "Clearing..." : "Clear log"}
+                        </Button>
+                      )}
+                    >
                       <AgentTimeline activityLog={task.agentActivityLog} />
                     </Section>
                   )}
@@ -479,6 +551,17 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
           )}
         </SheetContent>
       </Sheet>
+
+      {maintenanceSuccess && (
+        <div className="fixed bottom-4 left-4 z-[70] border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {maintenanceSuccess}
+        </div>
+      )}
+      {maintenanceError && (
+        <div className="fixed bottom-4 right-4 z-[70] border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {maintenanceError}
+        </div>
+      )}
 
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
         <DialogContent>
@@ -621,16 +704,21 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
 
 function Section({
   title,
+  actions,
   children,
 }: {
   title: string;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="border border-border bg-background/55 p-3">
-      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        {title}
-      </h4>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </h4>
+        {actions}
+      </div>
       {children}
     </div>
   );

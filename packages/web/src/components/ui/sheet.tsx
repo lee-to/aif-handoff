@@ -1,6 +1,11 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
+import {
+  createOverlayLayerId,
+  isTopOverlayLayer,
+  pushOverlayLayer,
+} from "@/components/ui/overlayStack";
 
 interface SheetProps {
   open: boolean;
@@ -9,11 +14,19 @@ interface SheetProps {
 }
 
 function Sheet({ open, onOpenChange, children }: SheetProps) {
-  // Close on Escape
+  const overlayLayerId = React.useRef(createOverlayLayerId("sheet"));
+
+  React.useEffect(() => {
+    if (!open) return;
+    return pushOverlayLayer(overlayLayerId.current);
+  }, [open]);
+
   React.useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onOpenChange(false);
+      if (e.key !== "Escape") return;
+      if (!isTopOverlayLayer(overlayLayerId.current)) return;
+      onOpenChange(false);
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);

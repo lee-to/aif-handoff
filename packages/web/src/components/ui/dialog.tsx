@@ -2,6 +2,11 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
+import {
+  createOverlayLayerId,
+  isTopOverlayLayer,
+  pushOverlayLayer,
+} from "@/components/ui/overlayStack";
 
 interface DialogProps {
   open: boolean;
@@ -10,10 +15,19 @@ interface DialogProps {
 }
 
 function Dialog({ open, onOpenChange, children }: DialogProps) {
+  const overlayLayerId = React.useRef(createOverlayLayerId("dialog"));
+
+  React.useEffect(() => {
+    if (!open) return;
+    return pushOverlayLayer(overlayLayerId.current);
+  }, [open]);
+
   React.useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onOpenChange(false);
+      if (event.key !== "Escape") return;
+      if (!isTopOverlayLayer(overlayLayerId.current)) return;
+      onOpenChange(false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);

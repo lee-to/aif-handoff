@@ -33,6 +33,30 @@ function parseInlineTask(
     };
   }
 
+  const numberedCheckboxMatch = line.match(
+    /^\s*(\d+)[.)]\s*\[([ x~!])\]\s+(.+?)(?:\s*\(([^)]*)\))?\s*$/i
+  );
+  if (numberedCheckboxMatch) {
+    const [, numberRaw, statusRaw, descRaw, depsRaw = ""] = numberedCheckboxMatch;
+    return {
+      number: Number(numberRaw),
+      description: descRaw.trim(),
+      inlineDeps: extractDependencyNumbers(depsRaw),
+      completed: statusRaw.toLowerCase() === "x",
+    };
+  }
+
+  const numberedStepMatch = line.match(/^\s*(\d+)[.)]\s+(.+?)\s*$/);
+  if (numberedStepMatch) {
+    const [, numberRaw, descRaw] = numberedStepMatch;
+    return {
+      number: Number(numberRaw),
+      description: descRaw.trim(),
+      inlineDeps: [],
+      completed: false,
+    };
+  }
+
   const headingMatch = line.match(/^\s*###\s+Task\s+(\d+):\s*(.+)$/i);
   if (headingMatch) {
     const [, numberRaw, descRaw] = headingMatch;

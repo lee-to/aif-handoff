@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computePlanLayers, formatLayerSummary } from "../planLayers.js";
+import { computePendingPlanLayers, computePlanLayers, formatLayerSummary } from "../planLayers.js";
 
 describe("plan layer parsing", () => {
   it("computes parallel layer for dependency fan-out", () => {
@@ -49,5 +49,27 @@ describe("plan layer parsing", () => {
   it("formats summary for prompt injection", () => {
     const text = formatLayerSummary([[1], [2, 3], [4]]);
     expect(text).toContain("Layer 2 (parallel): tasks 2, 3");
+  });
+
+  it("parses numbered checklist tasks in `1. [ ]` format", () => {
+    const plan = `
+## Fix Steps
+1. [ ] Remove footer html
+2. [x] Remove footer css
+3. [ ] Remove footer js (depends on 1)
+`;
+    const { layers } = computePendingPlanLayers(plan);
+    expect(layers).toEqual([[1], [3]]);
+  });
+
+  it("parses numbered tasks without checkboxes as pending", () => {
+    const plan = `
+## Steps
+1. Create endpoint
+2) Add tests
+3. Verify integration
+`;
+    const { layers } = computePendingPlanLayers(plan);
+    expect(layers).toEqual([[1, 2, 3]]);
   });
 });

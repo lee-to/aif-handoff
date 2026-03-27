@@ -52,7 +52,7 @@ describe("runImplementer rework behavior", () => {
       title: "Task",
       description: "Desc",
       status: "implementing",
-      plan: "## Plan\n- [x] Done",
+      plan: "## Plan\n1. [x] Done",
       reworkRequested: false,
     }).run();
 
@@ -110,6 +110,54 @@ describe("runImplementer rework behavior", () => {
 
     const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-2")).get();
     expect(updatedTask?.reworkRequested).toBe(false);
+    expect(updatedTask?.implementationLog).toBe("Implementation done");
+  });
+
+  it("does not skip when numbered checklist has pending items", async () => {
+    const db = testDb.current;
+    db.insert(tasks).values({
+      id: "task-3",
+      projectId: "project-1",
+      title: "Task",
+      description: "Desc",
+      status: "implementing",
+      plan: "## Fix Steps\n1. [ ] Pending step\n2. [x] Done step",
+      reworkRequested: false,
+    }).run();
+
+    await runImplementer("task-3", "/tmp/implementer-test");
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(call.prompt).toContain("Parsed plan tasks (status + dependencies extracted by orchestrator):");
+    expect(call.prompt).toContain("Task 1 [pending]");
+    expect(call.prompt).toContain("Task 2 [completed]");
+    const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-3")).get();
+    expect(updatedTask?.implementationLog).toBe("Implementation done");
+    expect(updatedTask?.implementationLog).not.toContain("No pending tasks detected in plan");
+  });
+
+  it("does not skip when plan task format is unrecognized", async () => {
+    const db = testDb.current;
+    db.insert(tasks).values({
+      id: "task-4",
+      projectId: "project-1",
+      title: "Task",
+      description: "Desc",
+      status: "implementing",
+      plan: "Plan:\n- remove old code\n- update docs",
+      reworkRequested: false,
+    }).run();
+
+    await runImplementer("task-4", "/tmp/implementer-test");
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(call.prompt).toContain(
+      "No structured checklist/tasks were parsed from plan. " +
+      "Interpret the plan text directly and decide actionable implementation steps."
+    );
+    const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-4")).get();
     expect(updatedTask?.implementationLog).toBe("Implementation done");
   });
 });

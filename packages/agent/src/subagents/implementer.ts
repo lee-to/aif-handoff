@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { getDb, projects, taskComments, tasks, logger } from "@aif/shared";
 import { createActivityLogger, createSubagentLogger, logActivity, getClaudePath } from "../hooks.js";
 import { writeQueryAudit } from "../queryAudit.js";
-import { computePendingPlanLayers, formatLayerSummary } from "../planLayers.js";
+import { computePendingPlanLayers, computePlanLayers, formatLayerSummary } from "../planLayers.js";
 import {
   createClaudeStderrCollector,
   explainClaudeFailure,
@@ -109,6 +109,36 @@ function readCanonicalPlan(task: { isFix: boolean }, projectRoot: string): strin
   return null;
 }
 
+function formatParsedPlanTasksForPrompt(
+  parsedTasks: Array<{
+    number: number;
+    description: string;
+    phase: number;
+    explicitDependencies: number[];
+    completed: boolean;
+  }>,
+  hasPlanText: boolean
+): string {
+  if (!hasPlanText) return "No plan text available.";
+  if (parsedTasks.length === 0) {
+    return (
+      "No structured checklist/tasks were parsed from plan. " +
+      "Interpret the plan text directly and decide actionable implementation steps."
+    );
+  }
+
+  return parsedTasks
+    .sort((a, b) => a.number - b.number)
+    .map((task) => {
+      const state = task.completed ? "completed" : "pending";
+      const deps = task.explicitDependencies.length > 0
+        ? `; deps: ${task.explicitDependencies.join(", ")}`
+        : "";
+      return `- Task ${task.number} [${state}] (phase ${task.phase}): ${task.description}${deps}`;
+    })
+    .join("\n");
+}
+
 export async function runImplementer(taskId: string, projectRoot: string): Promise<void> {
   const db = getDb();
   const task = db.select().from(tasks).where(eq(tasks.id, taskId)).get();
@@ -129,6 +159,12 @@ ${selectedPlan ?? "No in-task plan copy is available."}`
   const layerComputation = selectedPlan
     ? computePendingPlanLayers(selectedPlan)
     : { tasks: [], layers: [] };
+  const parsedPlanComputation = selectedPlan ? computePlanLayers(selectedPlan) : { tasks: [], layers: [] };
+  const parsedTasksSummary = formatParsedPlanTasksForPrompt(
+    parsedPlanComputation.tasks,
+    Boolean(selectedPlan)
+  );
+  const parsedTaskCount = parsedPlanComputation.tasks.length;
   const hasParallelLayer = layerComputation.layers.some((layer) => layer.length > 1);
   const layerSummary = formatLayerSummary(layerComputation.layers);
   const pendingTaskCount = layerComputation.tasks.length;
@@ -143,7 +179,7 @@ ${selectedPlan ?? "No in-task plan copy is available."}`
         .at(-1) ?? null
     : null;
 
-  if (selectedPlan && pendingTaskCount === 0 && !task.reworkRequested) {
+  if (selectedPlan && parsedTaskCount > 0 && pendingTaskCount === 0 && !task.reworkRequested) {
     const nowIso = new Date().toISOString();
     const noOpResult =
       "No pending tasks detected in plan (all tasks already completed). " +
@@ -176,6 +212,9 @@ ${formatTaskAttachmentsForPrompt(task.attachments)}
 
 Plan:
 ${planSection}
+
+Parsed plan tasks (status + dependencies extracted by orchestrator):
+${parsedTasksSummary}
 
 Precomputed execution layers (source of truth from orchestrator):
 ${layerSummary}

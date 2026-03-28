@@ -6,3 +6,4 @@
   - Replace sequential stage loop with a worker pool while preserving valid state transitions.
   - Add lease expiration and requeue logic for stuck/crashed workers.
   - Add concurrency tests (race conditions, duplicate-claim prevention, retry/requeue behavior).
+- [ ] Create an AI chat for codebase questions.

@@ -195,26 +195,14 @@ export const api = {
     projectId: string,
     roadmapAlias: string,
     vision?: string,
-  ): Promise<{
-    roadmapAlias: string;
-    created: number;
-    skipped: number;
-    taskIds: string[];
-    byPhase: Record<number, { created: number; skipped: number }>;
-    roadmapGenerated: boolean;
-    roadmapPath: string;
-  }> {
+  ): Promise<{ status: string; projectId: string; roadmapAlias: string }> {
     console.debug("[api] POST /projects/%s/roadmap/generate", projectId, {
       roadmapAlias,
       vision,
     });
-    return request(
-      `/projects/${projectId}/roadmap/generate`,
-      {
-        method: "POST",
-        body: JSON.stringify({ roadmapAlias, vision }),
-      },
-      300000,
-    );
+    return request(`/projects/${projectId}/roadmap/generate`, {
+      method: "POST",
+      body: JSON.stringify({ roadmapAlias, vision }),
+    });
   },
 };

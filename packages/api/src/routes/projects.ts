@@ -71,7 +71,7 @@ projectsRouter.get("/:id/mcp", (c) => {
   return c.json({ mcpServers: getProjectMcpServers(id) });
 });
 
-// POST /projects/:id/roadmap/generate — generate ROADMAP.md then import tasks
+// POST /projects/:id/roadmap/generate — start async roadmap generation + import
 projectsRouter.post(
   "/:id/roadmap/generate",
   zValidator("json", roadmapGenerateSchema),
@@ -86,55 +86,12 @@ projectsRouter.post(
 
     log.info({ projectId: id, roadmapAlias, hasVision: !!vision }, "Roadmap generation requested");
 
-    try {
-      // Step 1: Generate ROADMAP.md via Agent SDK
-      const generated = await generateRoadmapFile({ projectId: id, vision });
-      log.info({ projectId: id, roadmapPath: generated.roadmapPath }, "ROADMAP.md generated");
+    // Fire-and-forget: run generation in background, broadcast result via WS
+    runRoadmapGenerationJob(id, roadmapAlias, vision).catch((err) => {
+      log.error({ projectId: id, roadmapAlias, err }, "Background roadmap generation crashed");
+    });
 
-      // Step 2: Extract tasks from the generated roadmap
-      const extraction = await generateRoadmapTasks({ projectId: id, roadmapAlias });
-
-      // Step 3: Import with dedupe and tag enrichment
-      const result = importGeneratedTasks(id, extraction);
-
-      // Step 4: Broadcast each created task
-      for (const taskId of result.taskIds) {
-        const task = findTaskById(taskId);
-        if (task) {
-          broadcast({ type: "task:created", payload: toTaskResponse(task) });
-        }
-      }
-
-      // Wake coordinator
-      if (result.created > 0) {
-        broadcast({ type: "agent:wake", payload: { id } });
-      }
-
-      log.info(
-        { projectId: id, roadmapAlias, created: result.created, skipped: result.skipped },
-        "Roadmap generation and import completed",
-      );
-
-      return c.json(
-        {
-          ...result,
-          roadmapGenerated: true,
-          roadmapPath: generated.roadmapPath,
-        },
-        201,
-      );
-    } catch (err) {
-      if (err instanceof RoadmapGenerationError) {
-        const status = err.code === "PROJECT_NOT_FOUND" || err.code === "NO_CONTEXT" ? 404 : 500;
-        log.warn(
-          { projectId: id, roadmapAlias, code: err.code, error: err.message },
-          "Roadmap generation failed",
-        );
-        return c.json({ error: err.message, code: err.code }, status);
-      }
-      log.error({ projectId: id, roadmapAlias, err }, "Roadmap generation unexpected error");
-      return c.json({ error: "Internal server error" }, 500);
-    }
+    return c.json({ status: "started", projectId: id, roadmapAlias }, 202);
   },
 );
 
@@ -210,3 +167,63 @@ projectsRouter.delete("/:id", (c) => {
   log.debug({ projectId: id }, "Project deleted");
   return c.json({ success: true });
 });
+
+// -- Background roadmap generation job --
+
+async function runRoadmapGenerationJob(
+  projectId: string,
+  roadmapAlias: string,
+  vision?: string,
+): Promise<void> {
+  try {
+    // Step 1: Generate ROADMAP.md
+    const generated = await generateRoadmapFile({ projectId, vision });
+    log.info({ projectId, roadmapPath: generated.roadmapPath }, "ROADMAP.md generated");
+
+    // Step 2: Extract tasks from the generated roadmap
+    const extraction = await generateRoadmapTasks({ projectId, roadmapAlias });
+
+    // Step 3: Import with dedupe and tag enrichment
+    const result = importGeneratedTasks(projectId, extraction);
+
+    // Step 4: Broadcast each created task
+    for (const taskId of result.taskIds) {
+      const task = findTaskById(taskId);
+      if (task) {
+        broadcast({ type: "task:created", payload: toTaskResponse(task) });
+      }
+    }
+
+    // Wake coordinator
+    if (result.created > 0) {
+      broadcast({ type: "agent:wake", payload: { id: projectId } });
+    }
+
+    // Broadcast completion
+    broadcast({
+      type: "roadmap:complete",
+      payload: {
+        projectId,
+        roadmapAlias: result.roadmapAlias,
+        created: result.created,
+        skipped: result.skipped,
+        taskIds: result.taskIds,
+        byPhase: result.byPhase,
+      },
+    });
+
+    log.info(
+      { projectId, roadmapAlias, created: result.created, skipped: result.skipped },
+      "Roadmap generation and import completed",
+    );
+  } catch (err) {
+    const code = err instanceof RoadmapGenerationError ? err.code : "UNKNOWN";
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ projectId, roadmapAlias, code, error: message }, "Roadmap generation job failed");
+
+    broadcast({
+      type: "roadmap:error",
+      payload: { projectId, roadmapAlias, error: message, code },
+    });
+  }
+}

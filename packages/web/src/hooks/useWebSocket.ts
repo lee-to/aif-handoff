@@ -106,6 +106,11 @@ export function useWebSocket() {
         statusCacheRef.current.delete(data.payload.id);
       }
 
+      // Dispatch roadmap events as custom DOM events for listeners
+      if (data.type === "roadmap:complete" || data.type === "roadmap:error") {
+        window.dispatchEvent(new CustomEvent(data.type, { detail: data.payload }));
+      }
+
       // Invalidate tasks query to trigger refetch
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
 

@@ -152,9 +152,27 @@ export type WsEventType =
   | "task:updated"
   | "task:deleted"
   | "task:moved"
-  | "agent:wake";
+  | "agent:wake"
+  | "roadmap:complete"
+  | "roadmap:error";
+
+export interface RoadmapCompletePayload {
+  projectId: string;
+  roadmapAlias: string;
+  created: number;
+  skipped: number;
+  taskIds: string[];
+  byPhase: Record<number, { created: number; skipped: number }>;
+}
+
+export interface RoadmapErrorPayload {
+  projectId: string;
+  roadmapAlias: string;
+  error: string;
+  code: string;
+}
 
 export interface WsEvent {
   type: WsEventType;
-  payload: Task | Project | { id: string };
+  payload: Task | Project | { id: string } | RoadmapCompletePayload | RoadmapErrorPayload;
 }

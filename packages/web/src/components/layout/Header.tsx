@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Bell, Moon, Sun, Command, ChartColumn, Map, Loader2 } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import {
@@ -100,23 +100,49 @@ export function Header({
     setRoadmapError(null);
     setRoadmapResult(null);
     try {
-      console.debug("[roadmap] Generating with alias:", roadmapAlias);
-      const result = await api.generateRoadmap(
+      console.debug("[roadmap] Starting generation with alias:", roadmapAlias);
+      await api.generateRoadmap(
         selectedProject.id,
         roadmapAlias.trim(),
         roadmapVision.trim() || undefined,
       );
-      console.debug("[roadmap] Generate result:", result);
-      setRoadmapResult(result);
-      onRoadmapImportComplete?.(result);
+      // Server returns 202 immediately — result comes via WebSocket
+      console.debug("[roadmap] Generation started, waiting for WS event...");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[roadmap] Generation failed:", message);
+      console.error("[roadmap] Failed to start generation:", message);
       setRoadmapError(message);
-    } finally {
       setRoadmapLoading(false);
     }
-  }, [selectedProject, roadmapAlias, roadmapVision, onRoadmapImportComplete]);
+  }, [selectedProject, roadmapAlias, roadmapVision]);
+
+  // Listen for roadmap WS events
+  useEffect(() => {
+    const handleComplete = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (selectedProject && detail.projectId === selectedProject.id) {
+        console.debug("[roadmap] Generation complete:", detail);
+        setRoadmapResult(detail);
+        setRoadmapLoading(false);
+        onRoadmapImportComplete?.(detail);
+      }
+    };
+    const handleError = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (selectedProject && detail.projectId === selectedProject.id) {
+        console.error("[roadmap] Generation error:", detail);
+        setRoadmapError(detail.error);
+        setRoadmapLoading(false);
+      }
+    };
+
+    window.addEventListener("roadmap:complete", handleComplete);
+    window.addEventListener("roadmap:error", handleError);
+    return () => {
+      window.removeEventListener("roadmap:complete", handleComplete);
+      window.removeEventListener("roadmap:error", handleError);
+    };
+  }, [selectedProject, onRoadmapImportComplete]);
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/65">

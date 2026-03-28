@@ -17,6 +17,8 @@ export {
   type ReorderTaskInput,
   type WsEventType,
   type WsEvent,
+  type RoadmapCompletePayload,
+  type RoadmapErrorPayload,
 } from "./types.js";
 
 export { STATUS_CONFIG, ORDERED_STATUSES } from "./constants.js";

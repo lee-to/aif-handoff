@@ -9,6 +9,7 @@ import {
   initProjectDirectory,
   getEnv,
   CLEAN_STATE_RESET,
+  withTimeout,
   type TaskStatus,
 } from "@aif/shared";
 import { runPlanner } from "./subagents/planner.js";
@@ -82,20 +83,11 @@ async function runStageWithTimeout(
   projectRoot: string,
   stageLabel: string,
 ): Promise<void> {
-  let timeoutId: NodeJS.Timeout | null = null;
-  try {
-    await Promise.race([
-      runner(taskId, projectRoot),
-      new Promise<void>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(`Stage ${stageLabel} timed out after ${STAGE_RUN_TIMEOUT_MS}ms`));
-        }, STAGE_RUN_TIMEOUT_MS);
-        timeoutId.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
+  await withTimeout(
+    runner(taskId, projectRoot),
+    STAGE_RUN_TIMEOUT_MS,
+    `Stage ${stageLabel} timed out after ${STAGE_RUN_TIMEOUT_MS}ms`,
+  );
 }
 
 /** Update task status with optional field overrides and broadcast. */

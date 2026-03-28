@@ -65,3 +65,6 @@ export {
 
 // Task usage metrics
 export { parseTaskTokenUsage, type TaskTokenUsage } from "./taskUsage.js";
+
+// Utilities
+export { withTimeout } from "./withTimeout.js";

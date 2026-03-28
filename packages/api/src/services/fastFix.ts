@@ -138,15 +138,4 @@ ${
   return resultText;
 }
 
-export async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  return await Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(message)), timeoutMs);
-    }),
-  ]);
-}
+export { withTimeout } from "@aif/shared";

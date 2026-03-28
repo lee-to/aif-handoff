@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import type { TaskCommentAttachment, TaskEvent, Task } from "@aif/shared/browser";
+import {
+  withTimeout,
+  type TaskCommentAttachment,
+  type TaskEvent,
+  type Task,
+} from "@aif/shared/browser";
 import { api } from "@/lib/api";
 import { encodeBase64 } from "@/lib/formatters";
 import {
@@ -18,15 +23,6 @@ const BASE64_CONTENT_MAX_SIZE = 2_000_000;
 const MAX_TASK_ATTACHMENTS = 10;
 const COMMENT_TIMEOUT_MS = 30_000;
 const FAST_FIX_TIMEOUT_MS = 200_000;
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(message)), timeoutMs);
-    }),
-  ]);
-}
 
 export async function toAttachmentPayload(file: File): Promise<TaskCommentAttachment> {
   const isTextLike =

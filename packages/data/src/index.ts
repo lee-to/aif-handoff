@@ -1,8 +1,5 @@
 import { and, asc, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import {
-  formatAttachmentsForPrompt,
-  logger,
-  looksLikeFullPlanUpdate,
   parseAttachments,
   parseTaskTokenUsage,
   persistTaskPlan,
@@ -49,7 +46,6 @@ export type TaskFieldsUpdate = {
   position?: number;
 };
 
-export { logger, formatAttachmentsForPrompt, looksLikeFullPlanUpdate };
 
 export function toTaskResponse(task: TaskRow): Task {
   const { attachments, tags, ...rest } = task;

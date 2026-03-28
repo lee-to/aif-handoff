@@ -132,7 +132,7 @@ describe("roadmapGeneration", () => {
     });
 
     it("should generate ROADMAP.md from DESCRIPTION.md", async () => {
-      const { projectId, tmpDir } = createProjectWithDescription("# My App\nA todo app");
+      const { projectId } = createProjectWithDescription("# My App\nA todo app");
 
       mockQuery.mockImplementation(async function* () {
         yield {

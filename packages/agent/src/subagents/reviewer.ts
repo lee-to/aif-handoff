@@ -1,10 +1,5 @@
-import {
-  findProjectById,
-  findTaskById,
-  logger,
-  setTaskFields,
-  formatAttachmentsForPrompt,
-} from "@aif/data";
+import { findProjectById, findTaskById, setTaskFields } from "@aif/data";
+import { logger, formatAttachmentsForPrompt } from "@aif/shared";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery, startHeartbeat } from "../subagentQuery.js";
 

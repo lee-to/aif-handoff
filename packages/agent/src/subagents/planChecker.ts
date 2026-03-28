@@ -1,4 +1,5 @@
-import { findProjectById, findTaskById, logger, persistTaskPlanForTask } from "@aif/data";
+import { findProjectById, findTaskById, persistTaskPlanForTask } from "@aif/data";
+import { logger } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
 
 const log = logger("plan-checker");

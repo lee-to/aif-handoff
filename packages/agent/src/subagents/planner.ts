@@ -1,13 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import {
-  findProjectById,
-  findTaskById,
-  listTaskComments,
-  persistTaskPlanForTask,
-  logger,
-  formatAttachmentsForPrompt,
-} from "@aif/data";
+import { findProjectById, findTaskById, listTaskComments, persistTaskPlanForTask } from "@aif/data";
+import { logger, formatAttachmentsForPrompt } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
 
 const log = logger("planner");

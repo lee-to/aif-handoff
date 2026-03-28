@@ -7,12 +7,10 @@ import {
   getLatestHumanComment,
   persistTaskPlanForTask,
   setTaskFields,
-  logger,
   incrementTaskTokenUsage,
-  formatAttachmentsForPrompt,
-  looksLikeFullPlanUpdate,
   type TaskRow,
 } from "@aif/data";
+import { logger, formatAttachmentsForPrompt, looksLikeFullPlanUpdate } from "@aif/shared";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery } from "../subagentQuery.js";
 import { createClaudeStderrCollector } from "../claudeDiagnostics.js";

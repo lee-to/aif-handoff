@@ -33,16 +33,15 @@ export function explainClaudeFailure(err: unknown, stderrTail: string): string {
   if (
     combinedLower.includes("rate limit") ||
     combinedLower.includes("usage limit") ||
+    combinedLower.includes("extra usage") ||
+    combinedLower.includes("out of extra usage") ||
     combinedLower.includes("quota") ||
     combinedLower.includes("credits")
   ) {
     return `Claude usage limit reached. ${stderr || baseMessage}`;
   }
 
-  if (
-    combinedLower.includes("stream closed") ||
-    combinedLower.includes("error in hook callback")
-  ) {
+  if (combinedLower.includes("stream closed") || combinedLower.includes("error in hook callback")) {
     return `Claude stream interrupted during execution. ${stderr || baseMessage}`;
   }
 
@@ -65,7 +64,7 @@ function trimForLog(text: string, maxLen = 1200): string {
 
 export async function probeClaudeCliFailure(
   projectRoot: string,
-  claudePath?: string
+  claudePath?: string,
 ): Promise<string> {
   const cmd = claudePath || "claude";
   const args = ["-p", "Reply with OK only", "--output-format", "text"];

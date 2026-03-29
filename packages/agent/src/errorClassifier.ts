@@ -6,6 +6,8 @@
 const EXTERNAL_FAILURE_PATTERNS: string[] = [
   "not logged in",
   "usage limit",
+  "extra usage",
+  "out of extra usage",
   "rate limit",
   "quota",
   "credits",

@@ -5,6 +5,7 @@ describe("isExternalFailure", () => {
   it.each([
     "not logged in to Claude",
     "Usage limit exceeded",
+    "You're out of extra usage · resets 3pm",
     "Rate limit reached",
     "Insufficient quota remaining",
     "No credits available",

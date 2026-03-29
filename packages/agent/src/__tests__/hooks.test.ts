@@ -48,6 +48,7 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
     ACTIVITY_LOG_QUEUE_LIMIT: 500,
     AGENT_WAKE_ENABLED: true,
     AGENT_BYPASS_PERMISSIONS: false,
+    AGENT_USE_SUBAGENTS: true,
     ...overrides,
   };
 }

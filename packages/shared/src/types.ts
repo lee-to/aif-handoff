@@ -54,6 +54,7 @@ export interface Task {
   planPath: string;
   planDocs: boolean;
   planTests: boolean;
+  skipReview: boolean;
   status: TaskStatus;
   priority: number;
   position: number;
@@ -104,6 +105,7 @@ export interface CreateTaskInput {
   planPath?: string;
   planDocs?: boolean;
   planTests?: boolean;
+  skipReview?: boolean;
   roadmapAlias?: string;
   tags?: string[];
 }
@@ -120,6 +122,7 @@ export interface UpdateTaskInput {
   planPath?: string;
   planDocs?: boolean;
   planTests?: boolean;
+  skipReview?: boolean;
   plan?: string | null;
   implementationLog?: string | null;
   reviewComments?: string | null;

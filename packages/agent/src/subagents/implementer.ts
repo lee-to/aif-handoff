@@ -10,11 +10,10 @@ import {
   incrementTaskTokenUsage,
   type TaskRow,
 } from "@aif/data";
-import { logger, formatAttachmentsForPrompt, looksLikeFullPlanUpdate } from "@aif/shared";
+import { logger, formatAttachmentsForPrompt, getEnv, looksLikeFullPlanUpdate } from "@aif/shared";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery } from "../subagentQuery.js";
-import { createClaudeStderrCollector } from "../claudeDiagnostics.js";
-import { computePendingPlanLayers, computePlanLayers, formatLayerSummary } from "../planLayers.js";
+import { computePendingPlanLayers, computePlanLayers } from "../planLayers.js";
 
 const log = logger("implementer");
 const AGENT_NAME = "implement-coordinator";
@@ -146,37 +145,6 @@ Requirements:
   return resultText;
 }
 
-function formatParsedPlanTasksForPrompt(
-  parsedTasks: Array<{
-    number: number;
-    description: string;
-    phase: number;
-    explicitDependencies: number[];
-    completed: boolean;
-  }>,
-  hasPlanText: boolean,
-): string {
-  if (!hasPlanText) return "No plan text available.";
-  if (parsedTasks.length === 0) {
-    return (
-      "No structured checklist/tasks were parsed from plan. " +
-      "Interpret the plan text directly and decide actionable implementation steps."
-    );
-  }
-
-  return parsedTasks
-    .sort((a, b) => a.number - b.number)
-    .map((task) => {
-      const state = task.completed ? "completed" : "pending";
-      const deps =
-        task.explicitDependencies.length > 0
-          ? `; deps: ${task.explicitDependencies.join(", ")}`
-          : "";
-      return `- Task ${task.number} [${state}] (phase ${task.phase}): ${task.description}${deps}`;
-    })
-    .join("\n");
-}
-
 export async function runImplementer(taskId: string, projectRoot: string): Promise<void> {
   const task = findTaskById(taskId);
 
@@ -186,29 +154,19 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   }
   const project = findProjectById(task.projectId);
   const implementerBudget = project?.implementerMaxBudgetUsd ?? null;
+  const useSubagents = getEnv().AGENT_USE_SUBAGENTS;
+  const executionName = useSubagents ? AGENT_NAME : "aif-implement";
   const canonicalPlan = readCanonicalPlan(task, projectRoot);
   const selectedPlan = canonicalPlan ?? task.plan;
   const effectivePlanPath = task.isFix ? FIX_PLAN_PATH : task.planPath || PLAN_PATH;
-  const planSection = task.isFix
-    ? `Primary plan file (use first): @${effectivePlanPath}
-Fallback in-task plan copy:
-${selectedPlan ?? "No in-task plan copy is available."}`
-    : `Primary plan file: @${effectivePlanPath}
-Plan content:
-${selectedPlan ?? "No plan available — use your best judgment."}`;
+  const planSection = `@${effectivePlanPath}`;
   const layerComputation = selectedPlan
     ? computePendingPlanLayers(selectedPlan)
     : { tasks: [], layers: [] };
   const parsedPlanComputation = selectedPlan
     ? computePlanLayers(selectedPlan)
     : { tasks: [], layers: [] };
-  const parsedTasksSummary = formatParsedPlanTasksForPrompt(
-    parsedPlanComputation.tasks,
-    Boolean(selectedPlan),
-  );
   const parsedTaskCount = parsedPlanComputation.tasks.length;
-  const hasParallelLayer = layerComputation.layers.some((layer) => layer.length > 1);
-  const layerSummary = formatLayerSummary(layerComputation.layers);
   const pendingTaskCount = layerComputation.tasks.length;
   const latestHumanComment = task.reworkRequested ? (getLatestHumanComment(taskId) ?? null) : null;
 
@@ -230,14 +188,14 @@ ${selectedPlan ?? "No plan available — use your best judgment."}`;
       lastHeartbeatAt: nowIso,
       updatedAt: nowIso,
     });
-    logActivity(taskId, "Agent", `${AGENT_NAME} skipped — no pending tasks in plan`);
+    logActivity(taskId, "Agent", `${executionName} skipped — no pending tasks in plan`);
     log.info({ taskId }, "Implementer no-op: all plan tasks already completed");
     return;
   }
 
-  log.info({ taskId, title: task.title }, "Starting implement-worker agent");
+  log.info({ taskId, title: task.title, useSubagents }, "Starting implementation stage");
 
-  const prompt = `Implement the following task according to the plan.
+  const prompt = `/aif-implement ${planSection}
 
 IMPORTANT: Your working directory is ${projectRoot}
 All files must be created and modified inside this directory. Do NOT create files outside of it.
@@ -247,14 +205,8 @@ Description: ${task.description}
 Task attachments:
 ${formatAttachmentsForPrompt(task.attachments)}
 
-Plan:
+Plan path:
 ${planSection}
-
-Parsed plan tasks (status + dependencies extracted by orchestrator):
-${parsedTasksSummary}
-
-Precomputed execution layers (source of truth from orchestrator):
-${layerSummary}
 
 ${
   task.reworkRequested
@@ -265,59 +217,24 @@ ${formatLatestHumanCommentForPrompt(latestHumanComment)}`
 }
 
 Execution rules:
-- Respect the precomputed layers above as authoritative dependency order.
-- Any layer with multiple tasks MUST be executed via parallel \`implement-worker\` dispatch.
-- Do not collapse parallel layers into sequential execution unless blocked by explicit conflicts.
-- Run quality sidecars (review, security, best-practices) and verify the merged result.
+- Respect task dependencies and checklist state from the plan file.
+- Keep plan checklist state accurate while implementing.
+- Run tests/lint/verification relevant to the changes.
 - IMPORTANT: The plan file is ${effectivePlanPath}. Always read from and annotate this exact file — do not create plan files at other paths.`;
-
-  let implementWorkerStarts = 0;
-  const stderrCollector = createClaudeStderrCollector();
 
   const { resultText } = await executeSubagentQuery({
     taskId,
     projectRoot,
-    agentName: AGENT_NAME,
+    agentName: executionName,
     prompt,
     maxBudgetUsd: implementerBudget,
-    agent: AGENT_NAME,
-    extraSubagentStartHooks: [
-      async (input) => {
-        const data =
-          input != null && typeof input === "object" && !Array.isArray(input)
-            ? (input as Record<string, unknown>)
-            : {};
-        const agentName = String(
-          data.agent_name ?? data.subagent_type ?? data.agent_type ?? data.description ?? "",
-        ).toLowerCase();
-        if (agentName.includes("implement-worker")) {
-          implementWorkerStarts += 1;
-        }
-        return {};
-      },
-    ],
+    agent: useSubagents ? AGENT_NAME : undefined,
   });
 
   let finalResultText = resultText;
 
   if (isBlockedImplementationResult(resultText)) {
     throw new Error("Implementer blocked by permissions");
-  }
-
-  if (hasParallelLayer && implementWorkerStarts === 0) {
-    const stderrTail = stderrCollector.getTail();
-    if (
-      stderrTail &&
-      (stderrTail.toLowerCase().includes("stream closed") ||
-        stderrTail.toLowerCase().includes("error in hook callback"))
-    ) {
-      throw new Error("Claude stream interrupted before implement-worker dispatch");
-    }
-    log.warn(
-      { taskId, pendingLayerSummary: layerSummary },
-      "Implementer finished without implement-worker dispatch for pending parallel layers",
-    );
-    finalResultText = `${resultText}\n\n[warning] No implement-worker dispatch detected for pending parallel layers. Execution was accepted in fallback mode.`;
   }
 
   let syncedPlan = readCanonicalPlan(task, projectRoot) ?? task.plan;

@@ -527,6 +527,47 @@ describe("coordinator", () => {
     expect(runImplementer).not.toHaveBeenCalled();
   });
 
+  it("should skip review stage when skipReview=true and go directly to done", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-skip-review",
+        projectId: "test-project",
+        title: "Skip review task",
+        status: "implementing",
+        skipReview: true,
+      })
+      .run();
+
+    await pollAndProcess();
+
+    expect(runImplementer).toHaveBeenCalledWith("task-skip-review", "/tmp/test");
+    expect(runReviewer).not.toHaveBeenCalled();
+    const task = db.select().from(tasks).where(eq(tasks.id, "task-skip-review")).get();
+    expect(task!.status).toBe("done");
+  });
+
+  it("should skip review when skipReview=true in full pipeline from planning", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-skip-review-full",
+        projectId: "test-project",
+        title: "Full pipeline skip review",
+        status: "planning",
+        skipReview: true,
+      })
+      .run();
+
+    await pollAndProcess();
+
+    expect(runPlanner).toHaveBeenCalledWith("task-skip-review-full", "/tmp/test");
+    expect(runImplementer).toHaveBeenCalledWith("task-skip-review-full", "/tmp/test");
+    expect(runReviewer).not.toHaveBeenCalled();
+    const task = db.select().from(tasks).where(eq(tasks.id, "task-skip-review-full")).get();
+    expect(task!.status).toBe("done");
+  });
+
   it("should do nothing when no tasks exist", async () => {
     await pollAndProcess();
 

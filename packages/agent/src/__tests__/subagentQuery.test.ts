@@ -52,6 +52,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
       API_BASE_URL: "http://localhost:3001",
       AGENT_QUERY_AUDIT_ENABLED: true,
       LOG_LEVEL: "debug",
+      AGENT_USE_SUBAGENTS: true,
     }),
     logger: () => ({
       info: () => undefined,

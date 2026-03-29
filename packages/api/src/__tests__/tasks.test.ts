@@ -138,6 +138,37 @@ describe("tasks API", () => {
       expect(body.planTests).toBe(true);
     });
 
+    it("should persist skipReview from create payload", async () => {
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Task with skip review",
+          projectId: "test-project",
+          skipReview: true,
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.skipReview).toBe(true);
+    });
+
+    it("should default skipReview to false", async () => {
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Task without skip review",
+          projectId: "test-project",
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.skipReview).toBe(false);
+    });
+
     it("should create a fix task when isFix=true", async () => {
       const res = await app.request("/tasks", {
         method: "POST",
@@ -217,6 +248,21 @@ describe("tasks API", () => {
       });
 
       expect(res.status).toBe(404);
+    });
+
+    it("should update skipReview via PUT", async () => {
+      const db = testDb.current;
+      db.insert(tasks).values({ id: "upd-sr", projectId: "test-project", title: "SR task" }).run();
+
+      const res = await app.request("/tasks/upd-sr", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skipReview: true }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.skipReview).toBe(true);
     });
 
     it("should sync physical plan file when updating plan via PUT", async () => {

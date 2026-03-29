@@ -1,5 +1,5 @@
 import { findProjectById, findTaskById, setTaskFields } from "@aif/data";
-import { logger, formatAttachmentsForPrompt } from "@aif/shared";
+import { logger, formatAttachmentsForPrompt, getEnv } from "@aif/shared";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery, startHeartbeat } from "../subagentQuery.js";
 
@@ -11,6 +11,7 @@ async function runSidecar(
   projectRoot: string,
   agentName: string,
   maxBudgetUsd: number | null,
+  useSubagentAgent: boolean,
 ): Promise<string> {
   const { resultText } = await executeSubagentQuery({
     taskId,
@@ -18,7 +19,7 @@ async function runSidecar(
     agentName,
     prompt,
     maxBudgetUsd,
-    agent: agentName,
+    agent: useSubagentAgent ? agentName : undefined,
   });
   return resultText;
 }
@@ -33,10 +34,11 @@ export async function runReviewer(taskId: string, projectRoot: string): Promise<
 
   const project = findProjectById(task.projectId);
   const sidecarBudget = project?.reviewSidecarMaxBudgetUsd ?? null;
+  const useSubagents = getEnv().AGENT_USE_SUBAGENTS;
 
-  log.info({ taskId, title: task.title }, "Starting review + security sidecars");
+  log.info({ taskId, title: task.title, useSubagents }, "Starting review stage");
 
-  const reviewPrompt = `Review the implementation for this task:
+  const reviewPromptBase = `Review the implementation for this task:
 
 Title: ${task.title}
 Description: ${task.description}
@@ -48,7 +50,7 @@ ${task.implementationLog ?? "No implementation log available."}
 
 Review changed code for correctness, regression risks, performance, and maintainability.`;
 
-  const securityPrompt = `Audit the implementation for security risks:
+  const securityPromptBase = `Audit the implementation for security risks:
 
 Title: ${task.title}
 Description: ${task.description}
@@ -56,6 +58,12 @@ Task attachments:
 ${formatAttachmentsForPrompt(task.attachments)}
 
 Focus on auth, validation, secrets, injection, and unsafe shell/file handling in changed code.`;
+  const reviewPrompt = useSubagents ? reviewPromptBase : `/aif-review ${reviewPromptBase}`;
+  const securityPrompt = useSubagents
+    ? securityPromptBase
+    : `/aif-security-checklist ${securityPromptBase}`;
+  const reviewAgentName = useSubagents ? "review-sidecar" : "aif-review";
+  const securityAgentName = useSubagents ? "security-sidecar" : "aif-security-checklist";
 
   try {
     const heartbeatTimer = startHeartbeat(taskId);
@@ -63,10 +71,29 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
     let reviewResult = "";
     let securityResult = "";
     try {
-      [reviewResult, securityResult] = await Promise.all([
-        runSidecar(reviewPrompt, taskId, projectRoot, "review-sidecar", sidecarBudget),
-        runSidecar(securityPrompt, taskId, projectRoot, "security-sidecar", sidecarBudget),
-      ]);
+      if (useSubagents) {
+        [reviewResult, securityResult] = await Promise.all([
+          runSidecar(reviewPrompt, taskId, projectRoot, reviewAgentName, sidecarBudget, true),
+          runSidecar(securityPrompt, taskId, projectRoot, securityAgentName, sidecarBudget, true),
+        ]);
+      } else {
+        reviewResult = await runSidecar(
+          reviewPrompt,
+          taskId,
+          projectRoot,
+          reviewAgentName,
+          sidecarBudget,
+          false,
+        );
+        securityResult = await runSidecar(
+          securityPrompt,
+          taskId,
+          projectRoot,
+          securityAgentName,
+          sidecarBudget,
+          false,
+        );
+      }
     } finally {
       try {
         clearInterval(heartbeatTimer);
@@ -84,7 +111,13 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
       updatedAt: new Date().toISOString(),
     });
 
-    logActivity(taskId, "Agent", "review stage complete (review-sidecar + security-sidecar)");
+    logActivity(
+      taskId,
+      "Agent",
+      useSubagents
+        ? "review stage complete (review-sidecar + security-sidecar)"
+        : "review stage complete (aif-review + aif-security-checklist)",
+    );
     log.debug({ taskId }, "Review comments saved to task");
   } catch (err) {
     logActivity(taskId, "Agent", `review stage failed — ${(err as Error).message}`);

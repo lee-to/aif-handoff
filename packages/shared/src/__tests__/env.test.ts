@@ -47,6 +47,7 @@ describe("env validation", () => {
     expect(result.ACTIVITY_LOG_BATCH_MAX_AGE_MS).toBe(5000);
     expect(result.ACTIVITY_LOG_QUEUE_LIMIT).toBe(500);
     expect(result.AGENT_WAKE_ENABLED).toBe(true);
+    expect(result.AGENT_USE_SUBAGENTS).toBe(true);
   });
 
   it("should accept missing ANTHROPIC_API_KEY (uses ~/.claude/ auth)", () => {

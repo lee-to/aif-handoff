@@ -32,6 +32,7 @@ export type TaskFieldsUpdate = {
   planPath?: string;
   planDocs?: boolean;
   planTests?: boolean;
+  skipReview?: boolean;
   implementationLog?: string | null;
   reviewComments?: string | null;
   agentActivityLog?: string | null;
@@ -110,6 +111,7 @@ export function createTask(input: {
   planPath?: string;
   planDocs?: boolean;
   planTests?: boolean;
+  skipReview?: boolean;
   roadmapAlias?: string;
   tags?: string[];
 }): TaskRow | undefined {
@@ -131,6 +133,7 @@ export function createTask(input: {
       planPath: input.planPath,
       planDocs: input.planDocs,
       planTests: input.planTests,
+      skipReview: input.skipReview,
       roadmapAlias: input.roadmapAlias ?? null,
       tags: JSON.stringify(input.tags ?? []),
       reworkRequested: false,

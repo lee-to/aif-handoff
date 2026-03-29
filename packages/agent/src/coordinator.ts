@@ -148,6 +148,16 @@ export async function pollAndProcess(): Promise<void> {
 
       flushActivityQueue(task.id);
 
+      // Skip review: if task has skipReview, jump straight to done after implementing
+      if (stage.label === "implementer" && task.skipReview) {
+        updateTaskStatus(task.id, "done", CLEAN_STATE_RESET);
+        log.info(
+          { taskId: task.id, from: stage.inProgress, to: "done" },
+          "Skip review enabled — bypassing review stage",
+        );
+        continue;
+      }
+
       // Auto review gate: after reviewer in autoMode, decide accept vs rework
       if (stage.label === "reviewer") {
         const outcome = await handleAutoReviewGate({

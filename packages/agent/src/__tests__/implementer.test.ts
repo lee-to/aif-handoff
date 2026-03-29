@@ -123,6 +123,7 @@ describe("runImplementer rework behavior", () => {
 
     expect(queryMock).toHaveBeenCalledTimes(1);
     const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(call.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
     expect(call.prompt).toContain("Rework mode: true");
     expect(call.prompt).toContain("message: latest-human");
     expect(call.prompt).not.toContain("message: first-human");
@@ -157,11 +158,7 @@ describe("runImplementer rework behavior", () => {
 
     expect(queryMock).toHaveBeenCalledTimes(2);
     const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
-    expect(call.prompt).toContain(
-      "Parsed plan tasks (status + dependencies extracted by orchestrator):",
-    );
-    expect(call.prompt).toContain("Task 1 [pending]");
-    expect(call.prompt).toContain("Task 2 [completed]");
+    expect(call.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
     const syncCall = queryMock.mock.calls[1]?.[0] as { prompt: string };
     expect(syncCall.prompt).toContain("Update only checkbox states");
     const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-3")).get();
@@ -188,10 +185,7 @@ describe("runImplementer rework behavior", () => {
 
     expect(queryMock).toHaveBeenCalledTimes(1);
     const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
-    expect(call.prompt).toContain(
-      "No structured checklist/tasks were parsed from plan. " +
-        "Interpret the plan text directly and decide actionable implementation steps.",
-    );
+    expect(call.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
     const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-4")).get();
     expect(updatedTask?.implementationLog).toBe("Implementation done");
   });

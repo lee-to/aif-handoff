@@ -14,6 +14,7 @@ function makeTask(status: Task["status"]): Task {
     planPath: ".ai-factory/PLAN.md",
     planDocs: false,
     planTests: false,
+    skipReview: false,
     status,
     priority: 0,
     position: 1000,

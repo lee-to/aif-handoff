@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projects, taskComments, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { eq } from "drizzle-orm";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const testDb = { current: createTestDb() };
 const queryMock = vi.fn();
@@ -78,6 +81,7 @@ describe("runPlanner comment selection", () => {
 
     expect(queryMock).toHaveBeenCalledTimes(1);
     const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(call.prompt).toContain("/aif-plan full @.ai-factory/PLAN.md docs:false tests:false");
     expect(call.prompt).toContain("message: comment-12");
     expect(call.prompt).not.toContain("message: comment-11");
     expect(call.prompt).not.toContain("message: comment-01");
@@ -151,5 +155,39 @@ describe("runPlanner comment selection", () => {
     expect(call.prompt).toContain("Fix login bug");
     expect(call.prompt).toContain("Users get 500 on /login");
     expect(call.options.extraArgs).toBeUndefined();
+  });
+
+  it("loads plan text from fallback PLAN.md when skill wrote outside canonical plan path", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-fallback-"));
+    mkdirSync(projectRoot, { recursive: true });
+    const fallbackPlanPath = join(projectRoot, "PLAN.md");
+    writeFileSync(fallbackPlanPath, "## Fallback Plan\n- [ ] Step from fallback", "utf8");
+
+    db.insert(projects)
+      .values({
+        id: "project-fallback",
+        name: "Fallback Project",
+        rootPath: projectRoot,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-fallback",
+        projectId: "project-fallback",
+        title: "Task fallback",
+        description: "Desc",
+        status: "planning",
+        planPath: ".ai-factory/PLAN.md",
+      })
+      .run();
+
+    queryMock.mockReset();
+    queryMock.mockReturnValue(streamSuccess("Plan written to PLAN.md"));
+
+    await runPlanner("task-fallback", projectRoot);
+
+    const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-fallback")).get();
+    expect(updatedTask?.plan).toBe("## Fallback Plan\n- [ ] Step from fallback");
   });
 });

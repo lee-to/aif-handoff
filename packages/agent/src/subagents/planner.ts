@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { findProjectById, findTaskById, listTaskComments, persistTaskPlanForTask } from "@aif/data";
-import { logger, formatAttachmentsForPrompt } from "@aif/shared";
+import { logger, formatAttachmentsForPrompt, getEnv } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
 
 const log = logger("planner");
@@ -9,9 +9,30 @@ const AGENT_NAME = "plan-coordinator";
 const FIX_SKILL_NAME = "aif-fix";
 
 function extractPlanPathFromResult(resultText: string): string | null {
-  const match = resultText.match(/plan written to\s+([^\n.]+(?:\.[a-z0-9]+)?)/i);
-  if (!match) return null;
-  return match[1].trim().replace(/^["']|["']$/g, "");
+  const patterns = [/plan written to\s+([^\n]+)/i, /saved to\s+([^\n]+)/i];
+
+  for (const pattern of patterns) {
+    const match = resultText.match(pattern);
+    if (!match) continue;
+    const normalized = normalizeExtractedPlanPath(match[1]);
+    if (normalized) return normalized;
+  }
+
+  return null;
+}
+
+function normalizeExtractedPlanPath(pathText: string): string | null {
+  const normalized = pathText
+    .trim()
+    .replace(/^[@`"'(\[]+/, "")
+    .replace(/[)\].,`"']+$/, "")
+    .trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizePlanPath(path: string | null | undefined): string {
+  if (!path) return ".ai-factory/PLAN.md";
+  return path.trim().replace(/^@+/, "") || ".ai-factory/PLAN.md";
 }
 
 function readPlanFromDisk(
@@ -20,25 +41,32 @@ function readPlanFromDisk(
   isFix: boolean,
   customPlanPath?: string,
 ): string | null {
-  const planPath = resolve(
+  const normalizedPlanPath = normalizePlanPath(customPlanPath);
+  const canonicalPlanPath = resolve(
     projectRoot,
-    isFix ? ".ai-factory/FIX_PLAN.md" : customPlanPath || ".ai-factory/PLAN.md",
+    isFix ? ".ai-factory/FIX_PLAN.md" : normalizedPlanPath,
   );
-
-  if (existsSync(planPath)) {
-    const content = readFileSync(planPath, "utf8").trim();
-    if (content.length > 0) return content;
-  }
-
+  const candidatePaths = new Set<string>([canonicalPlanPath]);
   const pathFromResult = extractPlanPathFromResult(resultText);
   if (pathFromResult) {
     const resolved = pathFromResult.startsWith("/")
       ? pathFromResult
       : resolve(projectRoot, pathFromResult);
-    if (existsSync(resolved)) {
-      const content = readFileSync(resolved, "utf8").trim();
-      if (content.length > 0) return content;
-    }
+    candidatePaths.add(resolved);
+  }
+
+  // Skill runs may write fallback paths even when @path is requested.
+  if (isFix) {
+    candidatePaths.add(resolve(projectRoot, "FIX_PLAN.md"));
+  } else {
+    candidatePaths.add(resolve(projectRoot, ".ai-factory/PLAN.md"));
+    candidatePaths.add(resolve(projectRoot, "PLAN.md"));
+  }
+
+  for (const candidatePath of candidatePaths) {
+    if (!existsSync(candidatePath)) continue;
+    const content = readFileSync(candidatePath, "utf8").trim();
+    if (content.length > 0) return content;
   }
 
   return null;
@@ -98,55 +126,33 @@ export async function runPlanner(taskId: string, projectRoot: string): Promise<v
     throw new Error(`Task ${taskId} not found`);
   }
 
-  const executionName = task.isFix ? FIX_SKILL_NAME : AGENT_NAME;
+  const useSubagents = getEnv().AGENT_USE_SUBAGENTS;
+  const executionName = task.isFix ? FIX_SKILL_NAME : useSubagents ? AGENT_NAME : "aif-plan";
   log.info({ taskId, title: task.title, isFix: task.isFix }, "Starting planning flow");
   const project = findProjectById(task.projectId);
   const plannerBudget = project?.plannerMaxBudgetUsd ?? null;
-
-  const hasComments = comments.length > 0;
-  const isReplanning = hasComments || (task.plan && task.plan.trim().length > 0);
 
   const taskAttachmentsForPrompt = formatAttachmentsForPrompt(task.attachments);
   const commentsForPrompt = formatCommentsForPrompt(comments);
 
   const plannerMode = task.plannerMode || "full";
-  const planPath = task.planPath || ".ai-factory/PLAN.md";
-  const planDocs = task.planDocs ? "yes" : "no";
-  const planTests = task.planTests ? "yes" : "no";
-  const optionsLine = `Mode: ${plannerMode}, tests: ${planTests}, docs: ${planDocs}, max_iterations: 3.`;
-
-  const prompt = task.isFix
-    ? buildFixCommandText(task.title, task.description)
-    : isReplanning
-      ? `Refine and improve the existing plan for the following task.
-${optionsLine}
-Plan file: @${planPath}
-
-Title: ${task.title}
+  const planPath = normalizePlanPath(task.planPath);
+  const planDocs = task.planDocs ? "true" : "false";
+  const planTests = task.planTests ? "true" : "false";
+  const taskContext = `Title: ${task.title}
 Description: ${task.description}
 Task attachments:
 ${taskAttachmentsForPrompt}
 User comments and replanning feedback:
-${commentsForPrompt}
+${commentsForPrompt}`;
+  let prompt: string;
+  if (task.isFix) {
+    prompt = buildFixCommandText(task.title, task.description);
+  } else {
+    prompt = `/aif-plan ${plannerMode} @${planPath} docs:${planDocs} tests:${planTests}
 
-Previous plan:
-${task.plan ?? "(no previous plan)"}
-
-Iterate on the plan using plan-polisher: critique the existing plan, address the feedback above, and refine until implementation-ready.
-IMPORTANT: Always write the plan to ${planPath} — do not use any other path.`
-      : `Plan the implementation for the following task.
-${optionsLine}
-Plan file: @${planPath}
-
-Title: ${task.title}
-Description: ${task.description}
-Task attachments:
-${taskAttachmentsForPrompt}
-User comments and replanning feedback:
-${commentsForPrompt}
-
-Create a concrete, implementation-ready plan using iterative refinement via plan-polisher.
-IMPORTANT: Always write the plan to ${planPath} — do not use any other path.`;
+${taskContext}`;
+  }
 
   const { resultText: rawResult } = await executeSubagentQuery({
     taskId,
@@ -154,7 +160,7 @@ IMPORTANT: Always write the plan to ${planPath} — do not use any other path.`;
     agentName: executionName,
     prompt,
     maxBudgetUsd: plannerBudget,
-    agent: task.isFix ? undefined : AGENT_NAME,
+    agent: task.isFix || !useSubagents ? undefined : AGENT_NAME,
   });
 
   const diskPlan = readPlanFromDisk(projectRoot, rawResult, !!task.isFix, planPath);

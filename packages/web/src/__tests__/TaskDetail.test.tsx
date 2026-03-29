@@ -15,6 +15,8 @@ const mockTask: Task = {
   planPath: ".ai-factory/PLAN.md",
   planDocs: false,
   planTests: false,
+  skipReview: false,
+  useSubagents: true,
   reworkRequested: false,
   lastHeartbeatAt: null,
   roadmapAlias: null,

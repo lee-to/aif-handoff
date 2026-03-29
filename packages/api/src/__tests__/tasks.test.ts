@@ -313,6 +313,35 @@ describe("tasks API", () => {
       expect(body.useSubagents).toBe(false);
     });
 
+    it("should handle attachments update via PUT", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-put-attach-"));
+      mkdirSync(join(rootPath, ".ai-factory"), { recursive: true });
+      db.insert(projects).values({ id: "project-attach", name: "Attach Project", rootPath }).run();
+      db.insert(tasks)
+        .values({
+          id: "upd-attach-1",
+          projectId: "project-attach",
+          title: "Attach task",
+          attachments: JSON.stringify([]),
+        })
+        .run();
+
+      const res = await app.request("/tasks/upd-attach-1", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          attachments: [{ name: "note.txt", mimeType: "text/plain", size: 5, content: "hello" }],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.attachments).toHaveLength(1);
+      expect(body.attachments[0].name).toBe("note.txt");
+      expect(body.attachments[0].path).toBeDefined();
+    });
+
     it("should sync physical plan file when updating plan via PUT", async () => {
       const db = testDb.current;
       const rootPath = mkdtempSync(join(tmpdir(), "aif-put-plan-sync-"));
@@ -426,6 +455,61 @@ describe("tasks API", () => {
       expect(res.status).toBe(404);
       const body = await res.json();
       expect(body.error).toMatch(/Task or project not found/);
+    });
+  });
+
+  describe("POST /tasks/:id/sync-plan — edge cases", () => {
+    it("should return 404 for non-existent task", async () => {
+      const res = await app.request("/tasks/totally-missing/sync-plan", {
+        method: "POST",
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("should sync empty plan file as null plan", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-sync-empty-plan-"));
+      const aiFactoryDir = join(rootPath, ".ai-factory");
+      mkdirSync(aiFactoryDir, { recursive: true });
+      writeFileSync(join(aiFactoryDir, "PLAN.md"), "   \n  \n", "utf8");
+
+      db.insert(projects)
+        .values({ id: "project-sync-empty", name: "Empty Plan Sync", rootPath })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "task-sync-empty",
+          projectId: "project-sync-empty",
+          title: "Sync empty plan",
+          plan: "## Old Plan",
+        })
+        .run();
+
+      const res = await app.request("/tasks/task-sync-empty/sync-plan", { method: "POST" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plan).toBeNull();
+    });
+  });
+
+  describe("GET /tasks/:id/plan-file-status — edge cases", () => {
+    it("should return 404 for non-existent task", async () => {
+      const res = await app.request("/tasks/totally-missing/plan-file-status");
+      expect(res.status).toBe(404);
+    });
+
+    it("should return 404 when project for task does not exist", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "task-pfs-no-project",
+          projectId: "missing-project",
+          title: "No project",
+        })
+        .run();
+
+      const res = await app.request("/tasks/task-pfs-no-project/plan-file-status");
+      expect(res.status).toBe(404);
     });
   });
 
@@ -712,6 +796,66 @@ describe("tasks API", () => {
       expect(existsSync(planFilePath)).toBe(false);
     });
 
+    it("should approve done without deleting plan file when deletePlanFile is not set", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-approve-no-delete-"));
+      const aiFactoryDir = join(rootPath, ".ai-factory");
+      mkdirSync(aiFactoryDir, { recursive: true });
+      const planFilePath = join(aiFactoryDir, "PLAN.md");
+      writeFileSync(planFilePath, "## Plan\n- [ ] Keep\n", "utf8");
+
+      db.insert(projects)
+        .values({ id: "project-approve-keep", name: "Approve Keep", rootPath })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "ev-approve-keep-1",
+          projectId: "project-approve-keep",
+          title: "Done task keep plan",
+          status: "done",
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-approve-keep-1/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "approve_done" }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(existsSync(planFilePath)).toBe(true);
+    });
+
+    it("should handle approve_done with deletePlanFile when plan file does not exist", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-approve-no-file-"));
+      mkdirSync(join(rootPath, ".ai-factory"), { recursive: true });
+
+      db.insert(projects)
+        .values({ id: "project-approve-nofile", name: "Approve No File", rootPath })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "ev-approve-nofile-1",
+          projectId: "project-approve-nofile",
+          title: "Done task no plan file",
+          status: "done",
+          isFix: false,
+          planPath: ".ai-factory/PLAN.md",
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-approve-nofile-1/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "approve_done", deletePlanFile: true }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("verified");
+    });
+
     it("should delete FIX_PLAN.md on approve_done when task isFix=true", async () => {
       const db = testDb.current;
       const rootPath = mkdtempSync(join(tmpdir(), "aif-approve-delete-fix-plan-"));
@@ -885,6 +1029,91 @@ describe("tasks API", () => {
       expect(body.status).toBe("plan_ready");
       expect(body.plan).toBe("## Updated plan\n- Fast fix applied");
       expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it("should reject fast_fix when task has no plan", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "ev-fast-fix-no-plan",
+          projectId: "project-fast-fix",
+          title: "No plan task",
+          status: "plan_ready",
+          autoMode: false,
+          plan: null,
+        })
+        .run();
+      db.insert(taskComments)
+        .values({
+          id: "ev-ff-no-plan-comment",
+          taskId: "ev-fast-fix-no-plan",
+          author: "human",
+          message: "fix it",
+          attachments: "[]",
+        })
+        .run();
+      db.insert(projects)
+        .values({ id: "project-fast-fix", name: "FF project", rootPath: process.cwd() })
+        .onConflictDoNothing()
+        .run();
+
+      const res = await app.request("/tasks/ev-fast-fix-no-plan/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "fast_fix" }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error).toMatch(/existing plan/);
+    });
+
+    it("should reject fast_fix when task has no human comment", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "ev-fast-fix-no-comment",
+          projectId: "test-project",
+          title: "No comment task",
+          status: "plan_ready",
+          autoMode: false,
+          plan: "## Plan\n- Step",
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-fast-fix-no-comment/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "fast_fix" }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error).toMatch(/human comment/);
+    });
+
+    it("should reject fast_fix when task is not in plan_ready", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "ev-fast-fix-wrong-status",
+          projectId: "test-project",
+          title: "Wrong status",
+          status: "backlog",
+          autoMode: false,
+          plan: "## Plan",
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-fast-fix-wrong-status/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "fast_fix" }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error).toMatch(/plan_ready/);
     });
 
     it("should reject fast_fix for autoMode=true", async () => {
@@ -1098,6 +1327,66 @@ describe("tasks API", () => {
 
       const res = await app.request("/tasks/dl-3/attachments/gone.txt");
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("PUT /tasks/:id — plan update error path", () => {
+    it("should return 404 when plan update fails due to missing project", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "upd-plan-no-proj",
+          projectId: "missing-project",
+          title: "Plan update no project",
+        })
+        .run();
+
+      const res = await app.request("/tasks/upd-plan-no-proj", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: "## New plan" }),
+      });
+
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.error).toMatch(/Project not found/);
+    });
+  });
+
+  describe("comments — no attachments path", () => {
+    it("should create comment without attachments", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({ id: "c-no-att", projectId: "test-project", title: "No attachment comment" })
+        .run();
+
+      const res = await app.request("/tasks/c-no-att/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "plain comment" }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.message).toBe("plain comment");
+      expect(body.attachments).toHaveLength(0);
+    });
+
+    it("should create comment with empty attachments array", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({ id: "c-empty-att", projectId: "test-project", title: "Empty attachment comment" })
+        .run();
+
+      const res = await app.request("/tasks/c-empty-att/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "comment with empty attachments", attachments: [] }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.message).toBe("comment with empty attachments");
     });
   });
 

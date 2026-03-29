@@ -14,6 +14,8 @@ function makeTask(overrides: Partial<Task>): Task {
     planPath: ".ai-factory/PLAN.md",
     planDocs: false,
     planTests: false,
+    skipReview: false,
+    useSubagents: true,
     roadmapAlias: null,
     tags: [],
     status: "backlog",

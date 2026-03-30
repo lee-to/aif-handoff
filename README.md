@@ -1,4 +1,8 @@
+![logo](https://github.com/lee-to/aif-handoff/blob/main/art/promo.jpg)
+
 # AIF Handoff
+
+> This project was built using [AI Factory](https://github.com/lee-to/ai-factory) — an open-source framework for AI-driven development.
 
 > Autonomous Kanban board where AI agents plan, implement, and review your tasks — fully hands-off.
 

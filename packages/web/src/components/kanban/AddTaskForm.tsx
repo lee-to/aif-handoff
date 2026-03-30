@@ -17,7 +17,7 @@ export function AddTaskForm({ projectId }: Props) {
   const [autoMode, setAutoMode] = useState(true);
   const [isFix, setIsFix] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [plannerMode, setPlannerMode] = useState<"full" | "fast">("full");
+  const [plannerMode, setPlannerMode] = useState<"full" | "fast">("fast");
   const [planPath, setPlanPath] = useState(".ai-factory/PLAN.md");
   const [planDocs, setPlanDocs] = useState(false);
   const [planTests, setPlanTests] = useState(false);

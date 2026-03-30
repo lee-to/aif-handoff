@@ -61,7 +61,7 @@ function ensureTables(sqlite: Database.Database): void {
       attachments TEXT NOT NULL DEFAULT '[]',
       auto_mode INTEGER NOT NULL DEFAULT 1,
       is_fix INTEGER NOT NULL DEFAULT 0,
-      planner_mode TEXT NOT NULL DEFAULT 'full',
+      planner_mode TEXT NOT NULL DEFAULT 'fast',
       plan_path TEXT NOT NULL DEFAULT '.ai-factory/PLAN.md',
       plan_docs INTEGER NOT NULL DEFAULT 0,
       plan_tests INTEGER NOT NULL DEFAULT 0,
@@ -119,7 +119,7 @@ function ensureTables(sqlite: Database.Database): void {
   ensureColumn(sqlite, "tasks", "roadmap_alias", "roadmap_alias TEXT");
   ensureColumn(sqlite, "tasks", "tags", "tags TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(sqlite, "tasks", "attachments", "attachments TEXT NOT NULL DEFAULT '[]'");
-  ensureColumn(sqlite, "tasks", "planner_mode", "planner_mode TEXT NOT NULL DEFAULT 'full'");
+  ensureColumn(sqlite, "tasks", "planner_mode", "planner_mode TEXT NOT NULL DEFAULT 'fast'");
   ensureColumn(
     sqlite,
     "tasks",

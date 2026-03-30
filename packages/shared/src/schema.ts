@@ -33,7 +33,7 @@ export const tasks = sqliteTable("tasks", {
   attachments: text("attachments").notNull().default("[]"),
   autoMode: integer("auto_mode", { mode: "boolean" }).notNull().default(true),
   isFix: integer("is_fix", { mode: "boolean" }).notNull().default(false),
-  plannerMode: text("planner_mode").notNull().default("full"),
+  plannerMode: text("planner_mode").notNull().default("fast"),
   planPath: text("plan_path").notNull().default(".ai-factory/PLAN.md"),
   planDocs: integer("plan_docs", { mode: "boolean" }).notNull().default(false),
   planTests: integer("plan_tests", { mode: "boolean" }).notNull().default(false),

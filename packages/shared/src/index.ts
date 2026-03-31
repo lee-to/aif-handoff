@@ -40,7 +40,7 @@ export {
 export { getDb, createTestDb, closeDb } from "./db.js";
 
 // Environment
-export { getEnv, validateEnv } from "./env.js";
+export { getEnv, validateEnv, modelOption } from "./env.js";
 export type { Env } from "./env.js";
 
 // Constants

@@ -9,6 +9,7 @@ const ACTIVITY_LOG_MODES = ["sync", "batch"] as const;
 
 const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_BASE_URL: z.string().optional(),
   PORT: z.coerce.number().default(3009),
   POLL_INTERVAL_MS: z.coerce.number().default(30000),
   AGENT_STAGE_STALE_TIMEOUT_MS: z.coerce.number().default(90 * 60 * 1000),
@@ -107,6 +108,14 @@ export function getEnv(): Env {
     "Resolved activity-log config",
   );
   return _env;
+}
+
+/**
+ * Returns `{ model }` only when no custom base URL is configured.
+ * When ANTHROPIC_BASE_URL is set, the proxy decides the model.
+ */
+export function modelOption(model: string): { model: string } | Record<string, never> {
+  return process.env.ANTHROPIC_BASE_URL ? {} : { model };
 }
 
 /** Validate env without caching — useful for testing */

@@ -1,5 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { parseAttachments } from "@aif/shared";
+import { parseAttachments, modelOption } from "@aif/shared";
 import { incrementTaskTokenUsage } from "@aif/data";
 
 interface FastFixComment {
@@ -121,8 +121,8 @@ ${
     prompt,
     options: {
       cwd: input.projectRoot,
-      settingSources: [],
-      model: "haiku",
+      settingSources: ["project"],
+      ...modelOption("haiku"),
       systemPrompt: {
         type: "preset",
         preset: "claude_code",

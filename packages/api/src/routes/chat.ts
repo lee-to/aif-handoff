@@ -13,20 +13,9 @@ const PROJECT_SCOPE_SYSTEM_APPEND =
   "Do not inspect or modify files in the orchestrator monorepo or in parent/sibling directories " +
   "unless the user explicitly asks for that path. Avoid broad discovery outside the current project root.";
 
-const ALLOWED_CHAT_SKILLS = [
-  "aif-docs",
-  "aif-ci",
-  "aif-explore",
-  "aif-reference",
-  "aif-evolve",
-  "aif-build-automation",
-  "aif-dockerize",
-  "aif-grounded",
-  "aif",
-  "aif-rules",
-];
-
 const CHAT_ACTIONS_PROMPT = `
+Identity: You are AIFer.
+
 You have special capabilities in this chat:
 
 1. CREATE TASK: When the user asks to create a task (based on conversation, from scratch, etc.), output a structured block:
@@ -36,9 +25,6 @@ You have special capabilities in this chat:
 Include this block in your response along with a brief explanation of the task you're creating. The user will see a confirmation card and can approve it.
 
 2. TASK SUMMARY: When the user asks to summarize what was done on the current task (or any task you have context for), generate a concise summary covering: what was planned, what was implemented, review results, and current status.
-
-3. SKILLS: You can invoke the following skills via the Skill tool: ${ALLOWED_CHAT_SKILLS.join(", ")}.
-Do NOT invoke any other skills — only the ones listed above. If the user asks for a skill not in this list, explain that it is not available in the chat.
 `.trim();
 
 function buildContextAppend(projectName: string, task: Task | null): string {
@@ -139,7 +125,7 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
         cwd: project.rootPath,
         permissionMode: getEnv().AGENT_BYPASS_PERMISSIONS ? "bypassPermissions" : "acceptEdits",
         ...(getEnv().AGENT_BYPASS_PERMISSIONS ? { allowDangerouslySkipPermissions: true } : {}),
-        settingSources: [],
+        settingSources: ["project"],
         includePartialMessages: true,
         systemPrompt: {
           type: "preset",
@@ -147,7 +133,6 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
           append: buildContextAppend(project.name, currentTask),
         },
         ...(resumeSessionId ? { resume: resumeSessionId } : {}),
-        allowedTools: ["Read", "Glob", "Grep", "Bash", "Edit", "Write", "Skill"],
         maxTurns: 20,
       },
     });
@@ -161,6 +146,8 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
       };
       sendToClient(clientId, tokenEvent);
     };
+
+    let hasStreamedTokens = false;
 
     for await (const msg of stream) {
       if (!msg || typeof msg !== "object" || !("type" in msg)) continue;
@@ -187,6 +174,7 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
           event.delta?.type === "text_delta" &&
           event.delta.text
         ) {
+          hasStreamedTokens = true;
           sendToken(event.delta.text);
           log.debug(
             { conversationId: chatConversationId, tokenLength: event.delta.text.length },
@@ -205,6 +193,12 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
       if (typed.type === "result") {
         if (typed.subtype === "success") {
           log.info({ conversationId: chatConversationId }, "Chat request completed successfully");
+
+          // If no tokens were streamed (e.g. SDK returned a result without calling the model),
+          // surface the result text directly so the user sees the response.
+          if (!hasStreamedTokens && typeof typed.result === "string" && typed.result) {
+            sendToken(typed.result);
+          }
 
           // Surface permission denials
           const denials = typed.permission_denials as

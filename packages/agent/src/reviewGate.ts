@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { incrementTaskTokenUsage } from "@aif/data";
+import { modelOption } from "@aif/shared";
 import { getClaudePath } from "./hooks.js";
 
 type ReviewGateResult = { status: "success" } | { status: "request_changes"; fixes: string };
@@ -36,8 +37,8 @@ Rules:
       cwd: input.projectRoot,
       env: process.env,
       pathToClaudeCodeExecutable: getClaudePath(),
-      settingSources: [],
-      model: "haiku",
+      settingSources: ["project"],
+      ...modelOption("haiku"),
       systemPrompt: {
         type: "preset",
         preset: "claude_code",

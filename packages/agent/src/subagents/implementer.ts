@@ -10,7 +10,12 @@ import {
   incrementTaskTokenUsage,
   type TaskRow,
 } from "@aif/data";
-import { logger, formatAttachmentsForPrompt, looksLikeFullPlanUpdate } from "@aif/shared";
+import {
+  logger,
+  formatAttachmentsForPrompt,
+  looksLikeFullPlanUpdate,
+  modelOption,
+} from "@aif/shared";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery } from "../subagentQuery.js";
 import { computePendingPlanLayers, computePlanLayers } from "../planLayers.js";
@@ -119,8 +124,8 @@ Requirements:
     prompt,
     options: {
       cwd: input.projectRoot,
-      settingSources: [],
-      model: "haiku",
+      settingSources: ["project"],
+      ...modelOption("haiku"),
       systemPrompt: {
         type: "preset",
         preset: "claude_code",

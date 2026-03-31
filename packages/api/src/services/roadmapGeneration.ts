@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { logger, getEnv } from "@aif/shared";
+import { logger, getEnv, modelOption } from "@aif/shared";
 import {
   createTask,
   findProjectById,
@@ -105,8 +105,8 @@ export async function generateRoadmapFile(
       prompt,
       options: {
         cwd: project.rootPath,
-        settingSources: [],
-        model: "sonnet",
+        settingSources: ["project"],
+        ...modelOption("sonnet"),
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
@@ -234,8 +234,8 @@ export async function generateRoadmapTasks(
       prompt,
       options: {
         cwd: project.rootPath,
-        settingSources: [],
-        model: "haiku",
+        settingSources: ["project"],
+        ...modelOption("haiku"),
         systemPrompt: {
           type: "preset",
           preset: "claude_code",

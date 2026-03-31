@@ -10,11 +10,13 @@
 - [x] **Roadmap Import and Generation Flow** — support roadmap import/generation workflows with async API/WebSocket feedback in UI.
 - [x] **Task Attachment Support** — persist and display task attachments across API, data layer, and UI.
 - [ ] **Safe Parallel Agent Processing** — add lease-based claiming, configurable concurrency, worker-pool execution, and requeue logic for robust parallel processing.
-- [ ] **AI Chat for Codebase Questions** — add in-app AI chat focused on repository-aware developer assistance.
+- [x] **AI Chat for Codebase Questions** — add in-app AI chat focused on repository-aware developer assistance.
+- [ ] **AI Chat Sessions** — add persistent chat sessions with history, context carry-over, and session management UI.
 - [ ] **Documentation Generation Action** — add a dedicated UI button/action to generate project documentation.
 - [ ] **Docker Generation Action** — add a dedicated UI button/action to generate Docker configuration.
 - [ ] **CI Generation Action** — add a dedicated UI button/action to generate CI configuration.
 - [ ] **Automation Generation Action** — add a dedicated UI button/action to generate build/automation configuration.
+- [ ] **Bidirectional Handoff ↔ AIF Sync** — implement two-way synchronization between Handoff and AI Factory via MCP server, keeping tasks, plans, and status in sync across both systems. Plans should include task ID annotations for traceability.
 
 ## Completed
 
@@ -25,3 +27,4 @@
 | Real-Time Kanban Experience | 2026-03-29 |
 | Roadmap Import and Generation Flow | 2026-03-29 |
 | Task Attachment Support | 2026-03-29 |
+| AI Chat for Codebase Questions | 2026-03-31 |

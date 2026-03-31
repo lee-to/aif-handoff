@@ -7,12 +7,61 @@ import { rateLimitError, toMcpError } from "../middleware/errorHandler.js";
 
 const log = logger("mcp:tool:get-task");
 
+/** All known Task field names for validation */
+const TASK_FIELDS = [
+  "id",
+  "projectId",
+  "title",
+  "description",
+  "attachments",
+  "autoMode",
+  "isFix",
+  "plannerMode",
+  "planPath",
+  "planDocs",
+  "planTests",
+  "skipReview",
+  "useSubagents",
+  "status",
+  "priority",
+  "position",
+  "plan",
+  "implementationLog",
+  "reviewComments",
+  "agentActivityLog",
+  "blockedReason",
+  "blockedFromStatus",
+  "retryAfter",
+  "retryCount",
+  "tokenInput",
+  "tokenOutput",
+  "tokenTotal",
+  "costUsd",
+  "roadmapAlias",
+  "tags",
+  "reworkRequested",
+  "reviewIterationCount",
+  "maxReviewIterations",
+  "paused",
+  "lastHeartbeatAt",
+  "lastSyncedAt",
+  "sessionId",
+  "createdAt",
+  "updatedAt",
+] as const;
+
 export function register(server: McpServer, context: ToolContext): void {
   server.tool(
     "handoff_get_task",
-    "Get a single task by ID with full detail",
+    "Get a single task by ID. Pass 'fields' to select specific fields (always includes 'id'); omit for full detail.",
     {
       taskId: z.string().uuid().describe("Task ID to retrieve"),
+      fields: z
+        .array(z.enum(TASK_FIELDS))
+        .optional()
+        .describe(
+          "Optional list of field names to return. Omit for all fields. 'id' is always included.",
+        ),
     },
     async (args) => {
       try {
@@ -20,21 +69,43 @@ export function register(server: McpServer, context: ToolContext): void {
           throw rateLimitError("handoff_get_task");
         }
 
-        log.debug({ taskId: args.taskId }, "handoff_get_task called");
+        log.debug({ taskId: args.taskId, fields: args.fields }, "handoff_get_task called");
 
         const row = findTaskById(args.taskId);
 
         if (!row) {
           log.warn({ taskId: args.taskId }, "Task not found");
           return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: "Task not found", taskId: args.taskId }) }],
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ error: "Task not found", taskId: args.taskId }),
+              },
+            ],
             isError: true,
           };
         }
 
-        const result = toTaskResponse(row);
+        const full = toTaskResponse(row) as unknown as Record<string, unknown>;
 
-        log.info({ taskId: args.taskId }, "handoff_get_task completed");
+        let result: Record<string, unknown>;
+        if (args.fields && args.fields.length > 0) {
+          const requested = new Set<string>(args.fields);
+          requested.add("id");
+          result = {};
+          for (const key of requested) {
+            if (key in full) {
+              result[key] = full[key];
+            }
+          }
+        } else {
+          result = full;
+        }
+
+        log.info(
+          { taskId: args.taskId, fieldCount: Object.keys(result).length },
+          "handoff_get_task completed",
+        );
 
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (error) {

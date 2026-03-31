@@ -41,12 +41,10 @@ const {
 } = await import("@aif/data");
 
 const { resolveConflict } = await import("../sync/conflictResolver.js");
+const { compactTaskResponse } = await import("../utils/compactResponse.js");
 
 function seedProject(id = "proj-1") {
-  testDb.current
-    .insert(projects)
-    .values({ id, name: "Test", rootPath: "/tmp/test" })
-    .run();
+  testDb.current.insert(projects).values({ id, name: "Test", rootPath: "/tmp/test" }).run();
 }
 
 function seedTask(overrides: { projectId?: string; title?: string; description?: string } = {}) {
@@ -296,6 +294,154 @@ describe("MCP tools", () => {
       expect(task.id).toBe(row!.id);
       expect(Array.isArray(task.tags)).toBe(true);
       expect(task.lastSyncedAt).toBeNull();
+    });
+  });
+
+  // ── compactTaskResponse ────────────────────────────────────
+
+  describe("compactTaskResponse", () => {
+    it("strips plan, implementationLog, reviewComments", () => {
+      const task = seedTask();
+      setTaskFields(task!.id, {
+        plan: "## Big Plan\n".repeat(100),
+        implementationLog: "log line\n".repeat(50),
+        reviewComments: "comment\n".repeat(50),
+      });
+      const row = findTaskById(task!.id);
+      const full = toTaskResponse(row!);
+      const compact = compactTaskResponse(full);
+
+      expect(compact).not.toHaveProperty("plan");
+      expect(compact).not.toHaveProperty("implementationLog");
+      expect(compact).not.toHaveProperty("reviewComments");
+      expect(compact.hasPlan).toBe(true);
+      expect(compact.hasImplementationLog).toBe(true);
+      expect(compact.hasReviewComments).toBe(true);
+    });
+
+    it("reports false flags when heavy fields are null", () => {
+      const task = seedTask();
+      const full = toTaskResponse(findTaskById(task!.id)!);
+      const compact = compactTaskResponse(full);
+
+      expect(compact.hasPlan).toBe(false);
+      expect(compact.hasImplementationLog).toBe(false);
+      expect(compact.hasReviewComments).toBe(false);
+    });
+
+    it("preserves all other fields", () => {
+      const task = seedTask({ title: "Keep Fields" });
+      setTaskFields(task!.id, { plan: "some plan" });
+      const full = toTaskResponse(findTaskById(task!.id)!);
+      const compact = compactTaskResponse(full);
+
+      expect(compact.id).toBe(task!.id);
+      expect(compact.title).toBe("Keep Fields");
+      expect(compact.status).toBe("backlog");
+      expect(compact.projectId).toBe("proj-1");
+      expect(compact.createdAt).toBeTruthy();
+      expect(compact.updatedAt).toBeTruthy();
+    });
+
+    it("compact response is significantly smaller than full", () => {
+      const task = seedTask();
+      setTaskFields(task!.id, {
+        plan: "x".repeat(10_000),
+        implementationLog: "y".repeat(5_000),
+        reviewComments: "z".repeat(3_000),
+      });
+      const full = toTaskResponse(findTaskById(task!.id)!);
+      const compact = compactTaskResponse(full);
+
+      const fullSize = JSON.stringify(full).length;
+      const compactSize = JSON.stringify(compact).length;
+      expect(compactSize).toBeLessThan(fullSize * 0.1);
+    });
+  });
+
+  // ── getTask field selection ───────────────────────────────
+
+  describe("getTask field selection", () => {
+    it("returns only requested fields plus id", () => {
+      const task = seedTask({ title: "Field Select" });
+      setTaskFields(task!.id, { plan: "big plan content" });
+      const full = toTaskResponse(findTaskById(task!.id)!) as unknown as Record<string, unknown>;
+
+      const fields = new Set(["status", "title"]);
+      fields.add("id");
+      const result: Record<string, unknown> = {};
+      for (const key of fields) {
+        if (key in full) result[key] = full[key];
+      }
+
+      expect(Object.keys(result)).toHaveLength(3);
+      expect(result.id).toBe(task!.id);
+      expect(result.title).toBe("Field Select");
+      expect(result.status).toBe("backlog");
+      expect(result).not.toHaveProperty("plan");
+      expect(result).not.toHaveProperty("description");
+    });
+
+    it("always includes id even if not requested", () => {
+      const task = seedTask();
+      const full = toTaskResponse(findTaskById(task!.id)!) as unknown as Record<string, unknown>;
+
+      const fields = new Set(["status"]);
+      fields.add("id");
+      const result: Record<string, unknown> = {};
+      for (const key of fields) {
+        if (key in full) result[key] = full[key];
+      }
+
+      expect(result.id).toBe(task!.id);
+    });
+
+    it("returns full task when no fields specified", () => {
+      const task = seedTask();
+      setTaskFields(task!.id, { plan: "plan content here" });
+      const full = toTaskResponse(findTaskById(task!.id)!);
+
+      expect(full).toHaveProperty("id");
+      expect(full).toHaveProperty("plan");
+      expect(full).toHaveProperty("description");
+      expect(full).toHaveProperty("implementationLog");
+    });
+
+    it("can select only heavy fields", () => {
+      const task = seedTask();
+      setTaskFields(task!.id, {
+        plan: "the plan",
+        implementationLog: "the log",
+      });
+      const full = toTaskResponse(findTaskById(task!.id)!) as unknown as Record<string, unknown>;
+
+      const fields = new Set(["plan", "implementationLog"]);
+      fields.add("id");
+      const result: Record<string, unknown> = {};
+      for (const key of fields) {
+        if (key in full) result[key] = full[key];
+      }
+
+      expect(result.id).toBe(task!.id);
+      expect(result.plan).toBe("the plan");
+      expect(result.implementationLog).toBe("the log");
+      expect(result).not.toHaveProperty("title");
+    });
+
+    it("ignores unknown fields gracefully", () => {
+      const task = seedTask();
+      const full = toTaskResponse(findTaskById(task!.id)!) as unknown as Record<string, unknown>;
+
+      const fields = new Set(["status", "nonExistentField"]);
+      fields.add("id");
+      const result: Record<string, unknown> = {};
+      for (const key of fields) {
+        if (key in full) result[key] = full[key];
+      }
+
+      expect(result.id).toBe(task!.id);
+      expect(result.status).toBe("backlog");
+      expect(result).not.toHaveProperty("nonExistentField");
     });
   });
 

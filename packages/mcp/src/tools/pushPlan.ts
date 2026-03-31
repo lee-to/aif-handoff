@@ -4,6 +4,7 @@ import { logger, parsePlanAnnotations } from "@aif/shared";
 import { findTaskById, setTaskFields, toTaskResponse } from "@aif/data";
 import type { ToolContext } from "./index.js";
 import { rateLimitError, toMcpError, validationError } from "../middleware/errorHandler.js";
+import { compactTaskResponse } from "../utils/compactResponse.js";
 
 const log = logger("mcp:tool:push-plan");
 
@@ -21,7 +22,10 @@ export function register(server: McpServer, context: ToolContext): void {
           throw rateLimitError("handoff_push_plan");
         }
 
-        log.debug({ taskId: args.taskId, planSize: args.planContent.length }, "handoff_push_plan called");
+        log.debug(
+          { taskId: args.taskId, planSize: args.planContent.length },
+          "handoff_push_plan called",
+        );
 
         const row = findTaskById(args.taskId);
         if (!row) {
@@ -32,7 +36,10 @@ export function register(server: McpServer, context: ToolContext): void {
 
         // Parse annotations from the incoming plan
         const annotations = parsePlanAnnotations(args.planContent);
-        log.debug({ taskId: args.taskId, annotationCount: annotations.length }, "Parsed annotations");
+        log.debug(
+          { taskId: args.taskId, annotationCount: annotations.length },
+          "Parsed annotations",
+        );
 
         // Validate referenced task IDs exist
         const annotationResults = annotations.map((ann) => {
@@ -56,18 +63,24 @@ export function register(server: McpServer, context: ToolContext): void {
         const task = updatedRow ? toTaskResponse(updatedRow) : toTaskResponse(row);
 
         log.info(
-          { taskId: args.taskId, planSize: args.planContent.length, annotationCount: annotations.length },
+          {
+            taskId: args.taskId,
+            planSize: args.planContent.length,
+            annotationCount: annotations.length,
+          },
           "handoff_push_plan completed",
         );
 
         return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              task,
-              annotations: annotationResults,
-            }),
-          }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                task: compactTaskResponse(task),
+                annotations: annotationResults,
+              }),
+            },
+          ],
         };
       } catch (error) {
         throw toMcpError(error);

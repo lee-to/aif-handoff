@@ -4,6 +4,7 @@ import { logger } from "@aif/shared";
 import { findTaskById, updateTask, toTaskResponse } from "@aif/data";
 import type { ToolContext } from "./index.js";
 import { rateLimitError, toMcpError, validationError } from "../middleware/errorHandler.js";
+import { compactTaskResponse } from "../utils/compactResponse.js";
 
 const log = logger("mcp:tool:update-task");
 
@@ -15,7 +16,13 @@ export function register(server: McpServer, context: ToolContext): void {
       taskId: z.string().uuid().describe("Task ID to update (must exist)"),
       title: z.string().max(500).optional().describe("Updated task title"),
       description: z.string().optional().describe("Updated task description"),
-      priority: z.number().int().min(0).max(3).optional().describe("Priority level (0=none, 1=low, 2=medium, 3=high)"),
+      priority: z
+        .number()
+        .int()
+        .min(0)
+        .max(3)
+        .optional()
+        .describe("Priority level (0=none, 1=low, 2=medium, 3=high)"),
       tags: z.array(z.string()).optional().describe("Updated tags"),
       plan: z.string().nullable().optional().describe("Plan content (null to clear)"),
       autoMode: z.boolean().optional().describe("Enable/disable auto mode"),
@@ -66,14 +73,13 @@ export function register(server: McpServer, context: ToolContext): void {
           });
         }
 
-        const result = toTaskResponse(row);
+        const full = toTaskResponse(row);
 
-        log.info(
-          { taskId, changedFields },
-          "handoff_update_task completed",
-        );
+        log.info({ taskId, changedFields }, "handoff_update_task completed");
 
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(compactTaskResponse(full)) }],
+        };
       } catch (error) {
         throw toMcpError(error);
       }

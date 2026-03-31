@@ -1,0 +1,52 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: api
+    ports:
+      - "${PORT:-3009}:3009"
+    environment:
+      - DATABASE_URL=/data/aif.sqlite
+      - PORT=3009
+      - LOG_LEVEL=debug
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - db-data:/data
+      - ${PROJECTS_DIR:-./projects}:${PROJECTS_MOUNT:-/home/www}
+      - claude-auth:/home/node/.claude
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: web
+    ports:
+      - "${WEB_PORT:-5180}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: agent
+    environment:
+      - DATABASE_URL=/data/aif.sqlite
+      - API_BASE_URL=http://api:3009
+      - AGENT_BYPASS_PERMISSIONS=true
+      - LOG_LEVEL=debug
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - db-data:/data
+      - ${PROJECTS_DIR:-./projects}:${PROJECTS_MOUNT:-/home/www}
+      - claude-auth:/home/node/.claude
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  claude-auth:

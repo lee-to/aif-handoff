@@ -1,0 +1,43 @@
+{
+  "name": "AIF Handoff",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
+  "forwardPorts": [3009, 5180],
+  "portsAttributes": {
+    "3009": { "label": "API", "onAutoForward": "notify" },
+    "5180": { "label": "Web UI", "onAutoForward": "openBrowser" }
+  },
+
+  "postCreateCommand": "npm install && npm run db:setup",
+  "postStartCommand": "npm run dev",
+
+  "mounts": [
+    "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind,consistency=cached"
+  ],
+
+  "containerEnv": {
+    "DATABASE_URL": "./data/aif.sqlite",
+    "AGENT_BYPASS_PERMISSIONS": "true",
+    "LOG_LEVEL": "debug"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ],
+      "settings": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.formatOnSave": true
+      }
+    },
+    "jetbrains": {
+      "plugins": ["com.intellij.prettier"]
+    }
+  }
+}

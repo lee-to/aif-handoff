@@ -1,0 +1,11 @@
+node_modules
+dist
+data/*.sqlite
+data/*.sqlite-journal
+logs
+.turbo
+*.log
+.env
+.env.local
+.git
+.devcontainer

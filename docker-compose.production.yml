@@ -1,0 +1,115 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: api
+    ports:
+      - "127.0.0.1:3009:3009"
+    environment:
+      - DATABASE_URL=/data/aif.sqlite
+      - PORT=3009
+      - LOG_LEVEL=info
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - db-data:/data
+      - projects:${PROJECTS_MOUNT:-/home/www}
+      - claude-auth:/home/node/.claude
+    restart: always
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3009/health').then(r=>{if(!r.ok)throw r.status}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: web
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ssl-certs:/etc/angie/ssl
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /run/angie && sed -i 's/worker_processes.*/worker_processes 2;/' /etc/angie/angie.conf && envsubst '$$DOMAIN' < /etc/angie/http.d/production.conf.template > /etc/angie/http.d/default.conf && exec angie -g 'daemon off;'"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: always
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+      - /var/cache/angie:size=50m
+      - /run:size=10m
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:80/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  agent:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: agent
+    environment:
+      - DATABASE_URL=/data/aif.sqlite
+      - API_BASE_URL=http://api:3009
+      - AGENT_BYPASS_PERMISSIONS=true
+      - LOG_LEVEL=info
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - db-data:/data
+      - projects:${PROJECTS_MOUNT:-/home/www}
+      - claude-auth:/home/node/.claude
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  db-data:
+  projects:
+  claude-auth:
+  ssl-certs:

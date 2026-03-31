@@ -197,7 +197,7 @@ function AppContent() {
         className={`mx-auto w-full max-w-[1680px] ${density === "compact" ? "p-4 md:p-5" : "p-6 md:p-8"}`}
       >
         {agentReadiness && !agentReadiness.ready ? (
-          <div className="mb-4 border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">
+          <div className="mb-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-800 dark:text-red-200">
             Claude auth is not configured. Set <code>ANTHROPIC_API_KEY</code> in <code>.env</code>{" "}
             or sign in via Claude Code profile (<code>~/.claude</code>) to run AI stages.
           </div>

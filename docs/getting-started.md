@@ -4,11 +4,59 @@
 
 ## Prerequisites
 
-- **Node.js** 18+ (ES2022 target)
-- **npm** 10+ (npm workspaces)
+- **Docker** — Docker Desktop or compatible runtime
+- **Node.js** 22+ and **npm** 10+ — only needed if running without Docker
 - **Claude subscription** or Anthropic API key (for agent features)
 
-## Installation
+## Quick Start with Docker
+
+```bash
+git clone https://github.com/lee-to/aif-handoff.git
+cd aif-handoff
+docker compose up --build
+```
+
+This builds and starts API (port 3009), Web UI (port 5180), and Agent in one command. Uses Angie as a reverse proxy — Web UI at `localhost:5180` proxies all API and WebSocket requests automatically.
+
+Data is persisted in Docker volumes (SQLite database, project files, and Claude auth).
+
+### Docker Authentication
+
+Two options:
+
+**Option A — API key:** Create `.env` with `ANTHROPIC_API_KEY=sk-ant-xxxxx` before running.
+
+**Option B — Claude subscription:** Log in inside the container after first start:
+
+```bash
+docker compose exec agent claude login
+docker compose restart
+```
+
+Copy the URL and open it in your browser. **Important:** the terminal wraps long URLs across lines — remove any line breaks and spaces before pasting, otherwise OAuth will fail with `invalid code_challenge`. Then restart to apply. Credentials are stored in a persistent `claude-auth` Docker volume and survive restarts.
+
+### Production
+
+```bash
+docker compose -f docker-compose.production.yml up --build
+```
+
+Only ports 80/443 exposed. Security hardening, healthchecks, resource limits, and log rotation included. Authentication works the same as in development — see [Docker Authentication](#docker-authentication) above.
+
+Docker-specific environment variables:
+
+| Variable            | Default      | Description                            |
+| ------------------- | ------------ | -------------------------------------- |
+| `ANTHROPIC_API_KEY` | —            | API key (or use `claude login`)        |
+| `DOMAIN`            | `localhost`  | Domain for SSL certificate (ACME)      |
+| `PORT`              | `3009`       | Host port for API                      |
+| `WEB_PORT`          | `5180`       | Host port for Web UI (dev)             |
+| `HTTP_PORT`         | `80`         | Host port for Web UI (production)      |
+| `HTTPS_PORT`        | `443`        | HTTPS port (production)                |
+| `PROJECTS_DIR`      | `./projects` | Host directory for project files (dev) |
+| `PROJECTS_MOUNT`    | `/home/www`  | Project files path inside containers   |
+
+## Installation without Docker
 
 ```bash
 git clone https://github.com/lee-to/aif-handoff.git
@@ -105,6 +153,10 @@ curl -s http://localhost:3009/agent/readiness
 
 - [Architecture](architecture.md) — understand the agent pipeline and module structure
 - [API Reference](api.md) — explore the REST and WebSocket API
+
+## Dev Container
+
+The project includes a `.devcontainer/devcontainer.json` for JetBrains and VS Code. Open the project in your IDE — it will offer to reopen in a Dev Container with Node 22, ports forwarded, and dependencies pre-installed.
 
 ## See Also
 

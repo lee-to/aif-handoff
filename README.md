@@ -20,6 +20,8 @@ Built on top of [AI Factory](https://github.com/lee-to/ai-factory) workflow and 
 
 ## Quick Start
 
+### Without Docker
+
 ```bash
 git clone https://github.com/lee-to/aif-handoff.git
 cd aif-handoff
@@ -28,7 +30,15 @@ npm run init
 npm run dev
 ```
 
-This starts three services in parallel via Turborepo:
+### With Docker
+
+```bash
+git clone https://github.com/lee-to/aif-handoff.git
+cd aif-handoff
+docker compose up --build
+```
+
+Both options start three services:
 
 | Service   | URL                     | Description                                  |
 | --------- | ----------------------- | -------------------------------------------- |
@@ -40,9 +50,13 @@ The agent coordinator reacts to task events via WebSocket in near real-time and 
 
 ### Authentication
 
-The Agent SDK uses `~/.claude/` credentials by default (your active Claude subscription). No API key needed.
-
-To use a separate API key, copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`.
+- **Without Docker:** Agent SDK uses `~/.claude/` credentials by default (your active Claude subscription). No API key needed.
+- **With Docker:** Either set `ANTHROPIC_API_KEY` in `.env`, or log in inside the container:
+  ```bash
+  docker compose exec agent claude login
+  docker compose restart
+  ```
+  Copy the URL and open it in your browser. **Important:** the terminal wraps long URLs across lines — remove any line breaks and spaces before pasting, otherwise OAuth will fail with `invalid code_challenge`. Then restart to apply. Credentials are stored in a persistent `claude-auth` Docker volume.
 
 ## Architecture
 
@@ -98,6 +112,41 @@ AIF Handoff supports two execution modes, configurable globally via `AGENT_USE_S
 | Server State | @tanstack/react-query                 |
 | Agent SDK    | @anthropic-ai/claude-agent-sdk        |
 | Scheduler    | node-cron                             |
+
+## Docker
+
+The project includes full Docker support (Angie reverse proxy + Node services).
+
+### Development
+
+```bash
+docker compose up --build
+```
+
+Web UI at `localhost:5180`, API at `localhost:3009`.
+
+### Production
+
+```bash
+docker compose -f docker-compose.production.yml up --build
+```
+
+Authentication: set `ANTHROPIC_API_KEY` in `.env`, or log in via `docker compose exec agent claude login` and then `docker compose restart` (see [Authentication](#authentication) above).
+
+Only ports 80/443 are exposed. API is bound to localhost only. Includes security hardening (no-new-privileges, resource limits), healthchecks, log rotation, and automatic SSL via Let's Encrypt (ACME).
+
+| Variable            | Default      | Description                            |
+| ------------------- | ------------ | -------------------------------------- |
+| `ANTHROPIC_API_KEY` | —            | API key (or use `claude login`)        |
+| `DOMAIN`            | `localhost`  | Domain for SSL certificate (ACME)      |
+| `PORT`              | `3009`       | Host port for API                      |
+| `WEB_PORT`          | `5180`       | Host port for Web UI (dev)             |
+| `HTTP_PORT`         | `80`         | Host port for Web UI (production)      |
+| `HTTPS_PORT`        | `443`        | HTTPS port (production)                |
+| `PROJECTS_DIR`      | `./projects` | Host directory for project files (dev) |
+| `PROJECTS_MOUNT`    | `/home/www`  | Project files path inside containers   |
+
+A `.devcontainer/` config is also included for JetBrains / VS Code.
 
 ## Scripts
 

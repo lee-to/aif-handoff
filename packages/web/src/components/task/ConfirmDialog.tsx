@@ -52,6 +52,7 @@ export function ConfirmDialog({
               variant={variant === "destructive" ? "destructive" : "default"}
               size="sm"
               disabled={disabled}
+              autoFocus
             >
               {confirmLabel}
             </Button>

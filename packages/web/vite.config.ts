@@ -2,6 +2,19 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import { existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as dotenvConfig } from "dotenv";
+
+// Load root .env before reading env vars.
+// Cannot use @aif/shared/env here — Vite loads config via native Node ESM
+// which cannot resolve .js extensions in TS source files (unlike tsx used by api/agent).
+const __dir = dirname(fileURLToPath(import.meta.url));
+const rootEnv = resolve(__dir, "../../.env");
+const rootEnvLocal = resolve(__dir, "../../.env.local");
+if (existsSync(rootEnv)) dotenvConfig({ path: rootEnv, override: true });
+if (existsSync(rootEnvLocal)) dotenvConfig({ path: rootEnvLocal, override: true });
 
 const WEB_PORT = Number(process.env.WEB_PORT) || 5180;
 const API_PORT = Number(process.env.PORT) || 3009;

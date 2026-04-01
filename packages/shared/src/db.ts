@@ -105,6 +105,25 @@ function ensureTables(sqlite: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT 'New Chat',
+      agent_session_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
 
   runMigrations(sqlite);
   ensureIndexes(sqlite);
@@ -128,6 +147,27 @@ const MIGRATIONS: Migration[] = [
     version: 1,
     description: "Add session_id column to tasks for agent session resume",
     sql: "ALTER TABLE tasks ADD COLUMN session_id TEXT",
+  },
+  {
+    version: 2,
+    description: "Add chat_sessions and chat_messages tables",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT 'New Chat',
+        agent_session_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `,
   },
 ];
 

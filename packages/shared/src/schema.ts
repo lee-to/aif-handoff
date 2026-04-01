@@ -89,3 +89,36 @@ export const taskComments = sqliteTable("task_comments", {
 
 export type TaskCommentRow = typeof taskComments.$inferSelect;
 export type NewTaskCommentRow = typeof taskComments.$inferInsert;
+
+export const chatSessions = sqliteTable("chat_sessions", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  projectId: text("project_id").notNull(),
+  title: text("title").notNull().default("New Chat"),
+  agentSessionId: text("agent_session_id"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type ChatSessionRow = typeof chatSessions.$inferSelect;
+export type NewChatSessionRow = typeof chatSessions.$inferInsert;
+
+export const chatMessages = sqliteTable("chat_messages", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  sessionId: text("session_id").notNull(),
+  role: text("role").$type<"user" | "assistant">().notNull(),
+  content: text("content").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type ChatMessageRow = typeof chatMessages.$inferSelect;
+export type NewChatMessageRow = typeof chatMessages.$inferInsert;

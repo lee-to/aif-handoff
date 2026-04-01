@@ -8,7 +8,11 @@ import type {
 import { api } from "@/lib/api";
 import { getWsClientId } from "./useWebSocket";
 
-export function useChat(projectId: string | null, taskId: string | null = null) {
+export function useChat(
+  projectId: string | null,
+  sessionId: string | null = null,
+  taskId: string | null = null,
+) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [explore, setExplore] = useState(false);
@@ -16,23 +20,48 @@ export function useChat(projectId: string | null, taskId: string | null = null) 
   const conversationIdRef = useRef<string | null>(null);
   const accumulatorRef = useRef("");
   const streamErrorHandledRef = useRef(false);
-  const mountedRef = useRef(false);
+  const currentSessionIdRef = useRef<string | null>(null);
 
-  // Reset messages when project changes (skip initial mount)
+  // Load messages when sessionId changes
+  const prevSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!mountedRef.current) {
-      mountedRef.current = true;
+    const prevSessionId = prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
+
+    if (!sessionId) {
+      // Only clear if we're transitioning from a session to no session
+      if (prevSessionId !== null) {
+        console.debug("[useChat] Session cleared, resetting messages");
+        conversationIdRef.current = null;
+        accumulatorRef.current = "";
+        currentSessionIdRef.current = null;
+        queueMicrotask(() => {
+          setMessages([]);
+          setChatErrorCode(null);
+        });
+      }
       return;
     }
-    queueMicrotask(() => {
-      setMessages([]);
-      setIsStreaming(false);
-      conversationIdRef.current = null;
-      accumulatorRef.current = "";
-      streamErrorHandledRef.current = false;
-      setChatErrorCode(null);
-    });
-  }, [projectId]);
+
+    if (sessionId === currentSessionIdRef.current) return;
+
+    currentSessionIdRef.current = sessionId;
+    console.debug("[useChat] Loading session messages sessionId=%s", sessionId);
+
+    api
+      .getChatSessionMessages(sessionId)
+      .then((msgs) => {
+        if (currentSessionIdRef.current !== sessionId) return;
+        console.debug("[useChat] Session changed, loaded %d messages", msgs.length);
+        setMessages(msgs.map((m) => ({ role: m.role, content: m.content })));
+        conversationIdRef.current = null;
+        accumulatorRef.current = "";
+        setChatErrorCode(null);
+      })
+      .catch((err) => {
+        console.error("[useChat] Failed to load session messages:", err);
+      });
+  }, [sessionId]);
 
   // Listen for chat stream events dispatched by useWebSocket
   useEffect(() => {
@@ -93,8 +122,6 @@ export function useChat(projectId: string | null, taskId: string | null = null) 
         return;
       }
 
-      // Generate conversationId on client BEFORE sending so WS tokens
-      // arriving during the POST can be matched immediately.
       const newConversationId = conversationIdRef.current ?? crypto.randomUUID();
       conversationIdRef.current = newConversationId;
 
@@ -109,18 +136,25 @@ export function useChat(projectId: string | null, taskId: string | null = null) 
       console.debug("[useChat] Sending message:", {
         projectId,
         conversationId: newConversationId,
+        sessionId: currentSessionIdRef.current,
         explore,
       });
 
       try {
-        await api.sendChatMessage({
+        const result = await api.sendChatMessage({
           projectId,
           message: text.trim(),
           clientId,
           conversationId: newConversationId,
+          sessionId: currentSessionIdRef.current ?? undefined,
           explore,
           ...(taskId ? { taskId } : {}),
         });
+
+        // Track the server-assigned sessionId for subsequent messages
+        if (result.sessionId && !currentSessionIdRef.current) {
+          currentSessionIdRef.current = result.sessionId;
+        }
       } catch (err) {
         console.error("[useChat] Failed to send message:", err);
         setIsStreaming(false);
@@ -143,6 +177,15 @@ export function useChat(projectId: string | null, taskId: string | null = null) 
     setChatErrorCode(null);
   }, []);
 
+  const newSession = useCallback(() => {
+    setMessages([]);
+    conversationIdRef.current = null;
+    accumulatorRef.current = "";
+    streamErrorHandledRef.current = false;
+    currentSessionIdRef.current = null;
+    setChatErrorCode(null);
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -151,5 +194,6 @@ export function useChat(projectId: string | null, taskId: string | null = null) 
     setExplore,
     sendMessage,
     clearMessages,
+    newSession,
   };
 }

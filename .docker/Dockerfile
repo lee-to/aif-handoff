@@ -21,7 +21,8 @@ RUN npx turbo build
 # ---- API ----
 FROM base AS api
 ENV NODE_ENV=production HOME=/home/node
-RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/* \
+    && npm i -g @anthropic-ai/claude-code
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/packages/shared ./packages/shared
 COPY --from=build /app/packages/data ./packages/data
@@ -69,5 +70,6 @@ COPY --from=build /app/packages/mcp ./packages/mcp
 COPY package.json .
 COPY .docker/docker-entrypoint.sh /usr/local/bin/
 RUN mkdir -p /data /home/www && chown -R node:node /app /data /home/www
+EXPOSE 3100
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npx", "tsx", "packages/mcp/src/index.ts"]

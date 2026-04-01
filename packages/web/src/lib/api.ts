@@ -9,6 +9,10 @@ import type {
   Project,
   CreateProjectInput,
   ChatRequest,
+  ChatSession,
+  CreateChatSessionInput,
+  UpdateChatSessionInput,
+  ChatSessionMessage,
 } from "@aif/shared/browser";
 
 export interface AifConfig {
@@ -302,9 +306,15 @@ export const api = {
     });
   },
 
-  sendChatMessage(input: ChatRequest): Promise<{ conversationId: string }> {
-    console.debug("[api] POST /chat", { projectId: input.projectId, explore: input.explore });
-    return request<{ conversationId: string }>(
+  sendChatMessage(
+    input: ChatRequest,
+  ): Promise<{ conversationId: string; sessionId: string | null }> {
+    console.debug("[api] POST /chat", {
+      projectId: input.projectId,
+      explore: input.explore,
+      sessionId: input.sessionId,
+    });
+    return request<{ conversationId: string; sessionId: string | null }>(
       "/chat",
       {
         method: "POST",
@@ -312,5 +322,42 @@ export const api = {
       },
       120000,
     );
+  },
+
+  // Chat Sessions
+  listChatSessions(projectId: string): Promise<ChatSession[]> {
+    console.debug("[api] GET /chat/sessions projectId=%s", projectId);
+    return request<ChatSession[]>(`/chat/sessions?projectId=${projectId}`);
+  },
+
+  createChatSession(input: CreateChatSessionInput): Promise<ChatSession> {
+    console.debug("[api] POST /chat/sessions", input);
+    return request<ChatSession>("/chat/sessions", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  getChatSession(id: string): Promise<ChatSession> {
+    console.debug("[api] GET /chat/sessions/%s", id);
+    return request<ChatSession>(`/chat/sessions/${id}`);
+  },
+
+  getChatSessionMessages(sessionId: string): Promise<ChatSessionMessage[]> {
+    console.debug("[api] GET /chat/sessions/%s/messages", sessionId);
+    return request<ChatSessionMessage[]>(`/chat/sessions/${sessionId}/messages`);
+  },
+
+  updateChatSession(id: string, input: UpdateChatSessionInput): Promise<ChatSession> {
+    console.debug("[api] PUT /chat/sessions/%s", id, input);
+    return request<ChatSession>(`/chat/sessions/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+
+  deleteChatSession(id: string): Promise<void> {
+    console.debug("[api] DELETE /chat/sessions/%s", id);
+    return request(`/chat/sessions/${id}`, { method: "DELETE" });
   },
 };

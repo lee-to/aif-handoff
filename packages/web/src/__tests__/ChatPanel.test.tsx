@@ -22,6 +22,20 @@ vi.mock("@/hooks/useChat", () => ({
     setExplore: mockSetExplore,
     sendMessage: mockSendMessage,
     clearMessages: mockClearMessages,
+    newSession: vi.fn(),
+  }),
+}));
+
+vi.mock("@/hooks/useChatSessions", () => ({
+  useChatSessions: () => ({
+    sessions: [],
+    isLoading: false,
+    activeSessionId: null,
+    setActiveSessionId: vi.fn(),
+    createSession: vi.fn(),
+    deleteSession: vi.fn(),
+    renameSession: vi.fn(),
+    loadSessionMessages: vi.fn(),
   }),
 }));
 

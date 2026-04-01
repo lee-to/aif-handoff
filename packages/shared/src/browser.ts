@@ -26,6 +26,11 @@ export {
   type ChatErrorPayload,
   type ChatAction,
   type ChatActionCreateTask,
+  type ChatSessionSource,
+  type ChatSession,
+  type CreateChatSessionInput,
+  type UpdateChatSessionInput,
+  type ChatSessionMessage,
 } from "./types.js";
 
 export { STATUS_CONFIG, ORDERED_STATUSES } from "./constants.js";

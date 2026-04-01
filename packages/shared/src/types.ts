@@ -190,6 +190,8 @@ export type WsEventType =
   | "chat:token"
   | "chat:done"
   | "chat:error"
+  | "chat:session_created"
+  | "chat:session_deleted"
   | "sync:task_created"
   | "sync:task_updated"
   | "sync:status_changed"
@@ -221,7 +223,39 @@ export interface WsEvent {
     | RoadmapErrorPayload
     | ChatStreamTokenPayload
     | ChatDonePayload
-    | ChatErrorPayload;
+    | ChatErrorPayload
+    | ChatSession;
+}
+
+// ── Chat session types ──────────────────────────────────────
+
+export type ChatSessionSource = "web" | "cli" | "agent";
+
+export interface ChatSession {
+  id: string;
+  projectId: string;
+  title: string;
+  agentSessionId: string | null;
+  source: ChatSessionSource;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateChatSessionInput {
+  projectId: string;
+  title?: string;
+}
+
+export interface UpdateChatSessionInput {
+  title?: string;
+}
+
+export interface ChatSessionMessage {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
 }
 
 // ── Chat types ──────────────────────────────────────────────
@@ -236,6 +270,7 @@ export interface ChatRequest {
   message: string;
   clientId: string;
   conversationId?: string;
+  sessionId?: string;
   explore?: boolean;
   /** Currently open task ID — provides context to the chat agent */
   taskId?: string;

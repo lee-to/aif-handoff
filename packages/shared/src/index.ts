@@ -1,5 +1,5 @@
 // Schema
-export { projects, tasks, taskComments } from "./schema.js";
+export { projects, tasks, taskComments, chatSessions, chatMessages } from "./schema.js";
 export type {
   ProjectRow,
   NewProjectRow,
@@ -7,6 +7,10 @@ export type {
   NewTaskRow,
   TaskCommentRow,
   NewTaskCommentRow,
+  ChatSessionRow,
+  NewChatSessionRow,
+  ChatMessageRow,
+  NewChatMessageRow,
 } from "./schema.js";
 
 // Types
@@ -34,6 +38,11 @@ export {
   type ChatErrorPayload,
   type ChatAction,
   type ChatActionCreateTask,
+  type ChatSessionSource,
+  type ChatSession,
+  type CreateChatSessionInput,
+  type UpdateChatSessionInput,
+  type ChatSessionMessage,
 } from "./types.js";
 
 // Database
@@ -101,3 +110,4 @@ export {
 
 // Utilities
 export { withTimeout } from "./withTimeout.js";
+export { findClaudePath } from "./findClaudePath.js";

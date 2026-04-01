@@ -52,8 +52,12 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: mcp
+    ports:
+      - "${MCP_PORT:-3100}:3100"
     environment:
       - DATABASE_URL=/data/aif.sqlite
+      - MCP_TRANSPORT=http
+      - MCP_PORT=3100
       - LOG_LEVEL=debug
     volumes:
       - db-data:/data

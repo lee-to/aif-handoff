@@ -11,7 +11,11 @@ The Handoff MCP server enables bidirectional synchronization between the Handoff
 
 ### Configuration
 
-The MCP server is configured in `.mcp.json` at the project root:
+The MCP server supports two transport modes:
+
+#### stdio (default) — local Claude Code
+
+Configured in `.mcp.json` at the project root:
 
 ```json
 {
@@ -29,16 +33,34 @@ The MCP server is configured in `.mcp.json` at the project root:
 
 After building, the Claude CLI auto-discovers the Handoff MCP server.
 
+#### HTTP — Docker / remote
+
+When running in Docker, the MCP server uses Streamable HTTP transport. Set `MCP_TRANSPORT=http` and the server listens on `MCP_PORT` (default `3100`):
+
+```json
+{
+  "mcpServers": {
+    "handoff": {
+      "url": "http://localhost:3100/mcp"
+    }
+  }
+}
+```
+
+The HTTP mode also exposes a `/health` endpoint for Docker healthchecks.
+
 ### Environment Variables
 
 The MCP server uses the shared monorepo environment (`packages/shared/src/env.ts`) for database and API configuration. MCP-specific variables:
 
-| Variable                     | Default | Description                             |
-| ---------------------------- | ------- | --------------------------------------- |
-| `MCP_RATE_LIMIT_READ_RPM`    | `120`   | Read tool rate limit (requests/minute)  |
-| `MCP_RATE_LIMIT_READ_BURST`  | `10`    | Read tool burst capacity                |
-| `MCP_RATE_LIMIT_WRITE_RPM`   | `30`    | Write tool rate limit (requests/minute) |
-| `MCP_RATE_LIMIT_WRITE_BURST` | `5`     | Write tool burst capacity               |
+| Variable                     | Default | Description                                     |
+| ---------------------------- | ------- | ----------------------------------------------- |
+| `MCP_TRANSPORT`              | `stdio` | Transport mode: `stdio` or `http`               |
+| `MCP_PORT`                   | `3100`  | HTTP port (only used when `MCP_TRANSPORT=http`) |
+| `MCP_RATE_LIMIT_READ_RPM`    | `120`   | Read tool rate limit (requests/minute)          |
+| `MCP_RATE_LIMIT_READ_BURST`  | `10`    | Read tool burst capacity                        |
+| `MCP_RATE_LIMIT_WRITE_RPM`   | `30`    | Write tool rate limit (requests/minute)         |
+| `MCP_RATE_LIMIT_WRITE_BURST` | `5`     | Write tool burst capacity                       |
 
 Shared variables (from `@aif/shared`):
 

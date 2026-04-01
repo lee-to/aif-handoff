@@ -94,7 +94,13 @@ export function useWebSocket() {
       }
 
       // Dispatch chat events as custom DOM events for the useChat hook
-      if (raw.type === "chat:token" || raw.type === "chat:done" || raw.type === "chat:error") {
+      if (
+        raw.type === "chat:token" ||
+        raw.type === "chat:done" ||
+        raw.type === "chat:error" ||
+        raw.type === "chat:session_created" ||
+        raw.type === "chat:session_deleted"
+      ) {
         window.dispatchEvent(new CustomEvent(raw.type, { detail: raw.payload }));
         return;
       }

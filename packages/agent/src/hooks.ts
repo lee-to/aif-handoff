@@ -1,7 +1,5 @@
-import { existsSync } from "fs";
-import { resolve } from "path";
 import { appendTaskActivityLog } from "@aif/data";
-import { logger, findMonorepoRootFromUrl, getEnv } from "@aif/shared";
+import { logger, findMonorepoRootFromUrl, getEnv, findClaudePath } from "@aif/shared";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 
 const log = logger("agent-hooks");
@@ -16,20 +14,7 @@ export function getProjectRoot(): string {
   return PROJECT_ROOT;
 }
 
-/** Find the claude executable path. */
-function findClaude(): string | undefined {
-  const candidates = [
-    resolve(process.env.HOME ?? "", ".local/bin/claude"),
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude",
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return undefined;
-}
-
-const CLAUDE_PATH = findClaude();
+const CLAUDE_PATH = findClaudePath();
 
 /** Returns the resolved path to the claude binary, if found. */
 export function getClaudePath(): string | undefined {

@@ -1,6 +1,9 @@
+import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { logger } from "@aif/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { loadMcpEnv } from "./env.js";
 import { RateLimiter } from "./middleware/rateLimit.js";
 import type { ToolContext } from "./tools/index.js";
@@ -16,9 +19,7 @@ import { register as registerAnnotatePlan } from "./tools/annotatePlan.js";
 
 const log = logger("mcp");
 
-async function main() {
-  const env = loadMcpEnv();
-
+function createMcpServer(env: ReturnType<typeof loadMcpEnv>): McpServer {
   const server = new McpServer(
     {
       name: "handoff-mcp",
@@ -31,22 +32,12 @@ async function main() {
     },
   );
 
-  // Initialize rate limiter
   const rateLimiter = new RateLimiter(
     { rpm: env.rateLimitReadRpm, burst: env.rateLimitReadBurst },
     { rpm: env.rateLimitWriteRpm, burst: env.rateLimitWriteBurst },
   );
 
   const context: ToolContext = { rateLimiter };
-
-  log.info(
-    {
-      transport: "stdio",
-      readRpm: env.rateLimitReadRpm,
-      writeRpm: env.rateLimitWriteRpm,
-    },
-    "MCP server starting",
-  );
 
   // Register read-only tools
   registerListTasks(server, context);
@@ -61,14 +52,75 @@ async function main() {
   registerPushPlan(server, context);
   registerAnnotatePlan(server, context);
 
+  return server;
+}
+
+async function startStdio(env: ReturnType<typeof loadMcpEnv>) {
+  const server = createMcpServer(env);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-
   log.info("MCP server connected via stdio transport");
 }
 
+async function startHttp(env: ReturnType<typeof loadMcpEnv>) {
+  const server = createMcpServer(env);
+
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+
+  await server.connect(transport);
+
+  const httpServer = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", `http://localhost:${env.httpPort}`);
+
+    if (url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
+    if (url.pathname === "/mcp") {
+      transport.handleRequest(req, res);
+      return;
+    }
+
+    res.writeHead(404);
+    res.end("Not found");
+  });
+
+  httpServer.listen(env.httpPort, () => {
+    log.info(
+      { port: env.httpPort, endpoint: "/mcp" },
+      "MCP server listening via Streamable HTTP transport",
+    );
+  });
+}
+
+async function main() {
+  const env = loadMcpEnv();
+
+  log.info(
+    {
+      transport: env.transport,
+      readRpm: env.rateLimitReadRpm,
+      writeRpm: env.rateLimitWriteRpm,
+    },
+    "MCP server starting",
+  );
+
+  if (env.transport === "http") {
+    await startHttp(env);
+  } else {
+    await startStdio(env);
+  }
+}
+
 main().catch((error) => {
-  log.error({ error: error instanceof Error ? error.message : String(error) }, "MCP server failed to start");
+  log.error(
+    { error: error instanceof Error ? error.message : String(error) },
+    "MCP server failed to start",
+  );
   process.exit(1);
 });
 

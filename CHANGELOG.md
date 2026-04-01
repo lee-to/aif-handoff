@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Import Existing button in roadmap modal
 - Docker support with dev and production compose configurations
 - Model option helper to skip model param when `ANTHROPIC_BASE_URL` is set
+- Chat sessions — persistent multi-turn conversations with session list, rename, delete, and SDK session history
 - Skill tool in chat with allowed skills whitelist, error streaming and tool feedback
 - Task-aware chat tooling — create tasks and summarize from conversation
 - Real-time chat feature with WebSocket support

@@ -4,11 +4,15 @@ import { Hono } from "hono";
 const mockQuery = vi.fn();
 const mockFindProjectById = vi.fn();
 const mockSendToClient = vi.fn();
+const mockBroadcast = vi.fn();
 const mockFindTaskById = vi.fn();
 const mockToTaskResponse = vi.fn();
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: (args: unknown) => mockQuery(args),
+  listSessions: vi.fn().mockResolvedValue([]),
+  getSessionMessages: vi.fn().mockResolvedValue([]),
+  getSessionInfo: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("../repositories/projects.js", () => ({
@@ -22,6 +26,20 @@ vi.mock("../repositories/tasks.js", () => ({
 
 vi.mock("../ws.js", () => ({
   sendToClient: (...args: unknown[]) => mockSendToClient(...args),
+  broadcast: (...args: unknown[]) => mockBroadcast(...args),
+}));
+
+vi.mock("@aif/data", () => ({
+  createChatSession: vi.fn(() => ({ id: "auto-sess", projectId: "project-1", title: "test" })),
+  findChatSessionById: vi.fn(() => ({ id: "auto-sess", agentSessionId: null })),
+  listChatSessions: vi.fn(() => []),
+  updateChatSession: vi.fn(),
+  deleteChatSession: vi.fn(),
+  createChatMessage: vi.fn(() => ({ id: "msg-1" })),
+  listChatMessages: vi.fn(() => []),
+  updateChatSessionTimestamp: vi.fn(),
+  toChatSessionResponse: vi.fn((row: unknown) => row),
+  toChatMessageResponse: vi.fn((row: unknown) => row),
 }));
 
 vi.mock("@aif/shared", async (importOriginal) => {
@@ -168,17 +186,40 @@ describe("chat API", () => {
     expect(queryArgs.prompt).toBe("/aif-explore investigate this");
   });
 
-  it("stores session from init message and uses resume for same conversation", async () => {
+  it("stores agent session ID in DB and uses resume for same session", async () => {
+    const { updateChatSession, findChatSessionById } = await import("@aif/data");
+    const mockUpdate = vi.mocked(updateChatSession);
+    const mockFind = vi.mocked(findChatSessionById);
+
+    // First request: init returns agent session ID
     mockQuery
       .mockImplementationOnce(
         streamOf([
-          { type: "system", subtype: "init", session_id: "session-123" },
+          { type: "system", subtype: "init", session_id: "agent-session-123" },
           { type: "result", subtype: "success" },
         ]),
       )
       .mockImplementationOnce(streamOf([{ type: "result", subtype: "success" }]));
 
-    const conversationId = "conv-resume-1";
+    // First call: session exists but has no agentSessionId yet
+    // findChatSessionById is called twice: once for validation, once for resume lookup
+    mockFind
+      .mockReturnValueOnce({
+        id: "auto-sess",
+        projectId: "project-1",
+        title: "test",
+        agentSessionId: null,
+        createdAt: "",
+        updatedAt: "",
+      } as any)
+      .mockReturnValueOnce({
+        id: "auto-sess",
+        projectId: "project-1",
+        title: "test",
+        agentSessionId: null,
+        createdAt: "",
+        updatedAt: "",
+      } as any);
 
     const firstRes = await app.request("/chat", {
       method: "POST",
@@ -187,10 +228,30 @@ describe("chat API", () => {
         projectId: "project-1",
         message: "first",
         clientId: "client-1",
-        conversationId,
+        sessionId: "auto-sess",
       }),
     });
     expect(firstRes.status).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledWith("auto-sess", { agentSessionId: "agent-session-123" });
+
+    // Second call: session now has the agentSessionId from first call
+    mockFind
+      .mockReturnValueOnce({
+        id: "auto-sess",
+        projectId: "project-1",
+        title: "test",
+        agentSessionId: "agent-session-123",
+        createdAt: "",
+        updatedAt: "",
+      } as any)
+      .mockReturnValueOnce({
+        id: "auto-sess",
+        projectId: "project-1",
+        title: "test",
+        agentSessionId: "agent-session-123",
+        createdAt: "",
+        updatedAt: "",
+      } as any);
 
     const secondRes = await app.request("/chat", {
       method: "POST",
@@ -199,7 +260,7 @@ describe("chat API", () => {
         projectId: "project-1",
         message: "second",
         clientId: "client-1",
-        conversationId,
+        sessionId: "auto-sess",
       }),
     });
     expect(secondRes.status).toBe(200);
@@ -207,7 +268,7 @@ describe("chat API", () => {
     const secondCall = mockQuery.mock.calls[1][0] as {
       options: { resume?: string };
     };
-    expect(secondCall.options.resume).toBe("session-123");
+    expect(secondCall.options.resume).toBe("agent-session-123");
   });
 
   it("returns 200 even when stream result subtype is non-success", async () => {
@@ -494,6 +555,58 @@ describe("chat API", () => {
           conversationId: "conv-error-1",
           code: "CHAT_REQUEST_FAILED",
           message: "Chat request failed",
+        }),
+      }),
+    );
+  });
+
+  it("sends result text as token when no tokens were streamed", async () => {
+    mockQuery.mockImplementation(
+      streamOf([{ type: "result", subtype: "success", result: "Direct result text" }]),
+    );
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "hello",
+        clientId: "client-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockSendToClient).toHaveBeenCalledWith(
+      "client-1",
+      expect.objectContaining({
+        type: "chat:token",
+        payload: expect.objectContaining({ token: "Direct result text" }),
+      }),
+    );
+  });
+
+  it("streams unknown error subtype fallback", async () => {
+    mockQuery.mockImplementation(
+      streamOf([{ type: "result", subtype: "error_unknown", is_error: true }]),
+    );
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "hello",
+        clientId: "client-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockSendToClient).toHaveBeenCalledWith(
+      "client-1",
+      expect.objectContaining({
+        type: "chat:token",
+        payload: expect.objectContaining({
+          token: expect.stringContaining("error_unknown"),
         }),
       }),
     );

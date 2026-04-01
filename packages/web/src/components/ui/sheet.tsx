@@ -23,6 +23,15 @@ function Sheet({ open, onOpenChange, children }: SheetProps) {
 
   React.useEffect(() => {
     if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (!isTopOverlayLayer(overlayLayerId.current)) return;

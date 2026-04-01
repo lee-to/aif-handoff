@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 const mockSendChatMessage = vi.fn();
+const mockGetChatSessionMessages = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   api: {
     sendChatMessage: (...args: unknown[]) => mockSendChatMessage(...args),
+    getChatSessionMessages: (...args: unknown[]) => mockGetChatSessionMessages(...args),
   },
 }));
 
@@ -18,7 +20,9 @@ const { useChat } = await import("@/hooks/useChat");
 describe("useChat", () => {
   beforeEach(() => {
     mockSendChatMessage.mockReset();
-    mockSendChatMessage.mockResolvedValue({ conversationId: "conv-1" });
+    mockGetChatSessionMessages.mockReset();
+    mockSendChatMessage.mockResolvedValue({ conversationId: "conv-1", sessionId: "sess-1" });
+    mockGetChatSessionMessages.mockResolvedValue([]);
   });
 
   it("starts with empty messages", () => {
@@ -186,24 +190,32 @@ describe("useChat", () => {
     expect(result.current.messages).toEqual([]);
   });
 
-  it("resets when project changes", async () => {
-    const { result, rerender } = renderHook(({ pid }) => useChat(pid), {
-      initialProps: { pid: "p-1" as string | null },
-    });
+  it("loads messages when sessionId changes", async () => {
+    mockGetChatSessionMessages.mockResolvedValueOnce([
+      {
+        id: "m1",
+        sessionId: "sess-1",
+        role: "user",
+        content: "Saved msg",
+        createdAt: "2026-01-01",
+      },
+    ]);
 
-    await act(async () => {
-      await result.current.sendMessage("Hello");
-    });
-
-    expect(result.current.messages).toHaveLength(1);
-
-    await act(async () => {
-      rerender({ pid: "p-2" });
-      // Flush queueMicrotask used in the project-change effect
-      await new Promise<void>((r) => queueMicrotask(r));
+    const { result, rerender } = renderHook(({ pid, sid }) => useChat(pid, sid), {
+      initialProps: { pid: "p-1" as string | null, sid: null as string | null },
     });
 
     expect(result.current.messages).toEqual([]);
+
+    await act(async () => {
+      rerender({ pid: "p-1", sid: "sess-1" });
+      // Flush the async load
+      await new Promise<void>((r) => setTimeout(r, 10));
+    });
+
+    expect(mockGetChatSessionMessages).toHaveBeenCalledWith("sess-1");
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].content).toBe("Saved msg");
   });
 
   it("handles send failure gracefully", async () => {

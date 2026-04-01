@@ -15,13 +15,17 @@ import {
   Plus,
   CheckCircle2,
   ClipboardList,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/ui/markdown";
 import { Badge } from "@/components/ui/badge";
 import { useChat } from "@/hooks/useChat";
+import { useChatSessions } from "@/hooks/useChatSessions";
 import { useTask, useCreateTask } from "@/hooks/useTasks";
 import { parseChatActions } from "@/lib/chatActions";
+import { SessionList } from "./SessionList";
 import type { ChatMessage, ChatActionCreateTask } from "@aif/shared/browser";
 
 interface ChatPanelProps {
@@ -146,8 +150,28 @@ function TypingIndicator({ hasAssistantMessage }: { hasAssistantMessage: boolean
 }
 
 export function ChatPanel({ isOpen, projectId, taskId, onClose }: ChatPanelProps) {
-  const { messages, isStreaming, chatErrorCode, explore, setExplore, sendMessage, clearMessages } =
-    useChat(projectId, taskId);
+  const [showSessions, setShowSessions] = useState(false);
+
+  const {
+    sessions,
+    activeSessionId,
+    setActiveSessionId,
+    clearActiveSession,
+    deleteSession,
+    renameSession,
+  } = useChatSessions(projectId);
+
+  const {
+    messages,
+    isStreaming,
+    chatErrorCode,
+    explore,
+    setExplore,
+    sendMessage,
+    clearMessages,
+    newSession,
+  } = useChat(projectId, activeSessionId, taskId);
+
   const { data: currentTask } = useTask(taskId);
   const [input, setInput] = useState("");
   const handleTaskCreated = useCallback(() => {
@@ -204,6 +228,39 @@ export function ChatPanel({ isOpen, projectId, taskId, onClose }: ChatPanelProps
     }
   };
 
+  const handleNewChat = useCallback(() => {
+    newSession();
+    clearActiveSession();
+    console.debug("[ChatPanel] New chat started");
+  }, [newSession, clearActiveSession]);
+
+  const handleSessionSelect = useCallback(
+    (id: string) => {
+      console.debug("[ChatPanel] Session switched to %s", id);
+      setActiveSessionId(id);
+    },
+    [setActiveSessionId],
+  );
+
+  const handleDeleteSession = useCallback(
+    async (id: string) => {
+      console.debug("[SessionList] Deleting session %s", id);
+      await deleteSession(id);
+    },
+    [deleteSession],
+  );
+
+  const handleRenameSession = useCallback(
+    async (id: string, title: string) => {
+      console.debug("[SessionList] Renaming session %s to %s", id, title);
+      await renameSession(id, title);
+    },
+    [renameSession],
+  );
+
+  // Find active session title
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+
   return (
     <div
       ref={panelRef}
@@ -219,10 +276,30 @@ export function ChatPanel({ isOpen, projectId, taskId, onClose }: ChatPanelProps
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSessions((v) => !v)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              title={showSessions ? "Hide sessions" : "Show sessions"}
+            >
+              {showSessions ? (
+                <PanelLeftClose className="h-4 w-4" />
+              ) : (
+                <PanelLeftOpen className="h-4 w-4" />
+              )}
+            </button>
             <Bot className="h-4 w-4 text-primary" />
-            <span className="text-sm font-semibold">AI Chat</span>
+            <span className="text-sm font-semibold truncate max-w-[300px]">
+              {activeSession?.title ?? "AI Chat"}
+            </span>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={handleNewChat}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              title="New chat"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
             <button
               onClick={clearMessages}
               className="text-muted-foreground hover:text-foreground transition-colors"
@@ -252,43 +329,60 @@ export function ChatPanel({ isOpen, projectId, taskId, onClose }: ChatPanelProps
         )}
       </div>
 
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto py-2">
-        {chatErrorCode === "CHAT_USAGE_LIMIT" && (
-          <div className="px-3 pb-2">
-            <div className="rounded border border-amber-500/50 bg-amber-500/15 p-2">
-              <Badge
-                variant="outline"
-                className="border-amber-600/60 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
-              >
-                Usage Limit Reached
-              </Badge>
-              <p className="mt-1 text-xs text-amber-700/90 dark:text-amber-200/90">
-                Claude usage limit is currently exhausted. Wait for reset time and send again.
-              </p>
+      {/* Content area: sessions sidebar + messages */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Session sidebar */}
+        {showSessions && (
+          <div className="w-[220px] shrink-0 border-r border-border overflow-hidden">
+            <SessionList
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onSelect={handleSessionSelect}
+              onCreate={handleNewChat}
+              onDelete={handleDeleteSession}
+              onRename={handleRenameSession}
+            />
+          </div>
+        )}
+
+        {/* Messages area */}
+        <div className="flex-1 overflow-y-auto py-2">
+          {chatErrorCode === "CHAT_USAGE_LIMIT" && (
+            <div className="px-3 pb-2">
+              <div className="rounded border border-amber-500/50 bg-amber-500/15 p-2">
+                <Badge
+                  variant="outline"
+                  className="border-amber-600/60 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
+                >
+                  Usage Limit Reached
+                </Badge>
+                <p className="mt-1 text-xs text-amber-700/90 dark:text-amber-200/90">
+                  Claude usage limit is currently exhausted. Wait for reset time and send again.
+                </p>
+              </div>
             </div>
-          </div>
-        )}
-        {messages.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
-            <Bot className="h-8 w-8 opacity-30" />
-            <p className="text-xs">Ask anything about this project</p>
-          </div>
-        )}
-        {messages.map((msg, i) => (
-          <MessageBubble
-            key={i}
-            message={msg}
-            projectId={projectId ?? ""}
-            onTaskCreated={handleTaskCreated}
-          />
-        ))}
-        {isStreaming && (
-          <TypingIndicator
-            hasAssistantMessage={messages[messages.length - 1]?.role === "assistant"}
-          />
-        )}
-        <div ref={messagesEndRef} />
+          )}
+          {messages.length === 0 && (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+              <Bot className="h-8 w-8 opacity-30" />
+              <p className="text-xs">Ask anything about this project</p>
+            </div>
+          )}
+          {messages.map((msg, i) => (
+            <MessageBubble
+              key={i}
+              message={msg}
+              projectId={projectId ?? ""}
+              onTaskCreated={handleTaskCreated}
+            />
+          ))}
+          {isStreaming && (
+            <TypingIndicator
+              hasAssistantMessage={messages[messages.length - 1]?.role === "assistant"}
+            />
+          )}
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {/* Input area */}

@@ -9,8 +9,14 @@ import {
   projects,
   taskComments,
   tasks,
+  chatSessions,
+  chatMessages,
   type Task,
   type TaskStatus,
+  type ChatSession,
+  type ChatSessionMessage,
+  type ChatSessionRow,
+  type ChatMessageRow,
 } from "@aif/shared";
 import { getDb } from "@aif/shared/server";
 
@@ -643,4 +649,121 @@ export function findTasksByRoadmapAlias(projectId: string, alias: string): TaskR
     .from(tasks)
     .where(and(eq(tasks.projectId, projectId), eq(tasks.roadmapAlias, alias)))
     .all();
+}
+
+// ── Chat Sessions ──────────────────────────────────────────────
+
+export function toChatSessionResponse(row: ChatSessionRow): ChatSession {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    title: row.title,
+    agentSessionId: row.agentSessionId,
+    source: "web",
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function toChatMessageResponse(row: ChatMessageRow): ChatSessionMessage {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    role: row.role,
+    content: row.content,
+    createdAt: row.createdAt,
+  };
+}
+
+export function createChatSession(input: {
+  projectId: string;
+  title?: string;
+}): ChatSessionRow | undefined {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  log.debug("createChatSession projectId=%s title=%s", input.projectId, input.title ?? "New Chat");
+  getDb()
+    .insert(chatSessions)
+    .values({
+      id,
+      projectId: input.projectId,
+      title: input.title ?? "New Chat",
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+  return findChatSessionById(id);
+}
+
+export function findChatSessionById(id: string): ChatSessionRow | undefined {
+  return getDb().select().from(chatSessions).where(eq(chatSessions.id, id)).get();
+}
+
+export function listChatSessions(projectId: string): ChatSessionRow[] {
+  log.debug("listChatSessions projectId=%s", projectId);
+  return getDb()
+    .select()
+    .from(chatSessions)
+    .where(eq(chatSessions.projectId, projectId))
+    .orderBy(desc(chatSessions.updatedAt))
+    .all();
+}
+
+export function updateChatSession(
+  id: string,
+  fields: { title?: string; agentSessionId?: string | null },
+): ChatSessionRow | undefined {
+  log.debug("updateChatSession id=%s fields=%o", id, fields);
+  const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if (fields.title !== undefined) patch.title = fields.title;
+  if (fields.agentSessionId !== undefined) patch.agentSessionId = fields.agentSessionId;
+  getDb().update(chatSessions).set(patch).where(eq(chatSessions.id, id)).run();
+  return findChatSessionById(id);
+}
+
+export function deleteChatSession(id: string): void {
+  log.debug("deleteChatSession id=%s", id);
+  const db = getDb();
+  db.delete(chatMessages).where(eq(chatMessages.sessionId, id)).run();
+  db.delete(chatSessions).where(eq(chatSessions.id, id)).run();
+}
+
+export function createChatMessage(input: {
+  sessionId: string;
+  role: "user" | "assistant";
+  content: string;
+}): ChatMessageRow | undefined {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  log.debug("createChatMessage sessionId=%s role=%s", input.sessionId, input.role);
+  getDb()
+    .insert(chatMessages)
+    .values({
+      id,
+      sessionId: input.sessionId,
+      role: input.role,
+      content: input.content,
+      createdAt: now,
+    })
+    .run();
+  return getDb().select().from(chatMessages).where(eq(chatMessages.id, id)).get();
+}
+
+export function listChatMessages(sessionId: string): ChatMessageRow[] {
+  log.debug("listChatMessages sessionId=%s", sessionId);
+  return getDb()
+    .select()
+    .from(chatMessages)
+    .where(eq(chatMessages.sessionId, sessionId))
+    .orderBy(asc(chatMessages.createdAt))
+    .all();
+}
+
+export function updateChatSessionTimestamp(id: string): void {
+  log.debug("updateChatSessionTimestamp id=%s", id);
+  getDb()
+    .update(chatSessions)
+    .set({ updatedAt: new Date().toISOString() })
+    .where(eq(chatSessions.id, id))
+    .run();
 }

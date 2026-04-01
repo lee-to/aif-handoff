@@ -24,8 +24,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1"
-          memory: 512M
+          cpus: "2"
+          memory: 1G
     logging:
       driver: json-file
       options:
@@ -113,8 +113,12 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: mcp
+    ports:
+      - "127.0.0.1:3100:3100"
     environment:
       - DATABASE_URL=/data/aif.sqlite
+      - MCP_TRANSPORT=http
+      - MCP_PORT=3100
       - LOG_LEVEL=info
     volumes:
       - db-data:/data
@@ -138,6 +142,11 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3100/health').then(r=>{if(!r.ok)throw r.status}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
   db-data:

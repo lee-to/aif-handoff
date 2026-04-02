@@ -34,19 +34,22 @@ interface ChatPanelProps {
   projectId: string | null;
   taskId: string | null;
   onClose: () => void;
+  onOpenTask?: (taskId: string) => void;
 }
 
 function CreateTaskCard({
   action,
   projectId,
   onCreated,
+  onOpenTask,
 }: {
   action: ChatActionCreateTask;
   projectId: string;
   onCreated: () => void;
+  onOpenTask?: (taskId: string) => void;
 }) {
   const createTask = useCreateTask();
-  const [created, setCreated] = useState(false);
+  const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
 
   const handleCreate = () => {
     createTask.mutate(
@@ -57,8 +60,8 @@ function CreateTaskCard({
         ...(action.isFix ? { isFix: true } : {}),
       },
       {
-        onSuccess: () => {
-          setCreated(true);
+        onSuccess: (task) => {
+          setCreatedTaskId(task.id);
           onCreated();
         },
       },
@@ -75,11 +78,24 @@ function CreateTaskCard({
       {action.description && (
         <p className="mt-1 text-xs text-muted-foreground line-clamp-3">{action.description}</p>
       )}
-      <div className="mt-2">
-        {created ? (
-          <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Task created
-          </span>
+      <div className="mt-2 flex items-center gap-2">
+        {createdTaskId ? (
+          <>
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Created
+            </span>
+            {onOpenTask && (
+              <button
+                onClick={() => onOpenTask(createdTaskId)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium",
+                  "bg-violet-600 text-white hover:bg-violet-700 transition-colors",
+                )}
+              >
+                Open Task
+              </button>
+            )}
+          </>
         ) : (
           <button
             onClick={handleCreate}
@@ -103,10 +119,12 @@ const MessageBubble = memo(function MessageBubble({
   message,
   projectId,
   onTaskCreated,
+  onOpenTask,
 }: {
   message: ChatMessage;
   projectId: string;
   onTaskCreated: () => void;
+  onOpenTask?: (taskId: string) => void;
 }) {
   const isUser = message.role === "user";
   const parsed = !isUser ? parseChatActions(message.content) : null;
@@ -141,7 +159,13 @@ const MessageBubble = memo(function MessageBubble({
       )}
       {actions.map((action, i) =>
         action.type === "create_task" ? (
-          <CreateTaskCard key={i} action={action} projectId={projectId} onCreated={onTaskCreated} />
+          <CreateTaskCard
+            key={i}
+            action={action}
+            projectId={projectId}
+            onCreated={onTaskCreated}
+            onOpenTask={onOpenTask}
+          />
         ) : null,
       )}
     </>
@@ -157,7 +181,7 @@ function TypingIndicator({ hasAssistantMessage }: { hasAssistantMessage: boolean
   );
 }
 
-export function ChatPanel({ isOpen, projectId, taskId, onClose }: ChatPanelProps) {
+export function ChatPanel({ isOpen, projectId, taskId, onClose, onOpenTask }: ChatPanelProps) {
   const [showSessions, setShowSessions] = useState(false);
 
   const {
@@ -384,6 +408,7 @@ export function ChatPanel({ isOpen, projectId, taskId, onClose }: ChatPanelProps
               message={msg}
               projectId={projectId ?? ""}
               onTaskCreated={handleTaskCreated}
+              onOpenTask={onOpenTask}
             />
           ))}
           {isStreaming && (

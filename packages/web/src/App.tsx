@@ -248,6 +248,10 @@ function AppContent() {
             projectId={project.id}
             taskId={selectedTaskId}
             onClose={() => setChatOpen(false)}
+            onOpenTask={(id) => {
+              setSelectedTaskId(id);
+              setChatOpen(false);
+            }}
           />
           <ChatBubble
             isOpen={chatOpen}

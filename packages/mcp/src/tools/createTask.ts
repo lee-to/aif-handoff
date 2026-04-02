@@ -6,6 +6,7 @@ import type { ToolContext } from "./index.js";
 import { rateLimitError, validationError } from "../middleware/errorHandler.js";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { compactTaskResponse } from "../utils/compactResponse.js";
+import { broadcastTaskChange } from "../utils/broadcast.js";
 
 const log = logger("mcp:tool:create-task");
 
@@ -87,6 +88,11 @@ export function register(server: McpServer, context: ToolContext): void {
         { taskId: full.id, projectId: args.projectId, title: args.title },
         "handoff_create_task completed",
       );
+
+      void broadcastTaskChange(full.id, "task:moved", {
+        title: full.title,
+        toStatus: "backlog",
+      });
 
       return {
         content: [{ type: "text" as const, text: JSON.stringify(compactTaskResponse(full)) }],

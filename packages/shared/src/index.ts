@@ -108,6 +108,13 @@ export {
   type AifProjectWorkflow,
 } from "./projectConfig.js";
 
+// Telegram notifications
+export {
+  escapeMarkdown,
+  sendTelegramNotification,
+  type TelegramNotificationOptions,
+} from "./telegram.js";
+
 // Utilities
 export { withTimeout } from "./withTimeout.js";
 export { findClaudePath } from "./findClaudePath.js";

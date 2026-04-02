@@ -343,6 +343,7 @@ Proceed? [Y/n]
    - Write `.ai-factory/config.yaml` from `skills/aif/references/config-template.yaml`, preserving comments and filling in the resolved values
    - Write `.ai-factory/rules/base.md` with detected conventions
 4. For each external skill from skills.sh:
+
    ```bash
    npx skills install --agent claude-code <name>
    # AUTO-SCAN: immediately after install
@@ -352,6 +353,7 @@ Proceed? [Y/n]
    - Exit 1 (BLOCKED) → `rm -rf <path>`, warn user, skip this skill
    - Exit 2 (WARNINGS) → show to user, ask confirmation
    - Exit 0 (CLEAN) → read files yourself (Level 2), verify intent, proceed
+
 5. Generate custom skills via `/aif-skill-generator` (pass URLs for Learn Mode when docs are available)
 6. Configure MCP in `.mcp.json`
 7. Generate `AGENTS.md` in project root (see [AGENTS.md Generation](#agentsmd-generation))
@@ -616,7 +618,7 @@ Install skills, configure MCP, generate `AGENTS.md`, and generate architecture d
 1. **Search before generating** — Don't reinvent existing skills
 2. **Ask confirmation** — Before installing or generating
 3. **Check duplicates** — Don't install what's already there
-4. **MCP in .mcp.json** — Project-level (agent reads MCP from `.mcp.json`, not `settings.local.json`)
+4. **MCP in `.mcp.json`** — Project-level MCP configuration
 5. **Remind about env vars** — For MCP that need credentials
 
 ## Artifact Ownership

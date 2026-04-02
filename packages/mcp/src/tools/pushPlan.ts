@@ -5,6 +5,7 @@ import { findTaskById, setTaskFields, toTaskResponse } from "@aif/data";
 import type { ToolContext } from "./index.js";
 import { rateLimitError, toMcpError, validationError } from "../middleware/errorHandler.js";
 import { compactTaskResponse } from "../utils/compactResponse.js";
+import { broadcastTaskChange } from "../utils/broadcast.js";
 
 const log = logger("mcp:tool:push-plan");
 
@@ -70,6 +71,8 @@ export function register(server: McpServer, context: ToolContext): void {
           },
           "handoff_push_plan completed",
         );
+
+        void broadcastTaskChange(args.taskId);
 
         return {
           content: [

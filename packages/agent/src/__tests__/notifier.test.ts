@@ -80,7 +80,9 @@ describe("notifyTaskBroadcast", () => {
     });
 
     it("does not send Telegram message when env is not configured", async () => {
-      // No TELEGRAM_BOT_TOKEN / TELEGRAM_USER_ID set
+      // Explicitly clear tokens that may exist in the real environment
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+      vi.stubEnv("TELEGRAM_USER_ID", "");
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
       global.fetch = fetchMock as any;
 

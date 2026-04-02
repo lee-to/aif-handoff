@@ -5,6 +5,7 @@ import { findTaskById, updateTask, toTaskResponse } from "@aif/data";
 import type { ToolContext } from "./index.js";
 import { rateLimitError, toMcpError, validationError } from "../middleware/errorHandler.js";
 import { compactTaskResponse } from "../utils/compactResponse.js";
+import { broadcastTaskChange } from "../utils/broadcast.js";
 
 const log = logger("mcp:tool:update-task");
 
@@ -76,6 +77,8 @@ export function register(server: McpServer, context: ToolContext): void {
         const full = toTaskResponse(row);
 
         log.info({ taskId, changedFields }, "handoff_update_task completed");
+
+        void broadcastTaskChange(taskId);
 
         return {
           content: [{ type: "text" as const, text: JSON.stringify(compactTaskResponse(full)) }],

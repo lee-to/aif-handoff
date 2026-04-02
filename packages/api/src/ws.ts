@@ -80,5 +80,8 @@ export function broadcast(event: WsEvent): void {
       sent++;
     }
   }
-  log.debug({ event: event.type, clientsSent: sent }, "Broadcast WS event");
+  log.info(
+    { event: event.type, clientsSent: sent, clientsTotal: clients.size },
+    "Broadcast WS event",
+  );
 }

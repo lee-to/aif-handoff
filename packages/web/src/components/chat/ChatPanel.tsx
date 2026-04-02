@@ -347,7 +347,7 @@ export function ChatPanel({ isOpen, projectId, taskId, onClose }: ChatPanelProps
         )}
 
         {/* Messages area */}
-        <div className="flex-1 overflow-y-auto py-2">
+        <div className="flex-1 overflow-y-auto overscroll-contain py-2">
           {chatErrorCode === "CHAT_USAGE_LIMIT" && (
             <div className="px-3 pb-2">
               <div className="rounded border border-amber-500/50 bg-amber-500/15 p-2">

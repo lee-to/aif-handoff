@@ -24,6 +24,15 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
 
   React.useEffect(() => {
     if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (!isTopOverlayLayer(overlayLayerId.current)) return;

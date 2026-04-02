@@ -76,7 +76,7 @@ export function SessionList({
           New Chat
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto py-1">
+      <div className="flex-1 overflow-y-auto overscroll-contain py-1">
         {sessions.length === 0 && (
           <p className="px-3 py-4 text-center text-xs text-muted-foreground">
             No conversations yet

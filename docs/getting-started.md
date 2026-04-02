@@ -74,7 +74,7 @@ The project uses SQLite via `better-sqlite3` + `drizzle-orm`. DB access in runti
 npm run db:setup
 ```
 
-This creates the `data/` directory and pushes the Drizzle schema to `data/aif.sqlite`.
+This builds `@aif/shared`, creates `data/aif.sqlite`, and applies runtime migrations/index bootstrap.
 
 To apply schema changes later:
 
@@ -148,7 +148,7 @@ curl -s http://localhost:3009/agent/readiness
 | `npm run dev`      | Start all services with hot reload |
 | `npm run build`    | Build all packages                 |
 | `npm test`         | Run all tests (Vitest)             |
-| `npm run db:setup` | Create data dir + push schema      |
+| `npm run db:setup` | Build shared and initialize SQLite |
 | `npm run db:push`  | Push schema changes                |
 
 ## Next Steps

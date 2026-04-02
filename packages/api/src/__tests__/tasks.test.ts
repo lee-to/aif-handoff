@@ -698,7 +698,8 @@ describe("tasks API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.exists).toBe(true);
-      expect(body.path).toContain(".ai-factory/PLAN.md");
+      const normalizedPath = String(body.path).replaceAll("\\", "/");
+      expect(normalizedPath).toContain(".ai-factory/PLAN.md");
     });
 
     it("should report missing canonical plan file", async () => {
@@ -725,7 +726,8 @@ describe("tasks API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.exists).toBe(false);
-      expect(body.path).toContain(".ai-factory/PLAN.md");
+      const normalizedPath = String(body.path).replaceAll("\\", "/");
+      expect(normalizedPath).toContain(".ai-factory/PLAN.md");
     });
   });
 

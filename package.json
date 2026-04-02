@@ -32,7 +32,7 @@
     "lint": "turbo lint",
     "test": "turbo test",
     "coverage": "turbo test -- --coverage",
-    "db:setup": "mkdir -p data && cd packages/shared && DATABASE_URL=../../data/aif.sqlite drizzle-kit push",
+    "db:setup": "npm run db:setup --workspace=@aif/shared",
     "db:push": "turbo db:push --filter=@aif/shared",
     "aif:init": "ai-factory init",
     "format": "prettier --write .",

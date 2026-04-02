@@ -18,6 +18,8 @@
     "coverage": "vitest run --coverage",
     "lint": "eslint \"src/**/*.ts\"",
     "test:watch": "vitest",
+    "predb:setup": "npm run build",
+    "db:setup": "node -e \"import('./dist/db.js').then((m) => { m.getDb(); m.closeDb(); })\"",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

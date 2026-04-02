@@ -52,8 +52,10 @@ coverage/
 .claude/projects
 .claude/worktrees
 
-# Codex
-.codex/
+# Codex and other agent
+/.codex/
+/.agents/
+/.github/skills
 
 # AI Factory (keep tracked files, ignore generated)
 .ai-factory/skill-context/

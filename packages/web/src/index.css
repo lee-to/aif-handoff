@@ -22,6 +22,19 @@
   --color-input: #2a2a2a;
   --color-ring: #10b981;
   --radius: 0rem;
+  /* Status colors */
+  --color-status-backlog: #6b7280;
+  --color-status-planning: #8b5cf6;
+  --color-status-ready: #06b6d4;
+  --color-status-implementing: #f59e0b;
+  --color-status-review: #3b82f6;
+  --color-status-done: #10b981;
+  --color-status-failed: #ef4444;
+  /* Priority colors */
+  --color-priority-low: #06b6d4;
+  --color-priority-medium: #f59e0b;
+  --color-priority-high: #f97316;
+  --color-priority-urgent: #ef4444;
 }
 
 :root.light {
@@ -44,6 +57,19 @@
   --color-border: #b7c4bc;
   --color-input: #b7c4bc;
   --color-ring: #0f766e;
+  /* Status colors */
+  --color-status-backlog: #6b7280;
+  --color-status-planning: #7c3aed;
+  --color-status-ready: #0891b2;
+  --color-status-implementing: #d97706;
+  --color-status-review: #2563eb;
+  --color-status-done: #059669;
+  --color-status-failed: #dc2626;
+  /* Priority colors */
+  --color-priority-low: #0891b2;
+  --color-priority-medium: #d97706;
+  --color-priority-high: #ea580c;
+  --color-priority-urgent: #dc2626;
 }
 
 body {

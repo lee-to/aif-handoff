@@ -22,6 +22,14 @@
   --color-input: #2a2a2a;
   --color-ring: #10b981;
   --radius: 0rem;
+
+  /* Feedback colors */
+  --color-success: #10b981;
+  --color-success-foreground: #d1fae5;
+  --color-warning: #f59e0b;
+  --color-warning-foreground: #fef3c7;
+  --color-info: #3b82f6;
+  --color-info-foreground: #dbeafe;
 }
 
 :root.light {
@@ -44,6 +52,14 @@
   --color-border: #b7c4bc;
   --color-input: #b7c4bc;
   --color-ring: #0f766e;
+
+  /* Feedback colors */
+  --color-success: #059669;
+  --color-success-foreground: #065f46;
+  --color-warning: #d97706;
+  --color-warning-foreground: #92400e;
+  --color-info: #2563eb;
+  --color-info-foreground: #1e40af;
 }
 
 body {

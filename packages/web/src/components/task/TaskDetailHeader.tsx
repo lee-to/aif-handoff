@@ -5,6 +5,7 @@ import { SheetHeader, SheetTitle, SheetClose } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatTokenCount, formatUsd } from "@/lib/formatters";
+import { AlertBox } from "@/components/ui/alert-box";
 import { TabButton } from "./Section";
 
 export type TaskDetailTab = "implementation" | "review" | "comments" | "activity";
@@ -171,9 +172,9 @@ export function TaskDetailHeader({
             ))}
           </div>
           {planChangeSuccess && (
-            <div className="mt-2 border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-xs text-emerald-300">
+            <AlertBox variant="success" className="mt-2 px-2 py-1.5 text-xs">
               {planChangeSuccess}
-            </div>
+            </AlertBox>
           )}
         </div>
       )}

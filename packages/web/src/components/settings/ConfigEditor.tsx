@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Loader2, Save, Check, AlertTriangle, RotateCcw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { StickyActionBar } from "@/components/ui/sticky-action-bar";
 import { api, type AifConfig } from "@/lib/api";
 
 const LANGUAGE_OPTIONS = [
@@ -285,7 +286,10 @@ export function ConfigEditor({ config, onConfigChange }: Props) {
       </Field>
 
       {/* Save bar */}
-      <div className="sticky bottom-0 -mb-2 -mx-3 flex items-center justify-between border-t border-border bg-card/50 px-3 pt-3 pb-2 mt-4">
+      <StickyActionBar
+        visible={isDirty || saved || !!error}
+        className="-mb-2 -mx-3 justify-between px-3 pt-3 pb-2 mt-4"
+      >
         <div className="flex items-center gap-2">
           {saved && (
             <span className="text-xs text-green-400 flex items-center gap-1">
@@ -321,7 +325,7 @@ export function ConfigEditor({ config, onConfigChange }: Props) {
             Save
           </button>
         </div>
-      </div>
+      </StickyActionBar>
     </div>
   );
 }

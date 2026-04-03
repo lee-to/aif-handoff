@@ -7,7 +7,7 @@ The Handoff MCP server enables bidirectional synchronization between the Handoff
 ### Prerequisites
 
 - Node.js 20+
-- Built project: `npm run build`
+- Installed dependencies: `npm install`
 
 ### Configuration
 
@@ -15,23 +15,29 @@ The MCP server supports two transport modes:
 
 #### stdio (default) — local Claude Code
 
-Configured in `.mcp.json` at the project root:
+Configured in `.mcp.json` at the project root (already included in the repository):
 
 ```json
 {
   "mcpServers": {
     "handoff": {
-      "command": "node",
-      "args": ["packages/mcp/dist/index.js"],
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "packages/mcp/src/index.ts"],
+      "cwd": "/absolute/path/to/aif-handoff",
       "env": {
-        "DATABASE_URL": "./data/handoff.sqlite"
+        "DATABASE_URL": "/absolute/path/to/aif-handoff/data/aif.sqlite",
+        "PROJECTS_DIR": "/absolute/path/to/aif-handoff/.projects",
+        "LOG_LEVEL": "info"
       }
     }
   }
 }
 ```
 
-After building, the Claude CLI auto-discovers the Handoff MCP server.
+> **Important:** Use absolute paths for `cwd`, `DATABASE_URL`, and `PROJECTS_DIR`. Relative paths won't resolve correctly because the MCP process cwd is not guaranteed to be the project root.
+
+Claude Code auto-discovers the Handoff MCP server from `.mcp.json` — no build step required.
 
 #### HTTP — Docker / remote
 
@@ -361,10 +367,14 @@ For mode 2 (manual Claude Code session) to work, the Handoff MCP server must be 
 {
   "mcpServers": {
     "handoff": {
-      "command": "node",
-      "args": ["packages/mcp/dist/index.js"],
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "packages/mcp/src/index.ts"],
+      "cwd": "/absolute/path/to/aif-handoff",
       "env": {
-        "DATABASE_URL": "./data/aif.sqlite"
+        "DATABASE_URL": "/absolute/path/to/aif-handoff/data/aif.sqlite",
+        "PROJECTS_DIR": "/absolute/path/to/aif-handoff/.projects",
+        "LOG_LEVEL": "info"
       }
     }
   }

@@ -33,11 +33,16 @@ async function writeClaudeConfig(config: ClaudeConfig): Promise<void> {
 }
 
 function buildMcpServerEntry() {
+  const env = getEnv();
   return {
+    type: "stdio",
     command: "npx",
     args: ["tsx", join(MONOREPO_ROOT, "packages/mcp/src/index.ts")],
+    cwd: MONOREPO_ROOT,
     env: {
-      DATABASE_URL: getEnv().DATABASE_URL,
+      DATABASE_URL: join(MONOREPO_ROOT, env.DATABASE_URL),
+      PROJECTS_DIR: join(MONOREPO_ROOT, process.env.PROJECTS_DIR || ".projects"),
+      LOG_LEVEL: "info",
     },
   };
 }

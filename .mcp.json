@@ -1,11 +1,19 @@
 {
   "mcpServers": {
+    "handoff": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "packages/mcp/src/index.ts"],
+      "cwd": "/Users/macos/Projects/2080/aif-handoff",
+      "env": {
+        "DATABASE_URL": "/Users/macos/Projects/2080/aif-handoff/data/aif.sqlite",
+        "PROJECTS_DIR": "/Users/macos/Projects/2080/aif-handoff/.projects",
+        "LOG_LEVEL": "info"
+      }
+    },
     "playwright": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@playwright/mcp@latest"
-      ]
+      "args": ["-y", "@playwright/mcp@latest"]
     }
   }
 }

@@ -570,7 +570,7 @@ describe("TaskDetail", () => {
     render(<TaskDetail taskId="detail-with-attachment" onClose={vi.fn()} />, { wrapper: Wrapper });
 
     fireEvent.click(screen.getByText("Show attachments (1)"));
-    fireEvent.click(screen.getByText("Remove"));
+    fireEvent.click(screen.getByLabelText("Remove old.txt"));
 
     expect(mutateUpdateTask).toHaveBeenCalledWith({
       id: "detail-with-attachment",

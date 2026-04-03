@@ -74,7 +74,7 @@ describe("TaskAttachments", () => {
       />,
     );
     fireEvent.click(screen.getByText("Show attachments (2)"));
-    const removeButtons = screen.getAllByText("Remove");
+    const removeButtons = screen.getAllByLabelText(/^Remove /);
     fireEvent.click(removeButtons[0]);
     expect(onRemove).toHaveBeenCalledWith(0);
   });

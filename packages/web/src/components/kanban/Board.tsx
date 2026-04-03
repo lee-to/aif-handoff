@@ -7,6 +7,7 @@ import { AddTaskForm } from "./AddTaskForm";
 import { Input } from "@/components/ui/input";
 import { readStorage, writeStorage } from "@/lib/storage";
 import { STORAGE_KEYS } from "@/lib/storageKeys";
+import { TableHeaderCell } from "@/components/ui/table-header-cell";
 
 type QuickFilter = "mine" | "blocked" | "recent" | "no_plan" | "roadmap";
 type ViewMode = "kanban" | "list";
@@ -336,31 +337,11 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
             <table className="min-w-full border-collapse text-left">
               <thead className="border-b border-border bg-secondary/35">
                 <tr>
-                  <th
-                    className={`px-3 uppercase tracking-[0.16em] text-muted-foreground ${isCompact ? "py-1.5 text-[10px]" : "py-2 text-[11px]"}`}
-                  >
-                    Task
-                  </th>
-                  <th
-                    className={`px-3 uppercase tracking-[0.16em] text-muted-foreground ${isCompact ? "py-1.5 text-[10px]" : "py-2 text-[11px]"}`}
-                  >
-                    Status
-                  </th>
-                  <th
-                    className={`px-3 uppercase tracking-[0.16em] text-muted-foreground ${isCompact ? "py-1.5 text-[10px]" : "py-2 text-[11px]"}`}
-                  >
-                    Priority
-                  </th>
-                  <th
-                    className={`px-3 uppercase tracking-[0.16em] text-muted-foreground ${isCompact ? "py-1.5 text-[10px]" : "py-2 text-[11px]"}`}
-                  >
-                    Owner
-                  </th>
-                  <th
-                    className={`px-3 uppercase tracking-[0.16em] text-muted-foreground ${isCompact ? "py-1.5 text-[10px]" : "py-2 text-[11px]"}`}
-                  >
-                    Updated
-                  </th>
+                  <TableHeaderCell isCompact={isCompact}>Task</TableHeaderCell>
+                  <TableHeaderCell isCompact={isCompact}>Status</TableHeaderCell>
+                  <TableHeaderCell isCompact={isCompact}>Priority</TableHeaderCell>
+                  <TableHeaderCell isCompact={isCompact}>Owner</TableHeaderCell>
+                  <TableHeaderCell isCompact={isCompact}>Updated</TableHeaderCell>
                 </tr>
               </thead>
               <tbody>

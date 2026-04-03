@@ -3,6 +3,7 @@ import { STATUS_CONFIG } from "@aif/shared/browser";
 import { Pause, Play } from "lucide-react";
 import { SheetHeader, SheetTitle, SheetClose } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
+import { TaskTagsList } from "@/components/ui/task-tags-list";
 import { Button } from "@/components/ui/button";
 import { formatTokenCount, formatUsd } from "@/lib/formatters";
 import { Tabs } from "@/components/ui/tabs";
@@ -103,21 +104,7 @@ export function TaskDetailHeader({
               P{task.priority}
             </Badge>
           )}
-          {task.roadmapAlias && (
-            <Badge className="text-[10px] border-violet-500/35 bg-violet-500/15 text-violet-600 dark:text-violet-300">
-              {task.roadmapAlias}
-            </Badge>
-          )}
-          {task.tags
-            ?.filter((t) => !t.startsWith("rm:") && t !== "roadmap")
-            .map((tag) => (
-              <Badge
-                key={tag}
-                className="text-[10px] border-slate-500/35 bg-slate-500/15 text-slate-600 dark:text-slate-300"
-              >
-                {tag}
-              </Badge>
-            ))}
+          <TaskTagsList tags={task.tags} roadmapAlias={task.roadmapAlias} />
         </div>
         <div className="mb-2 flex flex-wrap gap-1.5">
           <Badge variant="outline" className="text-[10px]">

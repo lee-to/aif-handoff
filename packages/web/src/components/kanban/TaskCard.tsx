@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { STATUS_CONFIG, type Task } from "@aif/shared/browser";
 import { Badge } from "@/components/ui/badge";
+import { TaskTagsList } from "@/components/ui/task-tags-list";
 import { timeAgo } from "@/lib/utils";
 
 const PRIORITY_LABELS: Record<number, { label: string; className: string }> = {
@@ -78,27 +79,12 @@ export function TaskCard({ task, onClick, overlay, density = "comfortable" }: Ta
         </div>
       )}
 
-      {(task.roadmapAlias || (task.tags && task.tags.length > 0)) && (
-        <div className={`flex flex-wrap gap-1 ${isCompact ? "mt-0.5 pl-1.5" : "mt-1.5 pl-2"}`}>
-          {task.roadmapAlias && (
-            <Badge
-              className={`${isCompact ? "px-1 py-0 text-[9px]" : "px-1.5 py-0 text-[10px]"} border-violet-500/35 bg-violet-500/15 text-violet-600 dark:text-violet-300`}
-            >
-              {task.roadmapAlias}
-            </Badge>
-          )}
-          {task.tags
-            ?.filter((t) => !t.startsWith("rm:") && t !== "roadmap")
-            .map((tag) => (
-              <Badge
-                key={tag}
-                className={`${isCompact ? "px-1 py-0 text-[9px]" : "px-1.5 py-0 text-[10px]"} border-slate-500/35 bg-slate-500/15 text-slate-600 dark:text-slate-300`}
-              >
-                {tag}
-              </Badge>
-            ))}
-        </div>
-      )}
+      <TaskTagsList
+        tags={task.tags}
+        roadmapAlias={task.roadmapAlias}
+        isCompact={isCompact}
+        className={isCompact ? "mt-0.5 pl-1.5" : "mt-1.5 pl-2"}
+      />
 
       {task.status === "blocked_external" && task.blockedReason && (
         <div className="mt-2 ml-2 border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] text-red-300 line-clamp-2">

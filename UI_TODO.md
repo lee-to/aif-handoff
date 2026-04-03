@@ -2,10 +2,10 @@
 
 ## Current state
 
-**42 UI components** in `components/ui/`:
+**47 UI components** in `components/ui/`:
 
 - Atoms (28): Button (4 variants), Badge (semantic variants), Input, Textarea, Select, Markdown, Label, Checkbox, Switch, Radio, Tooltip, Popover, Spinner, Avatar, Icon, Separator, EmptyState, StatusDot, AlertBox, ToggleButton, ProgressBar, FileInput, KeyHint, SectionHeader, ScrollableContainer, IconLabel, TimestampLabel, FilterButton, Skeleton, AttachmentChip, AuthorBadge, SourceIcon
-- Molecules (14): Dialog, Sheet, Tabs, Card, Collapsible, DropdownMenu, SegmentedControl, FormField, FormDialog, InlineEditor, Metric, MetadataRow, ActionButtonGroup, StickyActionBar, ListButton
+- Molecules (19): Dialog, Sheet, Tabs, Card, Collapsible, DropdownMenu, SegmentedControl, FormField, FormDialog, InlineEditor, Metric, MetadataRow, ActionButtonGroup, StickyActionBar, ListButton, DropZone, TableHeaderCell, FileListItem, TaskTagsList, Toast (ToastProvider + useToast)
 - Hooks (3 new): useDensityClasses, useTaskFiltering, useFormState
 - Utilities (1 new): formatFileSize
 - All clean — no business logic, CVA variants, Tailwind, `cn()` utility
@@ -27,7 +27,7 @@ Every new or updated UI component MUST be added to the Pencil design file via MC
 
 **Current Pencil sync status (`aif-handoff-ui-kit.pen`):**
 
-- [x] Design tokens (all 35 variables, dark/light themes)
+- [x] Design tokens (all 38 variables, dark/light themes)
 - [x] Button (default, outline, ghost, xs)
 - [x] Badge (default, priority)
 - [x] Input
@@ -38,6 +38,7 @@ Every new or updated UI component MUST be added to the Pencil design file via MC
 - [x] Card, FormField, Tabs, SegmentedControl
 - [x] Collapsible, DropdownMenu
 - [ ] Remaining atoms: Tooltip, Popover, Avatar, Separator, ProgressBar, FilterButton, Skeleton, AttachmentChip, AuthorBadge, SourceIcon, ToggleButton, FileInput, ScrollableContainer, Radio, Label
+- [x] DropZone, TableHeaderCell, FileListItem, TaskTagsList, Toast
 - [ ] Remaining molecules: Dialog, Sheet, FormDialog, InlineEditor, MetadataRow, ActionButtonGroup, StickyActionBar, ListButton
 
 ---
@@ -114,11 +115,11 @@ All 28 atoms from original list are now implemented:
 - [x] ActionButtonGroup
 - [x] StickyActionBar
 - [x] SegmentedControl
-- [ ] DropZone — drag-and-drop area with hover styles; TaskAttachments
-- [ ] TableHeaderCell — uppercase tracking-wide muted headers; Board table (5 instances)
-- [ ] FileListItem — name + mime + size + download/remove actions; TaskAttachments, TaskComments
-- [ ] TaskTagsList — tag filtering + Badge mapping; TaskCard, TaskDetailHeader
-- [ ] Alert / Toast — notification system
+- [x] DropZone — drag-and-drop area with hover styles; TaskAttachments migrated
+- [x] TableHeaderCell — uppercase tracking-wide muted headers; Board table (5 instances) migrated
+- [x] FileListItem — name + mime + size + download/remove actions; TaskAttachments migrated
+- [x] TaskTagsList — tag filtering + Badge mapping; TaskCard, TaskDetailHeader migrated
+- [x] Alert / Toast — ToastProvider + useToast notification system
 
 ## Organism refactors
 
@@ -197,7 +198,7 @@ All token categories defined in `index.css` (dark + light themes):
 | ------------------------------------------------ | ------------ |
 | Design tokens Phase 2-3 (typography + spacing)   | ~1.5 days    |
 | Design tokens Phase 4 (lint enforcement)         | ~0.5 day     |
-| Remaining molecules (5 items)                    | ~1 day       |
+| ~~Remaining molecules (5 items)~~                | ~~DONE~~     |
 | Custom hooks extraction (5 remaining)            | ~1 day       |
 | Utilities consolidation                          | ~0.25 day    |
 | Refactor organisms onto new components (9 items) | ~3.5 days    |
@@ -221,4 +222,4 @@ All token categories defined in `index.css` (dark + light themes):
 - Theme tokens defined in `src/index.css` via CSS variables (dark/light) — Phase 1 complete
 - Icons: lucide-react throughout
 - No external UI framework (no shadcn, no Radix, no MUI)
-- Pencil design file: `aif-handoff-ui-kit.pen` — 35 variables, 20+ reusable components
+- Pencil design file: `aif-handoff-ui-kit.pen` — 38 variables, 29 reusable components

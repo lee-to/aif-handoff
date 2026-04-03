@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { Bot, Download, User } from "lucide-react";
+import { Download } from "lucide-react";
 import { useTaskComments } from "@/hooks/useTasks";
 import { Markdown } from "@/components/ui/markdown";
+import { AuthorBadge } from "@/components/ui/author-badge";
 
 interface TaskCommentsProps {
   taskId: string;
@@ -37,18 +38,7 @@ export function TaskComments({ taskId }: TaskCommentsProps) {
           }`}
         >
           <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground">
-            <span
-              className={`flex items-center gap-1.5 ${
-                comment.author === "human" ? "text-blue-400" : "text-violet-400"
-              }`}
-            >
-              {comment.author === "human" ? (
-                <User className="h-3.5 w-3.5" />
-              ) : (
-                <Bot className="h-3.5 w-3.5" />
-              )}
-              {comment.author === "human" ? "Human" : "Agent"}
-            </span>
+            <AuthorBadge author={comment.author} />
             <span>{formatWhen(comment.createdAt)}</span>
           </div>
           <Markdown content={comment.message} className="text-sm text-foreground/90" />

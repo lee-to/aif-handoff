@@ -22,6 +22,13 @@
   --color-input: #2a2a2a;
   --color-ring: #10b981;
   --radius: 0rem;
+
+  /* Agent/tool colors */
+  --color-agent: #8b5cf6;
+  --color-agent-foreground: #c4b5fd;
+  --color-tool: #06b6d4;
+  --color-tool-foreground: #a5f3fc;
+  --color-tool-error: #ef4444;
 }
 
 :root.light {
@@ -44,6 +51,12 @@
   --color-border: #b7c4bc;
   --color-input: #b7c4bc;
   --color-ring: #0f766e;
+
+  --color-agent: #7c3aed;
+  --color-agent-foreground: #5b21b6;
+  --color-tool: #0891b2;
+  --color-tool-foreground: #155e75;
+  --color-tool-error: #dc2626;
 }
 
 body {

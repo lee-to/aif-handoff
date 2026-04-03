@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { MessageSquare, Plus, Trash2, Pencil, Check, X, Terminal, Bot } from "lucide-react";
+import { Plus, Trash2, Pencil, Check, X } from "lucide-react";
+import { SourceIcon } from "@/components/ui/source-icon";
 import { cn } from "@/lib/utils";
 import type { ChatSession } from "@aif/shared/browser";
 
@@ -94,13 +95,17 @@ export function SessionList({
               if (editingId !== session.id) onSelect(session.id);
             }}
           >
-            {session.source === "cli" ? (
-              <Terminal className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-            ) : session.source === "agent" ? (
-              <Bot className="h-3.5 w-3.5 shrink-0 text-violet-500" />
-            ) : (
-              <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            )}
+            <SourceIcon
+              source={session.source}
+              className={cn(
+                "shrink-0",
+                session.source === "cli"
+                  ? "text-amber-500"
+                  : session.source === "agent"
+                    ? "text-violet-500"
+                    : "text-muted-foreground",
+              )}
+            />
             <div className="flex-1 min-w-0">
               {editingId === session.id ? (
                 <div className="flex items-center gap-1">

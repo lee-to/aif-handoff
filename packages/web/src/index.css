@@ -42,6 +42,12 @@
   --color-warning-foreground: #fef3c7;
   --color-info: #3b82f6;
   --color-info-foreground: #dbeafe;
+  /* Agent/tool colors */
+  --color-agent: #8b5cf6;
+  --color-agent-foreground: #c4b5fd;
+  --color-tool: #06b6d4;
+  --color-tool-foreground: #a5f3fc;
+  --color-tool-error: #ef4444;
 }
 
 :root.light {
@@ -84,6 +90,12 @@
   --color-warning-foreground: #92400e;
   --color-info: #2563eb;
   --color-info-foreground: #1e40af;
+  /* Agent/tool colors */
+  --color-agent: #7c3aed;
+  --color-agent-foreground: #5b21b6;
+  --color-tool: #0891b2;
+  --color-tool-foreground: #155e75;
+  --color-tool-error: #dc2626;
 }
 
 body {

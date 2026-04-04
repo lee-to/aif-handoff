@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockQuery = vi.fn();
+const mockRunApiRuntimeOneShot = vi.fn();
 const incrementTaskTokenUsage = vi.fn();
+const findTaskById = vi.fn();
 
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  query: (args: unknown) => mockQuery(args),
+vi.mock("../services/runtime.js", () => ({
+  runApiRuntimeOneShot: (...args: unknown[]) => mockRunApiRuntimeOneShot(...args),
 }));
 
 vi.mock("@aif/data", async (importOriginal) => {
@@ -12,31 +13,49 @@ vi.mock("@aif/data", async (importOriginal) => {
   return {
     ...actual,
     incrementTaskTokenUsage,
+    findTaskById: (taskId: string) => findTaskById(taskId),
   };
 });
 
 const { runFastFixQuery, withTimeout } = await import("../services/fastFix.js");
 
-function successResult(result: string) {
-  return async function* () {
-    yield {
-      type: "result",
-      subtype: "success",
-      result,
-      usage: {},
-      total_cost_usd: 0,
-    };
+function runtimeResult(outputText: string, usage?: Record<string, number>) {
+  return {
+    result: {
+      outputText,
+      usage: usage
+        ? {
+            inputTokens: usage.inputTokens ?? 0,
+            outputTokens: usage.outputTokens ?? 0,
+            totalTokens: usage.totalTokens ?? 0,
+            costUsd: usage.costUsd ?? 0,
+          }
+        : undefined,
+    },
+    context: {},
   };
 }
 
 describe("fastFix service", () => {
   beforeEach(() => {
-    mockQuery.mockReset();
+    mockRunApiRuntimeOneShot.mockReset();
     incrementTaskTokenUsage.mockReset();
+    findTaskById.mockReset();
+    findTaskById.mockReturnValue({
+      id: "task-1",
+      projectId: "project-1",
+    });
   });
 
   it("returns plan text on success and records usage", async () => {
-    mockQuery.mockImplementation(successResult("## Plan\n- Updated"));
+    mockRunApiRuntimeOneShot.mockResolvedValue(
+      runtimeResult("## Plan\n- Updated", {
+        inputTokens: 10,
+        outputTokens: 20,
+        totalTokens: 30,
+        costUsd: 0.002,
+      }),
+    );
 
     const updated = await runFastFixQuery({
       taskId: "task-1",
@@ -54,15 +73,15 @@ describe("fastFix service", () => {
     });
 
     expect(updated).toBe("## Plan\n- Updated");
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockRunApiRuntimeOneShot).toHaveBeenCalledTimes(1);
     expect(incrementTaskTokenUsage).toHaveBeenCalledWith(
       "task-1",
-      expect.objectContaining({ total_cost_usd: 0 }),
+      expect.objectContaining({ total_tokens: 30, total_cost_usd: 0.002 }),
     );
   });
 
   it("uses fallback prompt mode when file update is disabled", async () => {
-    mockQuery.mockImplementation(successResult("## Full updated plan"));
+    mockRunApiRuntimeOneShot.mockResolvedValue(runtimeResult("## Full updated plan"));
 
     await runFastFixQuery({
       taskId: "task-2",
@@ -81,19 +100,18 @@ describe("fastFix service", () => {
       shouldTryFileUpdate: false,
     });
 
-    const callArg = mockQuery.mock.calls[0]?.[0] as {
+    const callArg = mockRunApiRuntimeOneShot.mock.calls[0]?.[0] as {
       prompt: string;
-      options: { systemPrompt?: { append?: string } };
+      systemPromptAppend?: string;
     };
     expect(callArg.prompt).toContain("PRIOR_ATTEMPT");
     expect(callArg.prompt).toContain("Do not use tools/subagents");
-    expect(callArg.prompt).toContain("PLAN PATH");
     expect(callArg.prompt).toContain("@.ai-factory/PLAN.md");
-    expect(callArg.options.systemPrompt?.append).toContain("Do not use tools");
+    expect(callArg.systemPromptAppend).toContain("Do not use tools or subagents");
   });
 
   it("builds prior-attempt prompt with file-update instructions and attachment previews", async () => {
-    mockQuery.mockImplementation(successResult("## Updated plan with file write"));
+    mockRunApiRuntimeOneShot.mockResolvedValue(runtimeResult("## Updated plan with file write"));
 
     await runFastFixQuery({
       taskId: "task-2b",
@@ -119,18 +137,18 @@ describe("fastFix service", () => {
       shouldTryFileUpdate: true,
     });
 
-    const callArg = mockQuery.mock.calls[0]?.[0] as {
+    const callArg = mockRunApiRuntimeOneShot.mock.calls[0]?.[0] as {
       prompt: string;
-      options: { systemPrompt?: { append?: string } };
+      systemPromptAppend?: string;
     };
     expect(callArg.prompt).toContain("PRIOR_ATTEMPT");
     expect(callArg.prompt).toContain("Also update the plan file @.ai-factory/PLAN.md");
     expect(callArg.prompt).toContain("line-1");
-    expect(callArg.options.systemPrompt?.append).toBeUndefined();
+    expect(callArg.systemPromptAppend).toBeUndefined();
   });
 
   it("marks attachment content as missing when neither inline content nor path is present", async () => {
-    mockQuery.mockImplementation(successResult("## Updated plan"));
+    mockRunApiRuntimeOneShot.mockResolvedValue(runtimeResult("## Updated plan"));
 
     await runFastFixQuery({
       taskId: "task-2c",
@@ -154,20 +172,12 @@ describe("fastFix service", () => {
       previousPlan: "## Previous",
     });
 
-    const callArg = mockQuery.mock.calls[0]?.[0] as { prompt: string };
+    const callArg = mockRunApiRuntimeOneShot.mock.calls[0]?.[0] as { prompt: string };
     expect(callArg.prompt).toContain("content: [not provided]");
   });
 
-  it("throws when model returns non-success subtype", async () => {
-    mockQuery.mockImplementation(async function* () {
-      yield {
-        type: "result",
-        subtype: "error_max_turns",
-        result: "",
-        usage: {},
-        total_cost_usd: 0,
-      };
-    });
+  it("throws when runtime query fails", async () => {
+    mockRunApiRuntimeOneShot.mockRejectedValue(new Error("runtime failure"));
 
     await expect(
       runFastFixQuery({
@@ -184,11 +194,11 @@ describe("fastFix service", () => {
         planPath: ".ai-factory/PLAN.md",
         previousPlan: "## Previous",
       }),
-    ).rejects.toThrow("Fast fix failed");
+    ).rejects.toThrow("runtime failure");
   });
 
-  it("throws when model returns empty plan text", async () => {
-    mockQuery.mockImplementation(successResult("   "));
+  it("throws when runtime returns empty plan text", async () => {
+    mockRunApiRuntimeOneShot.mockResolvedValue(runtimeResult("   "));
 
     await expect(
       runFastFixQuery({

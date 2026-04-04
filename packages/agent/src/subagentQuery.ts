@@ -1,27 +1,53 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
-  incrementTaskTokenUsage,
-  updateTaskHeartbeat,
-  renewTaskClaim,
-  saveTaskSessionId,
+  findTaskById,
   getTaskSessionId,
+  incrementTaskTokenUsage,
+  renewTaskClaim,
+  resolveEffectiveRuntimeProfile,
+  saveTaskSessionId,
+  updateTaskHeartbeat,
 } from "@aif/data";
+import {
+  assertRuntimeCapabilities,
+  createClaudeRuntimeAdapter,
+  createCodexRuntimeAdapter,
+  createRuntimeRegistry,
+  createRuntimeWorkflowSpec,
+  redactResolvedRuntimeProfile,
+  resolveRuntimeProfile,
+  resolveRuntimePromptPolicy,
+  type RuntimeCapabilityName,
+  type RuntimeRegistry,
+  type RuntimeRegistryLogger,
+  type RuntimeSessionReusePolicy,
+  type RuntimeWorkflowSpec,
+} from "@aif/runtime";
 import { getEnv, logger } from "@aif/shared";
-import { createActivityLogger, createSubagentLogger, logActivity, getClaudePath } from "./hooks.js";
-import { writeQueryAudit } from "./queryAudit.js";
+import {
+  createActivityLogger,
+  createSubagentLogger,
+  getClaudePath,
+  logActivity,
+  type RuntimeHookCallback,
+} from "./hooks.js";
+import { PROJECT_SCOPE_SYSTEM_APPEND } from "./constants.js";
 import {
   createClaudeStderrCollector,
   explainClaudeFailure,
   probeClaudeCliFailure,
 } from "./claudeDiagnostics.js";
-import { PROJECT_SCOPE_SYSTEM_APPEND } from "./constants.js";
+import { writeQueryAudit } from "./queryAudit.js";
 import { getActiveStageAbortController } from "./stageAbort.js";
-import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 
 const log = logger("subagent-query");
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const QUERY_START_TIMEOUT_CODE = "query_start_timeout";
+const DEFAULT_RUNTIME_ID = "claude";
+const DEFAULT_PROVIDER_ID = "anthropic";
+
+const LOCK_RENEWAL_MS = Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
+
+let runtimeRegistryPromise: Promise<RuntimeRegistry> | null = null;
 
 export interface SubagentQueryOptions {
   taskId: string;
@@ -29,10 +55,12 @@ export interface SubagentQueryOptions {
   agentName: string;
   prompt: string;
   maxBudgetUsd?: number | null;
-  /** Agent definition name for extraArgs. Omit for skill-based invocations (e.g. isFix planner). */
+  /** Preferred agent definition name. Runtime prompt policy may fallback to slash strategy. */
   agent?: string;
+  /** Optional slash command fallback used when agent definitions are unavailable. */
+  fallbackSlashCommand?: string;
   /** Additional SubagentStart hooks beyond the default activity/subagent loggers. */
-  extraSubagentStartHooks?: HookCallback[];
+  extraSubagentStartHooks?: RuntimeHookCallback[];
   /** Whether to skip code review stage (implementing → done instead of implementing → review). */
   skipReview?: boolean;
   /** Optional override for tests/tuning: timeout waiting for first message from query stream. */
@@ -41,204 +69,270 @@ export interface SubagentQueryOptions {
   queryStartRetryDelayMs?: number;
   /** AbortController for cancelling a running query from outside (e.g. stage timeout). */
   abortController?: AbortController;
+  /** Optional explicit workflow spec. If omitted, a default one is generated from options. */
+  workflowSpec?: RuntimeWorkflowSpec;
+  /** Optional workflow kind used when auto-generating workflow spec. */
+  workflowKind?: string;
+  /** Required capabilities for this workflow. */
+  requiredCapabilities?: RuntimeCapabilityName[];
+  /** Session reuse policy for this workflow. */
+  sessionReusePolicy?: RuntimeSessionReusePolicy;
+  /** Runtime-level model override for this invocation. */
+  modelOverride?: string | null;
+  /** Disable task/profile model fallback and force adapter invocation without model. */
+  suppressModelFallback?: boolean;
+  /** Optional custom system append for the runtime workflow. */
+  systemPromptAppend?: string;
+  /** Optional partial-message stream mode (chat-like workflows). */
+  includePartialMessages?: boolean;
+  /** Optional max turns for runtime adapters that support it. */
+  maxTurns?: number;
 }
 
 export interface SubagentQueryResult {
   resultText: string;
 }
 
-interface QueryStartTimeoutError extends Error {
-  code: typeof QUERY_START_TIMEOUT_CODE;
+function parseRuntimeOptions(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
-function sleep(ms: number): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isQueryStartTimeoutError(err: unknown): err is QueryStartTimeoutError {
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    "code" in err &&
-    (err as { code?: string }).code === QUERY_START_TIMEOUT_CODE,
-  );
-}
-
-function makeQueryStartTimeoutError(agentName: string, timeoutMs: number): QueryStartTimeoutError {
-  const err = new Error(
-    `query_start_timeout: ${agentName} produced no output within ${timeoutMs}ms`,
-  ) as QueryStartTimeoutError;
-  err.code = QUERY_START_TIMEOUT_CODE;
-  return err;
-}
-
-function processQueryMessage(
-  message: Awaited<ReturnType<AsyncIterator<unknown>["next"]>>["value"],
-  taskId: string,
-  agentName: string,
-  setResultText: (value: string) => void,
-): void {
-  if (!message || typeof message !== "object" || !("type" in message)) return;
-  const typed = message as {
-    type: string;
-    subtype?: string;
-    session_id?: string;
-    result?: string;
-    usage?: Record<string, number>;
-    total_cost_usd?: number;
+function createRuntimeRegistryLogger(): RuntimeRegistryLogger {
+  return {
+    debug(context, message) {
+      log.debug({ ...context }, `DEBUG [runtime-registry] ${message}`);
+    },
+    warn(context, message) {
+      log.warn({ ...context }, `WARN [runtime-module] ${message}`);
+    },
   };
-
-  if (typed.type === "system" && typed.subtype === "init" && typed.session_id) {
-    saveTaskSessionId(taskId, typed.session_id);
-    log.debug({ taskId, agentName, sessionId: typed.session_id }, "Captured agent session ID");
-    return;
-  }
-
-  if (typed.type !== "result") return;
-
-  incrementTaskTokenUsage(taskId, {
-    ...(typed.usage ?? {}),
-    total_cost_usd: typed.total_cost_usd,
-  });
-
-  if (typed.subtype === "success") {
-    setResultText(typed.result ?? "");
-    log.info({ taskId, agentName }, "Subagent query completed successfully");
-    return;
-  }
-
-  logActivity(taskId, "Agent", `${agentName} ended (${typed.subtype ?? "unknown"})`);
-  log.warn({ taskId, subtype: typed.subtype }, "Subagent ended with non-success");
-  throw new Error(`${agentName} failed: ${typed.subtype ?? "unknown"}`);
 }
 
-async function runQueryAttempt(
-  options: SubagentQueryOptions,
-  queryStartTimeoutMs: number,
-  onStderr: (chunk: string) => void,
-  setResultText: (value: string) => void,
-): Promise<void> {
-  const {
-    taskId,
-    projectRoot,
-    agentName,
-    prompt,
-    maxBudgetUsd = null,
-    agent,
-    skipReview = false,
-    extraSubagentStartHooks = [],
-    abortController: explicitAbort,
-  } = options;
+async function getRuntimeRegistry(): Promise<RuntimeRegistry> {
+  if (runtimeRegistryPromise) return runtimeRegistryPromise;
 
-  // Use explicitly provided AbortController, or fall back to the coordinator's active one for this task
-  const abortController = explicitAbort ?? getActiveStageAbortController(taskId) ?? undefined;
+  runtimeRegistryPromise = (async () => {
+    const env = getEnv();
+    const registry = createRuntimeRegistry({
+      logger: createRuntimeRegistryLogger(),
+      builtInAdapters: [createClaudeRuntimeAdapter(), createCodexRuntimeAdapter()],
+    });
 
-  const subagentStartHooks: Array<{ hooks: HookCallback[] }> = [
-    { hooks: [createSubagentLogger(taskId)] },
-  ];
-  if (extraSubagentStartHooks.length > 0) {
-    subagentStartHooks.push({ hooks: extraSubagentStartHooks });
-  }
+    for (const moduleSpecifier of env.AIF_RUNTIME_MODULES) {
+      try {
+        await registry.registerRuntimeModule(moduleSpecifier);
+      } catch (error) {
+        log.warn(
+          { moduleSpecifier, error },
+          "Runtime module failed to load; continuing with built-in runtime adapters",
+        );
+      }
+    }
 
-  const bypassPermissions = getEnv().AGENT_BYPASS_PERMISSIONS;
-  const existingSessionId = getTaskSessionId(taskId);
+    return registry;
+  })();
 
-  const stream = query({
-    prompt,
-    options: {
-      ...(abortController ? { abortController } : {}),
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        HANDOFF_MODE: "1",
-        HANDOFF_TASK_ID: taskId,
-        ...(skipReview ? { HANDOFF_SKIP_REVIEW: "1" } : {}),
+  return runtimeRegistryPromise;
+}
+
+function buildWorkflowSpec(options: SubagentQueryOptions): RuntimeWorkflowSpec {
+  if (options.workflowSpec) return options.workflowSpec;
+
+  return createRuntimeWorkflowSpec({
+    workflowKind: options.workflowKind ?? options.agentName,
+    prompt: options.prompt,
+    requiredCapabilities: options.requiredCapabilities ?? [],
+    agentDefinitionName: options.agent,
+    fallbackSlashCommand: options.fallbackSlashCommand,
+    sessionReusePolicy: options.sessionReusePolicy ?? "resume_if_available",
+    systemPromptAppend: options.systemPromptAppend ?? PROJECT_SCOPE_SYSTEM_APPEND,
+  });
+}
+
+async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
+  workflow: RuntimeWorkflowSpec;
+  runtimeId: string;
+  providerId: string;
+  profileId: string | null;
+  model: string | null;
+  headers: Record<string, string>;
+  options: Record<string, unknown>;
+  prompt: string;
+  systemPromptAppend: string;
+  agentDefinitionName?: string;
+  canResume: boolean;
+}> {
+  const task = findTaskById(options.taskId);
+  const effective = resolveEffectiveRuntimeProfile({
+    taskId: options.taskId,
+    projectId: task?.projectId,
+    mode: "task",
+    systemDefaultRuntimeProfileId: null,
+  });
+  const workflow = buildWorkflowSpec(options);
+  const runtimeOptionsOverride = parseRuntimeOptions(task?.runtimeOptionsJson);
+  const suppressModelFallback = options.suppressModelFallback === true;
+  const modelOverride =
+    options.modelOverride ?? (suppressModelFallback ? null : (task?.modelOverride ?? null));
+
+  const resolved = resolveRuntimeProfile({
+    source: effective.source,
+    profile: effective.profile,
+    workflow,
+    modelOverride,
+    suppressModelFallback,
+    runtimeOptionsOverride,
+    fallbackRuntimeId: DEFAULT_RUNTIME_ID,
+    fallbackProviderId: DEFAULT_PROVIDER_ID,
+    env: process.env,
+    logger: {
+      debug(context, message) {
+        log.debug({ ...context }, `DEBUG [runtime-resolution] ${message}`);
       },
-      ...(getClaudePath() ? { pathToClaudeCodeExecutable: getClaudePath() } : {}),
-      settings: { attribution: { commit: "", pr: "" } },
-      settingSources: ["project"],
-      permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
-      ...(bypassPermissions ? { allowDangerouslySkipPermissions: true } : {}),
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: PROJECT_SCOPE_SYSTEM_APPEND,
+      info(context, message) {
+        log.info({ ...context }, `INFO [runtime-validation] ${message}`);
       },
-      ...(agent ? { extraArgs: { agent } } : {}),
-      ...(maxBudgetUsd == null ? {} : { maxBudgetUsd }),
-      ...(existingSessionId ? { resume: existingSessionId } : {}),
-      stderr: onStderr,
-      hooks: {
-        PostToolUse: [{ hooks: [createActivityLogger(taskId)] }],
-        SubagentStart: subagentStartHooks,
+      warn(context, message) {
+        log.warn({ ...context }, `WARN [runtime-validation] ${message}`);
       },
     },
   });
 
-  if (existingSessionId) {
-    log.info(
-      { taskId, agentName, sessionId: existingSessionId },
-      "Resuming previous agent session",
+  const registry = await getRuntimeRegistry();
+  const adapter = registry.resolveRuntime(resolved.runtimeId);
+
+  assertRuntimeCapabilities({
+    runtimeId: resolved.runtimeId,
+    workflowKind: workflow.workflowKind,
+    capabilities: adapter.descriptor.capabilities,
+    required: workflow.requiredCapabilities,
+    logger: {
+      debug(context, message) {
+        log.debug({ ...context }, `DEBUG [runtime-capabilities] ${message}`);
+      },
+      warn(context, message) {
+        log.warn({ ...context }, `WARN [runtime-capabilities] ${message}`);
+      },
+    },
+  });
+
+  const promptPolicy = resolveRuntimePromptPolicy({
+    runtimeId: resolved.runtimeId,
+    capabilities: adapter.descriptor.capabilities,
+    workflow,
+    logger: {
+      debug(context, message) {
+        log.debug({ ...context }, `DEBUG [runtime-workflow] ${message}`);
+      },
+      warn(context, message) {
+        log.warn({ ...context }, `WARN [runtime-workflow] ${message}`);
+      },
+    },
+  });
+
+  const canResume =
+    workflow.sessionReusePolicy === "resume_if_available" &&
+    adapter.descriptor.capabilities.supportsResume;
+
+  const profileLogContext = redactResolvedRuntimeProfile(resolved);
+  log.info(
+    {
+      taskId: options.taskId,
+      workflowKind: workflow.workflowKind,
+      ...profileLogContext,
+      usedFallbackSlashCommand: promptPolicy.usedFallbackSlashCommand,
+      suppressModelFallback,
+      canResume,
+    },
+    "Resolved runtime execution context for subagent query",
+  );
+
+  if (!resolved.apiKey && resolved.transport !== "cli") {
+    log.warn(
+      {
+        taskId: options.taskId,
+        runtimeId: resolved.runtimeId,
+        apiKeyEnvVar: resolved.apiKeyEnvVar,
+      },
+      "Runtime execution resolved without API key; adapter may fail depending on provider setup",
     );
   }
 
-  const iterator = stream[Symbol.asyncIterator]();
-  const timeoutError = makeQueryStartTimeoutError(agentName, queryStartTimeoutMs);
-
-  let firstEntry: IteratorResult<unknown>;
-  try {
-    firstEntry = await Promise.race<IteratorResult<unknown>>([
-      iterator.next(),
-      new Promise<IteratorResult<unknown>>((_, reject) => {
-        setTimeout(() => reject(timeoutError), queryStartTimeoutMs);
-      }),
-    ]);
-  } catch (err) {
-    try {
-      await iterator.return?.();
-    } catch {
-      // best-effort stream cleanup
-    }
-    throw err;
-  }
-
-  if (!firstEntry.done) {
-    processQueryMessage(firstEntry.value, taskId, agentName, setResultText);
-  }
-
-  // Continue consuming the remaining stream messages.
-  for await (const message of stream) {
-    processQueryMessage(message, taskId, agentName, setResultText);
-  }
+  return {
+    workflow,
+    runtimeId: resolved.runtimeId,
+    providerId: resolved.providerId,
+    profileId: resolved.profileId,
+    model: resolved.model,
+    headers: resolved.headers,
+    options: {
+      ...resolved.options,
+      ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}),
+      ...(resolved.apiKey ? { apiKey: resolved.apiKey } : {}),
+      ...(resolved.apiKeyEnvVar ? { apiKeyEnvVar: resolved.apiKeyEnvVar } : {}),
+      projectRoot: options.projectRoot,
+    },
+    prompt: promptPolicy.prompt,
+    systemPromptAppend: promptPolicy.systemPromptAppend,
+    agentDefinitionName: promptPolicy.agentDefinitionName,
+    canResume,
+  };
 }
 
-async function runWithRetry(
+function buildAdapterMetadata(
   options: SubagentQueryOptions,
-  queryStartTimeoutMs: number,
-  queryStartRetryDelayMs: number,
-  onStderr: (chunk: string) => void,
-  setResultText: (value: string) => void,
-): Promise<void> {
-  const { taskId, agentName } = options;
+  workflow: RuntimeWorkflowSpec,
+  systemPromptAppend: string,
+  agentDefinitionName: string | undefined,
+  stderr: (chunk: string) => void,
+): Record<string, unknown> {
+  const env = getEnv();
+  const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
+  const explicitAbort =
+    options.abortController ?? getActiveStageAbortController(options.taskId) ?? undefined;
 
-  try {
-    await runQueryAttempt(options, queryStartTimeoutMs, onStderr, setResultText);
-  } catch (err) {
-    if (!isQueryStartTimeoutError(err)) throw err;
-
-    log.warn(
-      { taskId, agentName, attempt: 1, timeoutMs: queryStartTimeoutMs },
-      "query_start_timeout detected, retrying subagent query once",
-    );
-    logActivity(taskId, "Agent", `${agentName} query_start_timeout on attempt 1; retrying once`);
-    await sleep(queryStartRetryDelayMs);
-    await runQueryAttempt(options, queryStartTimeoutMs, onStderr, setResultText);
+  const subagentStartHooks: RuntimeHookCallback[] = [createSubagentLogger(options.taskId)];
+  for (const hook of options.extraSubagentStartHooks ?? []) {
+    subagentStartHooks.push(hook);
   }
+
+  return {
+    maxBudgetUsd: options.maxBudgetUsd ?? null,
+    agentDefinitionName,
+    permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
+    allowDangerouslySkipPermissions: bypassPermissions,
+    pathToClaudeCodeExecutable: getClaudePath(),
+    settings: { attribution: { commit: "", pr: "" } },
+    settingSources: ["project"],
+    systemPromptAppend,
+    postToolUseHooks: [createActivityLogger(options.taskId)],
+    subagentStartHooks,
+    queryStartTimeoutMs: options.queryStartTimeoutMs ?? env.AGENT_QUERY_START_TIMEOUT_MS,
+    queryStartRetryDelayMs: options.queryStartRetryDelayMs ?? env.AGENT_QUERY_START_RETRY_DELAY_MS,
+    includePartialMessages: options.includePartialMessages ?? false,
+    maxTurns: options.maxTurns,
+    stderr,
+    environment: {
+      HANDOFF_MODE: "1",
+      HANDOFF_TASK_ID: options.taskId,
+      ...(options.skipReview ? { HANDOFF_SKIP_REVIEW: "1" } : {}),
+    },
+    workflowKind: workflow.workflowKind,
+    abortController: explicitAbort,
+  };
 }
 
 /**
- * Execute a Claude Agent SDK query with standardized:
+ * Execute a runtime-backed subagent query with standardized:
  * - heartbeat timer
  * - stderr collection
  * - audit logging
@@ -249,74 +343,144 @@ async function runWithRetry(
 export async function executeSubagentQuery(
   options: SubagentQueryOptions,
 ): Promise<SubagentQueryResult> {
-  const env = getEnv();
-  const {
-    taskId,
-    projectRoot,
-    agentName,
-    prompt,
-    maxBudgetUsd = null,
-    queryStartTimeoutMs = env.AGENT_QUERY_START_TIMEOUT_MS,
-    queryStartRetryDelayMs = env.AGENT_QUERY_START_RETRY_DELAY_MS,
-  } = options;
-
-  let resultText = "";
+  const { taskId, projectRoot, agentName } = options;
   const stderrCollector = createClaudeStderrCollector();
-
   const heartbeatTimer = startHeartbeat(taskId);
   logActivity(taskId, "Agent", `${agentName} started`);
 
-  writeQueryAudit({
-    timestamp: new Date().toISOString(),
-    taskId,
-    agentName,
-    projectRoot,
-    prompt,
-    options: {
-      settingSources: ["project"],
-      maxBudgetUsd,
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: PROJECT_SCOPE_SYSTEM_APPEND,
-      },
-    },
-  });
+  let runtimeIdForError = DEFAULT_RUNTIME_ID;
 
   try {
-    const applyResultText = (value: string) => {
-      resultText = value;
-    };
+    const context = await resolveExecutionContext(options);
+    runtimeIdForError = context.runtimeId;
+    const existingSessionId = context.canResume ? getTaskSessionId(taskId) : null;
+    const shouldResume = Boolean(existingSessionId && context.canResume);
 
-    await runWithRetry(
+    const adapterMetadata = buildAdapterMetadata(
       options,
-      queryStartTimeoutMs,
-      queryStartRetryDelayMs,
+      context.workflow,
+      context.systemPromptAppend,
+      context.agentDefinitionName,
       stderrCollector.onStderr,
-      applyResultText,
     );
 
-    logActivity(taskId, "Agent", `${agentName} complete`);
+    writeQueryAudit({
+      timestamp: new Date().toISOString(),
+      taskId,
+      agentName,
+      projectRoot,
+      prompt: context.prompt,
+      options: {
+        runtimeId: context.runtimeId,
+        providerId: context.providerId,
+        profileId: context.profileId,
+        workflowKind: context.workflow.workflowKind,
+        model: context.model,
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: context.systemPromptAppend,
+        },
+        maxBudgetUsd: options.maxBudgetUsd ?? null,
+        settingSources: ["project"],
+      },
+    });
+
+    const registry = await getRuntimeRegistry();
+    const adapter = registry.resolveRuntime(context.runtimeId);
+
+    const runInput = {
+      runtimeId: context.runtimeId,
+      providerId: context.providerId,
+      profileId: context.profileId,
+      workflowKind: context.workflow.workflowKind,
+      prompt: context.prompt,
+      model: context.model ?? undefined,
+      sessionId: existingSessionId,
+      resume: shouldResume,
+      projectRoot,
+      cwd: projectRoot,
+      headers: context.headers,
+      options: context.options,
+      metadata: adapterMetadata,
+    } as const;
+
+    const result =
+      shouldResume && adapter.resume
+        ? await adapter.resume({ ...runInput, sessionId: existingSessionId as string })
+        : await adapter.run(runInput);
+
+    const runtimeSessionId = result.sessionId ?? result.session?.id ?? null;
+    if (runtimeSessionId && context.canResume) {
+      saveTaskSessionId(taskId, runtimeSessionId);
+      log.debug({ taskId, agentName, runtimeSessionId }, "Captured runtime session ID");
+    } else if (runtimeSessionId) {
+      log.debug(
+        {
+          taskId,
+          agentName,
+          runtimeSessionId,
+          sessionReusePolicy: context.workflow.sessionReusePolicy,
+        },
+        "Skipped runtime session persistence for non-resumable workflow",
+      );
+    }
+
+    if (result.usage) {
+      incrementTaskTokenUsage(taskId, {
+        input_tokens: result.usage.inputTokens,
+        output_tokens: result.usage.outputTokens,
+        total_tokens: result.usage.totalTokens,
+        total_cost_usd: result.usage.costUsd,
+      });
+    }
+
+    const resultText = result.outputText ?? "";
+
+    log.info(
+      {
+        taskId,
+        agentName,
+        runtimeId: context.runtimeId,
+        profileId: context.profileId,
+        model: context.model,
+        resumed: shouldResume,
+      },
+      "Subagent query completed successfully",
+    );
+    logActivity(
+      taskId,
+      "Agent",
+      `${agentName} complete (runtime=${context.runtimeId}, profile=${context.profileId ?? "default"}, model=${context.model ?? "default"})`,
+    );
+
     return { resultText };
-  } catch (err) {
-    const reason = await diagnoseFailure(err, stderrCollector, projectRoot);
+  } catch (error) {
+    const reason =
+      runtimeIdForError === "claude"
+        ? await diagnoseFailure(error, stderrCollector, projectRoot)
+        : error instanceof Error
+          ? error.message
+          : String(error);
     logActivity(taskId, "Agent", `${agentName} failed — ${reason}`);
     log.error(
-      { taskId, err, claudeStderr: stderrCollector.getTail() },
+      {
+        taskId,
+        err: error,
+        runtimeId: runtimeIdForError,
+        runtimeStderr: stderrCollector.getTail(),
+      },
       `${agentName} execution failed`,
     );
-    throw new Error(reason, { cause: err });
+    throw new Error(reason, { cause: error });
   } finally {
     try {
       clearInterval(heartbeatTimer);
     } catch {
-      /* safety guard */
+      // safety guard
     }
   }
 }
-
-// Lock renewal duration: stage timeout + 5 min buffer (same as coordinator claim)
-const LOCK_RENEWAL_MS = Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
 
 // Coordinator ID injected at startup to avoid circular imports
 let _coordinatorId: string | null = null;
@@ -328,7 +492,9 @@ export function setCoordinatorId(id: string): void {
 export function startHeartbeat(taskId: string): NodeJS.Timeout {
   return setInterval(() => {
     updateTaskHeartbeat(taskId);
-    if (_coordinatorId) renewTaskClaim(taskId, _coordinatorId, LOCK_RENEWAL_MS);
+    if (_coordinatorId) {
+      renewTaskClaim(taskId, _coordinatorId, LOCK_RENEWAL_MS);
+    }
   }, HEARTBEAT_INTERVAL_MS);
 }
 

@@ -19,6 +19,9 @@ const EXTERNAL_FAILURE_PATTERNS: string[] = [
   "permission denied",
   "blocked by permissions",
   "write permission",
+  "runtime capability",
+  "required capabilities",
+  "unsupported capabilities",
 ];
 
 const FAST_RETRY_PATTERNS: Array<(lower: string) => boolean> = [

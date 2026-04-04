@@ -71,6 +71,8 @@ describe("sessionCache", () => {
   });
 
   it("generates consistent cache keys", () => {
-    expect(sessionCacheKey("/home/user/project")).toBe("sdk-sessions:/home/user/project");
+    expect(sessionCacheKey("claude", null, "/home/user/project")).toBe(
+      "runtime-sessions:claude:default:/home/user/project",
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { findProjectById, findTaskById, listTaskComments, persistTaskPlanForTask } from "@aif/data";
+import { createRuntimeWorkflowSpec } from "@aif/runtime";
 import { logger, formatAttachmentsForPrompt, getProjectConfig } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
 
@@ -142,11 +143,20 @@ ${taskAttachmentsForPrompt}
 User comments and replanning feedback:
 ${commentsForPrompt}`;
   let prompt: string;
+  let workflowSpec: ReturnType<typeof createRuntimeWorkflowSpec>;
   const handoffContext = `HANDOFF_MODE: 1\nHANDOFF_TASK_ID: ${taskId}`;
   const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}\nAll files must be created and modified inside this directory. Do NOT navigate to parent directories or other projects.`;
+  const plannerSlashCommand = `/aif-plan ${plannerMode} @${planPath} docs:${planDocs} tests:${planTests}`;
 
   if (task.isFix) {
     prompt = `${handoffContext}\n${scopeConstraint}\n\n${buildFixCommandText(taskContext)}`;
+    workflowSpec = createRuntimeWorkflowSpec({
+      workflowKind: "planner",
+      prompt,
+      requiredCapabilities: [],
+      sessionReusePolicy: "resume_if_available",
+      systemPromptAppend: scopeConstraint,
+    });
   } else if (useSubagents) {
     prompt = `Plan the implementation for the following task.
 
@@ -160,10 +170,37 @@ ${taskContext}
 
 Create or refine an implementation-ready markdown checklist plan.
 Always write the final plan to @${planPath}.`;
+    workflowSpec = createRuntimeWorkflowSpec({
+      workflowKind: "planner",
+      prompt,
+      requiredCapabilities: ["supportsAgentDefinitions"],
+      agentDefinitionName: AGENT_NAME,
+      fallbackSlashCommand: plannerSlashCommand,
+      fallbackStrategy: "slash_command",
+      sessionReusePolicy: "resume_if_available",
+      systemPromptAppend: scopeConstraint,
+      metadata: {
+        plannerMode,
+        planDocs,
+        planTests,
+      },
+    });
   } else {
-    prompt = `${handoffContext}\n${scopeConstraint}\n\n/aif-plan ${plannerMode} @${planPath} docs:${planDocs} tests:${planTests}
+    prompt = `${handoffContext}\n${scopeConstraint}\n\n${plannerSlashCommand}
 
 ${taskContext}`;
+    workflowSpec = createRuntimeWorkflowSpec({
+      workflowKind: "planner",
+      prompt,
+      requiredCapabilities: [],
+      sessionReusePolicy: "resume_if_available",
+      systemPromptAppend: scopeConstraint,
+      metadata: {
+        plannerMode,
+        planDocs,
+        planTests,
+      },
+    });
   }
 
   const { resultText: rawResult } = await executeSubagentQuery({
@@ -173,6 +210,9 @@ ${taskContext}`;
     prompt,
     maxBudgetUsd: plannerBudget,
     agent: task.isFix || !useSubagents ? undefined : AGENT_NAME,
+    workflowSpec,
+    workflowKind: "planner",
+    fallbackSlashCommand: task.isFix ? undefined : plannerSlashCommand,
   });
 
   const diskPlan = readPlanFromDisk(projectRoot, rawResult, !!task.isFix, planPath);

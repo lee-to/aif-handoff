@@ -20,6 +20,8 @@ export function createProject(input: {
   implementerMaxBudgetUsd?: number | null;
   reviewSidecarMaxBudgetUsd?: number | null;
   parallelEnabled?: boolean;
+  defaultTaskRuntimeProfileId?: string | null;
+  defaultChatRuntimeProfileId?: string | null;
 }): { project: ProjectRow | undefined; pathError?: string } {
   const pathError = validateProjectRootPath(input.rootPath);
   if (pathError) return { project: undefined, pathError };
@@ -48,6 +50,8 @@ export function updateProject(
     implementerMaxBudgetUsd?: number | null;
     reviewSidecarMaxBudgetUsd?: number | null;
     parallelEnabled?: boolean;
+    defaultTaskRuntimeProfileId?: string | null;
+    defaultChatRuntimeProfileId?: string | null;
   },
 ): { project: ProjectRow | undefined; pathError?: string } {
   const pathError = validateProjectRootPath(input.rootPath);

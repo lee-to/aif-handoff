@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Bell, Moon, Sun, Command, ChartColumn, Map, Settings } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
+import { useEffectiveChatRuntime } from "@/hooks/useRuntimeProfiles";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProjectSelector } from "@/components/project/ProjectSelector";
@@ -28,6 +29,8 @@ interface Props {
   viewMode: "kanban" | "list";
   onViewModeChange: (mode: "kanban" | "list") => void;
   taskMetrics: TaskMetricsSummary;
+  runtimeProfilesOpen: boolean;
+  onToggleRuntimeProfiles: () => void;
   onRoadmapImportComplete?: (result: RoadmapImportResult) => void;
 }
 
@@ -41,10 +44,14 @@ export function Header({
   viewMode,
   onViewModeChange,
   taskMetrics,
+  runtimeProfilesOpen,
+  onToggleRuntimeProfiles,
   onRoadmapImportComplete,
 }: Props) {
   const { theme, toggleTheme } = useTheme();
   const headerRef = useRef<HTMLElement>(null);
+  const { data: effectiveChatRuntime, isFetching: effectiveRuntimeFetching } =
+    useEffectiveChatRuntime(selectedProject?.id ?? null);
 
   useEffect(() => {
     const el = headerRef.current;
@@ -58,6 +65,11 @@ export function Header({
   const [roadmapOpen, setRoadmapOpen] = useState(false);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
   const isCompact = density === "compact";
+  const currentRuntimeLabel = !selectedProject
+    ? "No project"
+    : effectiveRuntimeFetching
+      ? "Loading..."
+      : (effectiveChatRuntime?.profile?.name ?? "Default");
 
   return (
     <header ref={headerRef} className="sticky top-0 z-60 border-b border-border bg-background">
@@ -161,6 +173,26 @@ export function Header({
           >
             <ChartColumn className="h-3.5 w-3.5" />
             <span className="hidden md:inline">METRICS</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onToggleRuntimeProfiles}
+            disabled={!selectedProject}
+            className={cn(
+              "gap-1 font-mono text-3xs",
+              runtimeProfilesOpen && "border-primary/70 bg-primary/10",
+            )}
+            aria-label="Runtime profiles"
+            title={
+              selectedProject
+                ? `Current runtime profile: ${currentRuntimeLabel}`
+                : "Select project first"
+            }
+          >
+            <span className="md:hidden">RUNTIME</span>
+            <span className="hidden md:inline">RUNTIME:</span>
+            <span className="hidden max-w-40 truncate md:inline">{currentRuntimeLabel}</span>
           </Button>
           <Button
             variant="outline"

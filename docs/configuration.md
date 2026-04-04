@@ -17,7 +17,16 @@ Node packages (`@aif/api`, `@aif/agent`, `@aif/data`, `@aif/shared`) auto-load e
 
 | Variable                           | Type    | Default             | Description                                                                                                                                                                                                                                                             |
 | ---------------------------------- | ------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`                | string  | _(optional)_        | Anthropic API key. The Agent SDK uses `~/.claude/` credentials by default, so this is only needed if you want to use a separate key                                                                                                                                     |
+| `ANTHROPIC_API_KEY`                | string  | _(optional)_        | Anthropic API key (x-api-key style auth). The Agent SDK uses `~/.claude/` credentials by default, so this is only needed if you want to use a separate key                                                                                                              |
+| `ANTHROPIC_AUTH_TOKEN`             | string  | _(optional)_        | Alternative Anthropic-compatible bearer token (`Authorization: Bearer ...`) for proxy/custom backends                                                                                                                                                                   |
+| `ANTHROPIC_BASE_URL`               | string  | _(optional)_        | Optional Anthropic-compatible proxy endpoint                                                                                                                                                                                                                            |
+| `ANTHROPIC_MODEL`                  | string  | _(optional)_        | Default Claude model alias/id used when runtime profile does not set `defaultModel` (for example `claude-sonnet-4-5`, `glm-4.5`)                                                                                                                                        |
+| `OPENAI_API_KEY`                   | string  | _(optional)_        | API key used by OpenAI-compatible runtime profiles (for example Codex/OpenAI adapters)                                                                                                                                                                                  |
+| `OPENAI_BASE_URL`                  | string  | _(optional)_        | Default base URL for OpenAI-compatible runtime profiles                                                                                                                                                                                                                 |
+| `OPENAI_MODEL`                     | string  | _(optional)_        | Default OpenAI/Codex model alias/id used when runtime profile does not set `defaultModel`                                                                                                                                                                               |
+| `CODEX_CLI_PATH`                   | string  | _(optional)_        | Absolute path to the Codex CLI binary used by CLI-based runtime adapters                                                                                                                                                                                                |
+| `AGENTAPI_BASE_URL`                | string  | _(optional)_        | Base URL for AgentAPI transport used by runtime adapters                                                                                                                                                                                                                |
+| `AIF_RUNTIME_MODULES`              | string  | _(optional)_        | Comma-separated runtime module specifiers loaded at startup via `registerRuntimeModule(registry)`                                                                                                                                                                       |
 | `PORT`                             | number  | `3009`              | API server port                                                                                                                                                                                                                                                         |
 | `WEB_PORT`                         | number  | `5180`              | Web UI dev server port (Vite)                                                                                                                                                                                                                                           |
 | `POLL_INTERVAL_MS`                 | number  | `30000`             | How often the agent coordinator polls for tasks (milliseconds)                                                                                                                                                                                                          |
@@ -44,18 +53,40 @@ Environment validation is handled by Zod in `packages/shared/src/env.ts`. The ap
 
 ## Authentication
 
-The Agent SDK supports two authentication methods:
+Runtime profiles support provider-specific auth setup. Common flows:
 
-1. **Default (recommended):** Uses your active Claude subscription credentials from `~/.claude/`. No configuration needed.
-2. **API Key:** Set `ANTHROPIC_API_KEY` in `.env` to use a dedicated key.
+1. **Claude profile auth (recommended for local Claude runtime):** uses credentials from `~/.claude/`.
+2. **Anthropic API key:** set `ANTHROPIC_API_KEY`.
+3. **Anthropic bearer token (proxy/custom backend):** set `ANTHROPIC_AUTH_TOKEN`.
+4. **OpenAI-compatible API key:** set `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for custom endpoint).
+
+For custom Claude-compatible endpoints, set `ANTHROPIC_MODEL` if your backend requires an explicit model id and does not auto-route model selection.
+
+Optional runtime defaults:
+
+- `CODEX_CLI_PATH` for CLI transport adapters
+- `AGENTAPI_BASE_URL` for AgentAPI transport adapters
+- `AIF_RUNTIME_MODULES` for loading additional runtime modules at startup (`registerRuntimeModule(registry)`)
 
 ### Runtime Readiness Check
 
 API exposes `GET /agent/readiness` to verify auth state at runtime:
 
-- `ready=true`: agent can run AI stages.
-- `ready=false`: neither `ANTHROPIC_API_KEY` nor Claude profile auth was detected.
-- The web app shows a warning banner when `ready=false`.
+- `ready=true`: runtime registry is available and at least one execution path is configured (enabled profile, usable auth, or Codex CLI path).
+- `ready=false`: no usable runtime execution path detected.
+- Response includes runtime descriptor list, enabled profile count, and auth source diagnostics.
+
+## Runtime Profile Defaults
+
+Runtime profiles are persisted in SQLite (`runtime_profiles`) and can be selected at three levels:
+
+1. task override (`tasks.runtime_profile_id`)
+2. project default (`projects.default_task_runtime_profile_id` / `default_chat_runtime_profile_id`)
+3. optional system default used by runtime resolution services
+
+Only non-secret fields are persisted (`baseUrl`, `apiKeyEnvVar`, headers/options metadata, default model). Secret values remain in environment variables or temporary validation payloads.
+
+For concrete profile payloads and adapter capability differences, see [Providers](providers.md).
 
 ## Database
 

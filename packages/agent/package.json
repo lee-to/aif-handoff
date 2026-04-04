@@ -16,8 +16,9 @@
   },
   "dependencies": {
     "@aif/data": "*",
+    "@aif/runtime": "*",
     "@aif/shared": "*",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.86",
+    "@anthropic-ai/claude-agent-sdk": "0.2.90",
     "node-cron": "^4.2.1"
   },
   "devDependencies": {

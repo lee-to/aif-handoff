@@ -15,6 +15,7 @@ Autonomous task management system with Kanban board and AI subagents. Tasks flow
 
 - **Runtime:** Node.js + TypeScript (ES2022, ESNext modules)
 - **Monorepo:** Turborepo (npm workspaces)
+- **Runtime Modularity:** `@aif/runtime` workspace for runtime/provider contracts and registry
 - **Agent SDK:** @anthropic-ai/claude-agent-sdk
 - **Database:** SQLite (better-sqlite3 + drizzle-orm)
 - **API:** Hono + @hono/node-server + WebSocket (ws)
@@ -29,6 +30,7 @@ Autonomous task management system with Kanban board and AI subagents. Tasks flow
 ## Architecture
 
 - **shared** (`@aif/shared`) — Types, SQLite schema (drizzle-orm), state machine, constants, env, logger
+- **runtime** (`@aif/runtime`) — Runtime/provider adapter contracts, registry, and module-loading extension surface
 - **data** (`@aif/data`) — Centralized data-access layer for all DB reads/writes
 - **api** (`@aif/api`) — Hono REST + WebSocket server (port 3009)
 - **web** (`@aif/web`) — React SPA Kanban UI (port 5180)

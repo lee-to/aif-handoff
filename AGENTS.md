@@ -4,13 +4,14 @@
 
 ## Project Overview
 
-Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by specialized Claude Agent SDK subagents.
+Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved subagent workflows (Claude adapter first).
 
 ## Tech Stack
 
 - **Language:** TypeScript (ES2022, ESNext modules)
 - **Monorepo:** Turborepo (npm workspaces)
 - **API:** Hono + WebSocket
+- **Runtime Abstraction:** `@aif/runtime` workspace (runtime/provider contracts + registry)
 - **Database:** SQLite (better-sqlite3 + drizzle-orm)
 - **Frontend:** React 19 + Vite + TailwindCSS 4
 - **Agent:** Claude Agent SDK + node-cron
@@ -30,6 +31,21 @@ packages/
 │       ├── logger.ts        # Pino logger setup
 │       ├── index.ts         # Node exports
 │       └── browser.ts       # Browser-safe exports
+├── runtime/             # @aif/runtime — runtime/provider contracts, registry, validation/discovery services, adapters
+│   └── src/
+│       ├── types.ts         # RuntimeAdapter/RuntimeRunInput/RuntimeSession contracts
+│       ├── registry.ts      # Runtime registry + built-in/module registration
+│       ├── module.ts        # registerRuntimeModule export resolution helpers
+│       ├── errors.ts        # Runtime-specific error types
+│       ├── resolution.ts    # Persisted profile + env resolution and validation
+│       ├── capabilities.ts  # Capability gate helpers and errors
+│       ├── modelDiscovery.ts # Shared model discovery + connection validation service
+│       ├── cache.ts         # In-memory cache utility for runtime services
+│       ├── workflowSpec.ts  # Runtime-independent workflow contract
+│       ├── promptPolicy.ts  # Agent-definition vs slash-command fallback logic
+│       ├── adapters/
+│       │   └── claude/      # ClaudeRuntimeAdapter (run/sessions/errors/hooks)
+│       └── index.ts         # Public runtime exports
 ├── data/                # @aif/data — centralized data-access layer
 │   └── src/
 │       └── index.ts         # Repository-style DB operations for API/Agent
@@ -51,10 +67,11 @@ packages/
 │       │   └── ui/          # Reusable UI primitives (badge, button, dialog, etc.)
 │       ├── hooks/           # useTasks, useProjects, useWebSocket, useTheme
 │       └── lib/             # api.ts, notifications.ts, utils.ts
-└── agent/               # @aif/agent — Coordinator + Claude subagents
+└── agent/               # @aif/agent — Coordinator + runtime-driven subagent orchestration
     └── src/
         ├── index.ts         # Agent entry point
         ├── coordinator.ts   # Polling coordinator (node-cron)
+        ├── subagentQuery.ts # Runtime profile resolution + registry execution
         ├── hooks.ts         # Agent lifecycle hooks
         ├── notifier.ts      # Notification system
         ├── claudeDiagnostics.ts  # Agent SDK diagnostics
@@ -67,15 +84,17 @@ data/                    # SQLite database files (gitignored)
 
 ## Key Entry Points
 
-| File                                  | Purpose                            |
-| ------------------------------------- | ---------------------------------- |
-| `packages/api/src/index.ts`           | API server entry (Hono, port 3009) |
-| `packages/web/src/main.tsx`           | Web app entry (React, port 5180)   |
-| `packages/agent/src/index.ts`         | Agent coordinator entry            |
-| `packages/data/src/index.ts`          | Centralized data-access API        |
-| `packages/shared/src/schema.ts`       | Database schema (drizzle-orm)      |
-| `packages/shared/src/stateMachine.ts` | Task state transitions             |
-| `turbo.json`                          | Turborepo task definitions         |
+| File                                  | Purpose                               |
+| ------------------------------------- | ------------------------------------- |
+| `packages/api/src/index.ts`           | API server entry (Hono, port 3009)    |
+| `packages/web/src/main.tsx`           | Web app entry (React, port 5180)      |
+| `packages/agent/src/index.ts`         | Agent coordinator entry               |
+| `packages/agent/src/subagentQuery.ts` | Runtime-aware subagent execution path |
+| `packages/runtime/src/index.ts`       | Shared runtime/provider contracts     |
+| `packages/data/src/index.ts`          | Centralized data-access API           |
+| `packages/shared/src/schema.ts`       | Database schema (drizzle-orm)         |
+| `packages/shared/src/stateMachine.ts` | Task state transitions                |
+| `turbo.json`                          | Turborepo task definitions            |
 
 ## Documentation
 

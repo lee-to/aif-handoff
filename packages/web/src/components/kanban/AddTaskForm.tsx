@@ -9,6 +9,7 @@ import { useCreateTask } from "@/hooks/useTasks";
 import { useKeyboardShortcut } from "@/hooks/useKeyboardShortcut";
 import { useProjects } from "@/hooks/useProjects";
 import { useSettings, useProjectDefaults } from "@/hooks/useSettings";
+import { useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
 import { generatePlanPath } from "@aif/shared/browser";
 import { PlannerSettings } from "./PlannerSettings";
 
@@ -32,6 +33,8 @@ export function AddTaskForm({ projectId }: Props) {
   const [skipReview, setSkipReview] = useState(false);
   const [useSubagents, setUseSubagents] = useState(true);
   const [maxReviewIterations, setMaxReviewIterations] = useState(3);
+  const [runtimeProfileId, setRuntimeProfileId] = useState("");
+  const [modelOverride, setModelOverride] = useState("");
   const createTask = useCreateTask();
 
   // Track whether the user has manually edited the plan path field.
@@ -41,8 +44,16 @@ export function AddTaskForm({ projectId }: Props) {
   const { data: settings } = useSettings();
   const { data: defaults } = useProjectDefaults(projectId);
   const { data: projectsList } = useProjects();
+  const { data: runtimeProfiles = [] } = useRuntimeProfiles(projectId, true);
+  const { data: runtimes = [] } = useRuntimes();
   const currentProject = projectsList?.find((p) => p.id === projectId);
   const isParallel = currentProject?.parallelEnabled ?? false;
+  const projectTaskRuntimeDefaultId = currentProject?.defaultTaskRuntimeProfileId ?? "";
+  const selectedRuntimeProfile =
+    runtimeProfiles.find((profile) => profile.id === runtimeProfileId) ?? null;
+  const selectedRuntimeDescriptor = selectedRuntimeProfile
+    ? runtimes.find((runtime) => runtime.id === selectedRuntimeProfile.runtimeId)
+    : null;
 
   // Derive defaults from server data (no setState in effects)
   const useSubagentsDefault = settings?.useSubagents ?? true;
@@ -70,6 +81,8 @@ export function AddTaskForm({ projectId }: Props) {
     setUseSubagents(useSubagentsDefault);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setPlanPath(defaultPlanPath);
+    setRuntimeProfileId(projectTaskRuntimeDefaultId);
+    setModelOverride("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncGen]);
 
@@ -126,6 +139,8 @@ export function AddTaskForm({ projectId }: Props) {
         skipReview,
         useSubagents,
         maxReviewIterations,
+        runtimeProfileId: runtimeProfileId || null,
+        modelOverride: modelOverride.trim() || null,
       },
       {
         onSuccess: () => {
@@ -141,6 +156,8 @@ export function AddTaskForm({ projectId }: Props) {
           setSkipReview(false);
           setUseSubagents(useSubagentsDefault);
           setMaxReviewIterations(maxReviewIterationsDefault);
+          setRuntimeProfileId(projectTaskRuntimeDefaultId);
+          setModelOverride("");
           userOverride.current = false;
           setIsOpen(false);
         },
@@ -264,6 +281,50 @@ export function AddTaskForm({ projectId }: Props) {
           )}
         </div>
       )}
+      <div className="space-y-2 border border-border/60 bg-muted/20 p-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Runtime override
+        </p>
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Runtime profile
+          </p>
+          <select
+            className="h-7 w-full rounded border border-input bg-background px-2 text-xs"
+            value={runtimeProfileId}
+            onChange={(e) => setRuntimeProfileId(e.target.value)}
+          >
+            <option value="">
+              {projectTaskRuntimeDefaultId
+                ? "(project default)"
+                : "(none — runtime resolved by system defaults)"}
+            </option>
+            {runtimeProfiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name} ({profile.runtimeId}/{profile.providerId})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Model override
+          </p>
+          <Input
+            value={modelOverride}
+            onChange={(e) => setModelOverride(e.target.value)}
+            placeholder="runtime default"
+            className="h-7 text-xs"
+          />
+        </div>
+        {selectedRuntimeDescriptor &&
+          !selectedRuntimeDescriptor.capabilities.supportsAgentDefinitions && (
+            <p className="text-[10px] text-amber-500">
+              Selected runtime does not support agent definitions. Planner/implementer may fallback
+              to slash commands.
+            </p>
+          )}
+      </div>
       <div className="space-y-1">
         <label className="flex items-start gap-2 text-xs text-muted-foreground">
           <Checkbox
@@ -312,6 +373,8 @@ export function AddTaskForm({ projectId }: Props) {
             setSkipReview(false);
             setUseSubagents(useSubagentsDefault);
             setMaxReviewIterations(maxReviewIterationsDefault);
+            setRuntimeProfileId(projectTaskRuntimeDefaultId);
+            setModelOverride("");
             userOverride.current = false;
           }}
         >

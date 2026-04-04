@@ -6,6 +6,11 @@ vi.mock("@/hooks/useProjects", () => ({
   useProjects: () => ({ data: [{ id: "test-project", parallelEnabled: false }] }),
 }));
 
+vi.mock("@/hooks/useRuntimeProfiles", () => ({
+  useRuntimeProfiles: () => ({ data: [] }),
+  useRuntimes: () => ({ data: [] }),
+}));
+
 const mockTask: Task = {
   id: "ts-1",
   projectId: "test-project",

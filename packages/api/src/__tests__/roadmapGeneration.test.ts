@@ -14,9 +14,9 @@ vi.mock("@aif/shared/server", async (importOriginal) => {
   };
 });
 
-const mockQuery = vi.fn();
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  query: (args: unknown) => mockQuery(args),
+const mockRunApiRuntimeOneShot = vi.fn();
+vi.mock("../services/runtime.js", () => ({
+  runApiRuntimeOneShot: (...args: unknown[]) => mockRunApiRuntimeOneShot(...args),
 }));
 
 const {
@@ -73,7 +73,7 @@ function createProjectWithDescription(descriptionContent: string) {
 describe("roadmapGeneration", () => {
   beforeEach(() => {
     testDb.current = createTestDb();
-    mockQuery.mockReset();
+    mockRunApiRuntimeOneShot.mockReset();
   });
 
   describe("buildTaskTags", () => {
@@ -134,15 +134,18 @@ describe("roadmapGeneration", () => {
     it("should generate ROADMAP.md from DESCRIPTION.md", async () => {
       const { projectId } = createProjectWithDescription("# My App\nA todo app");
 
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: "result",
-          subtype: "success",
-          result:
+      mockRunApiRuntimeOneShot.mockResolvedValue({
+        result: {
+          outputText:
             "# Project Roadmap\n\n> A todo app\n\n## Milestones\n\n- [ ] **Setup** — init\n- [ ] **Auth** — login\n\n## Completed\n\n| Milestone | Date |\n|-----------|------|\n",
-          usage: { input_tokens: 200, output_tokens: 100 },
-          total_cost_usd: 0.002,
-        };
+          usage: {
+            inputTokens: 200,
+            outputTokens: 100,
+            totalTokens: 300,
+            costUsd: 0.002,
+          },
+        },
+        context: {},
       });
 
       const result = await generateRoadmapFile({ projectId });
@@ -170,15 +173,18 @@ describe("roadmapGeneration", () => {
         })
         .run();
 
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: "result",
-          subtype: "success",
-          result:
+      mockRunApiRuntimeOneShot.mockResolvedValue({
+        result: {
+          outputText:
             "# Project Roadmap\n\n> Build an e-commerce platform\n\n## Milestones\n\n- [ ] **Products** — catalog\n",
-          usage: {},
-          total_cost_usd: 0,
-        };
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            costUsd: 0,
+          },
+        },
+        context: {},
       });
 
       const result = await generateRoadmapFile({
@@ -218,20 +224,23 @@ describe("roadmapGeneration", () => {
     it("should parse valid agent response", async () => {
       const { projectId } = createProjectWithRoadmap("# Roadmap\n- [ ] Task A\n- [ ] Task B");
 
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: "result",
-          subtype: "success",
-          result: JSON.stringify({
+      mockRunApiRuntimeOneShot.mockResolvedValue({
+        result: {
+          outputText: JSON.stringify({
             alias: "v1",
             tasks: [
               { title: "Task A", description: "Do A", phase: 1, phaseName: "Setup", sequence: 1 },
               { title: "Task B", description: "Do B", phase: 1, phaseName: "Setup", sequence: 2 },
             ],
           }),
-          usage: { input_tokens: 100, output_tokens: 50 },
-          total_cost_usd: 0.001,
-        };
+          usage: {
+            inputTokens: 100,
+            outputTokens: 50,
+            totalTokens: 150,
+            costUsd: 0.001,
+          },
+        },
+        context: {},
       });
 
       const result = await generateRoadmapTasks({ projectId, roadmapAlias: "v1" });
@@ -243,15 +252,18 @@ describe("roadmapGeneration", () => {
     it("should handle agent returning markdown-fenced JSON", async () => {
       const { projectId } = createProjectWithRoadmap("# Roadmap\n- [ ] X");
 
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: "result",
-          subtype: "success",
-          result:
+      mockRunApiRuntimeOneShot.mockResolvedValue({
+        result: {
+          outputText:
             '```json\n{"alias":"v1","tasks":[{"title":"X","description":"","phase":1,"phaseName":"P1","sequence":1}]}\n```',
-          usage: { input_tokens: 50, output_tokens: 30 },
-          total_cost_usd: 0.0005,
-        };
+          usage: {
+            inputTokens: 50,
+            outputTokens: 30,
+            totalTokens: 80,
+            costUsd: 0.0005,
+          },
+        },
+        context: {},
       });
 
       const result = await generateRoadmapTasks({ projectId, roadmapAlias: "v1" });
@@ -261,14 +273,17 @@ describe("roadmapGeneration", () => {
     it("should throw PARSE_ERROR for invalid JSON", async () => {
       const { projectId } = createProjectWithRoadmap("# Roadmap\n- [ ] X");
 
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: "result",
-          subtype: "success",
-          result: "not json at all",
-          usage: {},
-          total_cost_usd: 0,
-        };
+      mockRunApiRuntimeOneShot.mockResolvedValue({
+        result: {
+          outputText: "not json at all",
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            costUsd: 0,
+          },
+        },
+        context: {},
       });
 
       await expect(generateRoadmapTasks({ projectId, roadmapAlias: "v1" })).rejects.toThrow(

@@ -1,65 +1,46 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the claude-agent-sdk query function
-const mockQueryResults: Array<{
-  type: string;
-  subtype?: string;
-  result?: string;
-  usage?: Record<string, number>;
-  total_cost_usd?: number;
-}> = [];
-
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  query: vi.fn(async function* () {
-    for (const msg of mockQueryResults) {
-      yield msg;
-    }
-  }),
+const { executeSubagentQueryMock } = vi.hoisted(() => ({
+  executeSubagentQueryMock: vi.fn(),
 }));
 
-vi.mock("@aif/data", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@aif/data")>();
-  return {
-    ...actual,
-    incrementTaskTokenUsage: vi.fn(),
-  };
-});
-
-vi.mock("../hooks.js", () => ({
-  getClaudePath: () => "/usr/local/bin/claude",
+vi.mock("../subagentQuery.js", () => ({
+  executeSubagentQuery: executeSubagentQueryMock,
 }));
 
 import { evaluateReviewCommentsForAutoMode } from "../reviewGate.js";
 
 describe("evaluateReviewCommentsForAutoMode", () => {
+  const originalAnthropicBaseUrl = process.env.ANTHROPIC_BASE_URL;
   const baseInput = {
     taskId: "test-task-1",
     projectRoot: "/tmp/test-project",
     reviewComments: "## Code Review\n\nLooks good, no issues found.",
   };
 
+  beforeEach(() => {
+    executeSubagentQueryMock.mockReset();
+    delete process.env.ANTHROPIC_BASE_URL;
+  });
+
+  afterAll(() => {
+    if (originalAnthropicBaseUrl == null) {
+      delete process.env.ANTHROPIC_BASE_URL;
+      return;
+    }
+    process.env.ANTHROPIC_BASE_URL = originalAnthropicBaseUrl;
+  });
+
   it("returns success when agent responds with SUCCESS", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "success",
-      result: "SUCCESS",
-      usage: { input_tokens: 100, output_tokens: 10 },
-      total_cost_usd: 0.001,
-    });
+    executeSubagentQueryMock.mockResolvedValueOnce({ resultText: "SUCCESS" });
 
     const result = await evaluateReviewCommentsForAutoMode(baseInput);
     expect(result).toEqual({ status: "success" });
   });
 
   it("returns request_changes when agent responds with fixes", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "success",
-      result: "- Fix missing error handling in api.ts\n- Add input validation",
-      usage: { input_tokens: 100, output_tokens: 20 },
-      total_cost_usd: 0.002,
+    executeSubagentQueryMock.mockResolvedValueOnce({
+      resultText: "- Fix missing error handling in api.ts\n- Add input validation",
     });
 
     const result = await evaluateReviewCommentsForAutoMode(baseInput);
@@ -71,14 +52,7 @@ describe("evaluateReviewCommentsForAutoMode", () => {
   });
 
   it("handles null reviewComments", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "success",
-      result: "SUCCESS",
-      usage: { input_tokens: 50, output_tokens: 5 },
-      total_cost_usd: 0.0005,
-    });
+    executeSubagentQueryMock.mockResolvedValueOnce({ resultText: "SUCCESS" });
 
     const result = await evaluateReviewCommentsForAutoMode({
       ...baseInput,
@@ -87,30 +61,8 @@ describe("evaluateReviewCommentsForAutoMode", () => {
     expect(result).toEqual({ status: "success" });
   });
 
-  it("throws on non-success subtype", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "error",
-      result: "",
-      usage: { input_tokens: 50, output_tokens: 5 },
-      total_cost_usd: 0.0005,
-    });
-
-    await expect(evaluateReviewCommentsForAutoMode(baseInput)).rejects.toThrow(
-      "Review auto-check failed",
-    );
-  });
-
   it("throws on empty response", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "success",
-      result: "   ",
-      usage: { input_tokens: 50, output_tokens: 5 },
-      total_cost_usd: 0.0005,
-    });
+    executeSubagentQueryMock.mockResolvedValueOnce({ resultText: "   " });
 
     await expect(evaluateReviewCommentsForAutoMode(baseInput)).rejects.toThrow(
       "Review auto-check returned empty response",
@@ -118,13 +70,8 @@ describe("evaluateReviewCommentsForAutoMode", () => {
   });
 
   it("treats free-form prose (no bullets) as success to avoid false rework", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "success",
-      result: "The code looks good overall but could use some minor improvements in naming.",
-      usage: { input_tokens: 100, output_tokens: 20 },
-      total_cost_usd: 0.002,
+    executeSubagentQueryMock.mockResolvedValueOnce({
+      resultText: "The code looks good overall but could use some minor improvements in naming.",
     });
 
     const result = await evaluateReviewCommentsForAutoMode(baseInput);
@@ -132,14 +79,9 @@ describe("evaluateReviewCommentsForAutoMode", () => {
   });
 
   it("treats mixed prose+bullets as success because format is invalid", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "success",
-      result:
+    executeSubagentQueryMock.mockResolvedValueOnce({
+      resultText:
         "Here are the issues:\n- Fix missing null check\nSome extra commentary\n- Add error handling",
-      usage: { input_tokens: 100, output_tokens: 30 },
-      total_cost_usd: 0.003,
     });
 
     const result = await evaluateReviewCommentsForAutoMode(baseInput);
@@ -147,16 +89,42 @@ describe("evaluateReviewCommentsForAutoMode", () => {
   });
 
   it("is case-insensitive for SUCCESS token", async () => {
-    mockQueryResults.length = 0;
-    mockQueryResults.push({
-      type: "result",
-      subtype: "success",
-      result: "success",
-      usage: { input_tokens: 50, output_tokens: 5 },
-      total_cost_usd: 0.0005,
-    });
+    executeSubagentQueryMock.mockResolvedValueOnce({ resultText: "success" });
 
     const result = await evaluateReviewCommentsForAutoMode(baseInput);
     expect(result).toEqual({ status: "success" });
+  });
+
+  it("passes haiku model when no Anthropic proxy base URL is configured", async () => {
+    executeSubagentQueryMock.mockResolvedValueOnce({ resultText: "SUCCESS" });
+
+    await evaluateReviewCommentsForAutoMode(baseInput);
+
+    expect(executeSubagentQueryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelOverride: "haiku",
+        suppressModelFallback: false,
+        workflowSpec: expect.objectContaining({
+          sessionReusePolicy: "never",
+        }),
+      }),
+    );
+  });
+
+  it("omits model override when Anthropic proxy base URL is configured", async () => {
+    process.env.ANTHROPIC_BASE_URL = "https://proxy.example/v1";
+    executeSubagentQueryMock.mockResolvedValueOnce({ resultText: "SUCCESS" });
+
+    await evaluateReviewCommentsForAutoMode(baseInput);
+
+    expect(executeSubagentQueryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelOverride: null,
+        suppressModelFallback: true,
+        workflowSpec: expect.objectContaining({
+          sessionReusePolicy: "never",
+        }),
+      }),
+    );
   });
 });

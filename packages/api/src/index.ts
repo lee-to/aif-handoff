@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { logger, getEnv } from "@aif/shared";
-import { listProjects, listStaleInProgressTasks } from "@aif/data";
+import { listProjects, listRuntimeProfiles, listStaleInProgressTasks } from "@aif/data";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -10,8 +10,10 @@ import { projectsRouter } from "./routes/projects.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { chatRouter } from "./routes/chat.js";
 import { settingsRoutes } from "./routes/settings.js";
+import { runtimeProfilesRouter } from "./routes/runtimeProfiles.js";
 import { setupWebSocket } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
+import { getApiRuntimeRegistry } from "./services/runtime.js";
 
 const log = logger("server");
 const startTime = Date.now();
@@ -74,28 +76,71 @@ app.get("/health", (c) => {
 });
 
 app.get("/agent/readiness", (c) => {
-  const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  const hasAnthropicApiKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim());
+  const hasOpenAiApiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const hasApiKey = hasAnthropicApiKey || hasOpenAiApiKey;
   const { hasClaudeAuth, detectedPath } = detectClaudeAuthProfile();
-  const ready = hasApiKey || hasClaudeAuth;
-  const authSource = hasApiKey
-    ? hasClaudeAuth
-      ? "both"
-      : "api_key"
-    : hasClaudeAuth
-      ? "claude_profile"
-      : "none";
+  const enabledProfiles = listRuntimeProfiles({ enabledOnly: true });
 
-  return c.json({
-    ready,
-    hasApiKey,
-    hasClaudeAuth,
-    authSource,
-    detectedPath,
-    message: ready
-      ? "Agent authentication is configured."
-      : "Claude authentication not found. Set ANTHROPIC_API_KEY in .env or sign in via Claude Code profile (~/.claude).",
-    checkedAt: new Date().toISOString(),
-  });
+  return getApiRuntimeRegistry()
+    .then((registry) => {
+      const runtimes = registry.listRuntimes();
+      const ready =
+        runtimes.length > 0 &&
+        (enabledProfiles.length > 0 ||
+          hasApiKey ||
+          hasClaudeAuth ||
+          Boolean(process.env.CODEX_CLI_PATH));
+      const authSource = hasApiKey
+        ? hasClaudeAuth
+          ? "both"
+          : "api_key"
+        : hasClaudeAuth
+          ? "profile"
+          : "none";
+
+      return c.json({
+        ready,
+        hasApiKey,
+        hasAnthropicApiKey,
+        hasOpenAiApiKey,
+        hasClaudeAuth,
+        authSource,
+        detectedPath,
+        runtimeCount: runtimes.length,
+        enabledRuntimeProfileCount: enabledProfiles.length,
+        runtimes: runtimes.map((runtime) => ({
+          id: runtime.id,
+          providerId: runtime.providerId,
+          displayName: runtime.displayName,
+          capabilities: runtime.capabilities,
+        })),
+        message: ready
+          ? "Runtime execution prerequisites are configured."
+          : "No usable runtime profile/auth is configured. Add a runtime profile or set provider credentials in environment variables.",
+        checkedAt: new Date().toISOString(),
+      });
+    })
+    .catch((error) => {
+      log.error({ error }, "Failed to build runtime readiness payload");
+      return c.json(
+        {
+          ready: false,
+          hasApiKey,
+          hasAnthropicApiKey,
+          hasOpenAiApiKey,
+          hasClaudeAuth,
+          authSource: "none",
+          detectedPath,
+          runtimeCount: 0,
+          enabledRuntimeProfileCount: enabledProfiles.length,
+          runtimes: [],
+          message: "Failed to resolve runtime registry for readiness checks.",
+          checkedAt: new Date().toISOString(),
+        },
+        500,
+      );
+    });
 });
 
 // Agent status: running tasks, heartbeat lag, uptime
@@ -129,10 +174,46 @@ app.get("/agent/status", (c) => {
 // Settings (expose env defaults to frontend)
 app.get("/settings", (c) => {
   const env = getEnv();
-  return c.json({
-    useSubagents: env.AGENT_USE_SUBAGENTS,
-    maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
-  });
+  return getApiRuntimeRegistry()
+    .then((registry) => {
+      const runtimeProfiles = listRuntimeProfiles();
+      const enabledProfiles = runtimeProfiles.filter((profile) => profile.enabled);
+      return c.json({
+        useSubagents: env.AGENT_USE_SUBAGENTS,
+        maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
+        runtimeReadiness: {
+          availableRuntimeCount: registry.listRuntimes().length,
+          runtimeProfileCount: runtimeProfiles.length,
+          enabledRuntimeProfileCount: enabledProfiles.length,
+        },
+        runtimeDefaults: {
+          modules: env.AIF_RUNTIME_MODULES,
+          openAiBaseUrlConfigured: Boolean(env.OPENAI_BASE_URL),
+          agentApiBaseUrlConfigured: Boolean(env.AGENTAPI_BASE_URL),
+          codexCliPathConfigured: Boolean(env.CODEX_CLI_PATH),
+        },
+      });
+    })
+    .catch((error) => {
+      log.error({ error }, "Failed to include runtime settings payload");
+      const allProfiles = listRuntimeProfiles();
+      const enabledProfiles = listRuntimeProfiles({ enabledOnly: true });
+      return c.json({
+        useSubagents: env.AGENT_USE_SUBAGENTS,
+        maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
+        runtimeReadiness: {
+          availableRuntimeCount: 0,
+          runtimeProfileCount: allProfiles.length,
+          enabledRuntimeProfileCount: enabledProfiles.length,
+        },
+        runtimeDefaults: {
+          modules: env.AIF_RUNTIME_MODULES,
+          openAiBaseUrlConfigured: Boolean(env.OPENAI_BASE_URL),
+          agentApiBaseUrlConfigured: Boolean(env.AGENTAPI_BASE_URL),
+          codexCliPathConfigured: Boolean(env.CODEX_CLI_PATH),
+        },
+      });
+    });
 });
 
 // Routes
@@ -140,6 +221,7 @@ app.route("/projects", projectsRouter);
 app.route("/tasks", tasksRouter);
 app.route("/chat", chatRouter);
 app.route("/settings", settingsRoutes);
+app.route("/runtime-profiles", runtimeProfilesRouter);
 
 // Initialize DB and start server
 const port = Number(process.env.PORT) || 3009;

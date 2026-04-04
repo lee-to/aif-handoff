@@ -1,6 +1,6 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { parseAttachments, modelOption } from "@aif/shared";
-import { incrementTaskTokenUsage } from "@aif/data";
+import { findTaskById, incrementTaskTokenUsage } from "@aif/data";
+import { modelOption, parseAttachments } from "@aif/shared";
+import { runApiRuntimeOneShot } from "./runtime.js";
 
 interface FastFixComment {
   author: string;
@@ -52,6 +52,11 @@ function formatLatestCommentForPrompt(comment: FastFixComment): string {
 }
 
 export async function runFastFixQuery(input: RunFastFixQueryInput): Promise<string> {
+  const task = findTaskById(input.taskId);
+  if (!task) {
+    throw new Error(`Task ${input.taskId} not found for fast fix runtime resolution`);
+  }
+
   const includeFileUpdateStep = input.shouldTryFileUpdate ?? true;
   const prompt = input.priorAttempt
     ? `You are editing an existing implementation plan markdown.
@@ -116,35 +121,30 @@ ${
     : "4) Do not use tools/subagents. Return the FULL updated plan markdown directly.\n5) Output markdown only in your final response."
 }`;
 
-  let resultText = "";
-  for await (const message of query({
+  const modelSelection = modelOption("haiku");
+  const modelOverride = "model" in modelSelection ? modelSelection.model : null;
+  const { result } = await runApiRuntimeOneShot({
+    projectId: task.projectId,
+    projectRoot: input.projectRoot,
+    taskId: input.taskId,
     prompt,
-    options: {
-      cwd: input.projectRoot,
-      env: { ...process.env, HANDOFF_MODE: "1", HANDOFF_TASK_ID: input.taskId },
-      settings: { attribution: { commit: "", pr: "" } },
-      settingSources: ["project"],
-      ...modelOption("haiku"),
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        ...(includeFileUpdateStep
-          ? {}
-          : { append: "Do not use tools or subagents. Reply directly with markdown only." }),
-      },
-    },
-  })) {
-    if (message.type !== "result") continue;
+    workflowKind: "fast-fix",
+    modelOverride,
+    systemPromptAppend: includeFileUpdateStep
+      ? undefined
+      : "Do not use tools or subagents. Reply directly with markdown only.",
+  });
+
+  if (result.usage) {
     incrementTaskTokenUsage(input.taskId, {
-      ...message.usage,
-      total_cost_usd: message.total_cost_usd,
+      input_tokens: result.usage.inputTokens,
+      output_tokens: result.usage.outputTokens,
+      total_tokens: result.usage.totalTokens,
+      total_cost_usd: result.usage.costUsd,
     });
-    if (message.subtype !== "success") {
-      throw new Error(`Fast fix failed: ${message.subtype}`);
-    }
-    resultText = message.result.trim();
   }
 
+  const resultText = (result.outputText ?? "").trim();
   if (!resultText) {
     throw new Error("Fast fix did not return updated plan text");
   }

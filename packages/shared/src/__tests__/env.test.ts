@@ -32,6 +32,8 @@ describe("env validation", () => {
     const result = validateEnv({});
 
     expect(result.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(result.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(result.ANTHROPIC_MODEL).toBeUndefined();
     expect(result.PORT).toBe(3009);
     expect(result.POLL_INTERVAL_MS).toBe(30000);
     expect(result.AGENT_STAGE_STALE_TIMEOUT_MS).toBe(90 * 60 * 1000);
@@ -40,6 +42,12 @@ describe("env validation", () => {
     expect(result.AGENT_QUERY_START_TIMEOUT_MS).toBe(60 * 1000);
     expect(result.AGENT_QUERY_START_RETRY_DELAY_MS).toBe(1000);
     expect(result.DATABASE_URL).toBe("./data/aif.sqlite");
+    expect(result.OPENAI_API_KEY).toBeUndefined();
+    expect(result.OPENAI_BASE_URL).toBeUndefined();
+    expect(result.OPENAI_MODEL).toBeUndefined();
+    expect(result.CODEX_CLI_PATH).toBeUndefined();
+    expect(result.AGENTAPI_BASE_URL).toBeUndefined();
+    expect(result.AIF_RUNTIME_MODULES).toEqual([]);
     expect(result.AGENT_QUERY_AUDIT_ENABLED).toBe(true);
     expect(result.LOG_LEVEL).toBe("debug");
     expect(result.ACTIVITY_LOG_MODE).toBe("sync");
@@ -92,6 +100,14 @@ describe("env validation", () => {
     });
 
     expect(result.ACTIVITY_LOG_MODE).toBe("sync");
+  });
+
+  it("should parse comma-separated runtime modules", () => {
+    const result = validateEnv({
+      AIF_RUNTIME_MODULES: "module-one, module-two ,,module-three",
+    });
+
+    expect(result.AIF_RUNTIME_MODULES).toEqual(["module-one", "module-two", "module-three"]);
   });
 
   it("should reject invalid LOG_LEVEL", () => {

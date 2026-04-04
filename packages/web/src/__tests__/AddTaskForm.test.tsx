@@ -24,6 +24,11 @@ vi.mock("@/hooks/useSettings", () => ({
   useProjectDefaults: () => ({ data: mockDefaultsData.data }),
 }));
 
+vi.mock("@/hooks/useRuntimeProfiles", () => ({
+  useRuntimeProfiles: () => ({ data: [] }),
+  useRuntimes: () => ({ data: [] }),
+}));
+
 vi.mock("@/hooks/useTasks", () => ({
   useCreateTask: () => ({
     mutate: mutateCreateTask,

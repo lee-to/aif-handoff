@@ -20,6 +20,8 @@ export interface Project {
   implementerMaxBudgetUsd: number | null;
   reviewSidecarMaxBudgetUsd: number | null;
   parallelEnabled: boolean;
+  defaultTaskRuntimeProfileId?: string | null;
+  defaultChatRuntimeProfileId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -32,6 +34,8 @@ export interface CreateProjectInput {
   implementerMaxBudgetUsd?: number;
   reviewSidecarMaxBudgetUsd?: number;
   parallelEnabled?: boolean;
+  defaultTaskRuntimeProfileId?: string | null;
+  defaultChatRuntimeProfileId?: string | null;
 }
 
 export interface TaskCommentAttachment {
@@ -81,6 +85,9 @@ export interface Task {
   paused: boolean;
   lastHeartbeatAt: string | null;
   lastSyncedAt: string | null;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
   sessionId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -117,6 +124,9 @@ export interface CreateTaskInput {
   useSubagents?: boolean;
   maxReviewIterations?: number;
   paused?: boolean;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
   roadmapAlias?: string;
   tags?: string[];
 }
@@ -154,6 +164,9 @@ export interface UpdateTaskInput {
   maxReviewIterations?: number;
   paused?: boolean;
   lastHeartbeatAt?: string | null;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
 }
 
 export const TASK_EVENTS = [
@@ -231,6 +244,65 @@ export interface WsEvent {
     | ChatSession;
 }
 
+export interface RuntimeProfile {
+  id: string;
+  projectId: string | null;
+  name: string;
+  runtimeId: string;
+  providerId: string;
+  transport: string | null;
+  baseUrl: string | null;
+  apiKeyEnvVar: string | null;
+  defaultModel: string | null;
+  headers: Record<string, string>;
+  options: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRuntimeProfileInput {
+  projectId?: string | null;
+  name: string;
+  runtimeId: string;
+  providerId: string;
+  transport?: string | null;
+  baseUrl?: string | null;
+  apiKeyEnvVar?: string | null;
+  defaultModel?: string | null;
+  headers?: Record<string, string>;
+  options?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export interface UpdateRuntimeProfileInput {
+  projectId?: string | null;
+  name?: string;
+  runtimeId?: string;
+  providerId?: string;
+  transport?: string | null;
+  baseUrl?: string | null;
+  apiKeyEnvVar?: string | null;
+  defaultModel?: string | null;
+  headers?: Record<string, string>;
+  options?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export type EffectiveRuntimeProfileSource =
+  | "task_override"
+  | "project_default"
+  | "system_default"
+  | "none";
+
+export interface EffectiveRuntimeProfileSelection {
+  source: EffectiveRuntimeProfileSource;
+  profile: RuntimeProfile | null;
+  taskRuntimeProfileId: string | null;
+  projectRuntimeProfileId: string | null;
+  systemRuntimeProfileId: string | null;
+}
+
 // ── Chat session types ──────────────────────────────────────
 
 export type ChatSessionSource = "web" | "cli" | "agent";
@@ -240,6 +312,8 @@ export interface ChatSession {
   projectId: string;
   title: string;
   agentSessionId: string | null;
+  runtimeProfileId?: string | null;
+  runtimeSessionId?: string | null;
   source: ChatSessionSource;
   createdAt: string;
   updatedAt: string;
@@ -248,10 +322,15 @@ export interface ChatSession {
 export interface CreateChatSessionInput {
   projectId: string;
   title?: string;
+  runtimeProfileId?: string | null;
+  runtimeSessionId?: string | null;
 }
 
 export interface UpdateChatSessionInput {
   title?: string;
+  agentSessionId?: string | null;
+  runtimeProfileId?: string | null;
+  runtimeSessionId?: string | null;
 }
 
 export interface ChatMessageAttachment {

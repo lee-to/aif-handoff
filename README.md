@@ -6,7 +6,7 @@
 
 > This project was built using [AI Factory](https://github.com/lee-to/ai-factory) — an open-source framework for AI-driven development.
 
-Built on top of [AI Factory](https://github.com/lee-to/ai-factory) workflow and powered by [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-agent-sdk) subagents. Tasks flow through stages automatically: **Backlog → Planning → Plan Ready → Implementing → Review → Done** — each stage orchestrated by specialized AI subagents following the AIF methodology. In auto mode, review feedback can also trigger an automatic rework loop: **Review → request_changes → Implementing**.
+Built on top of [AI Factory](https://github.com/lee-to/ai-factory) workflow and powered by runtime profiles through `@aif/runtime` (Claude and Codex adapters included). Tasks flow through stages automatically: **Backlog → Planning → Plan Ready → Implementing → Review → Done** — each stage orchestrated by specialized AI subagents following the AIF methodology. In auto mode, review feedback can also trigger an automatic rework loop: **Review → request_changes → Implementing**.
 
 ## Key Features
 
@@ -14,6 +14,7 @@ Built on top of [AI Factory](https://github.com/lee-to/ai-factory) workflow and 
 - **Beautiful Kanban UI** — drag-and-drop board with real-time WebSocket updates
 - **AI Factory core** — built on [ai-factory](https://github.com/lee-to/ai-factory) agent definitions and skill system
 - **Subagent orchestration** — plan-coordinator, implement-coordinator, review + security sidecars
+- **Runtime/provider modularity** — runtime registry, project/task runtime profile selection, and provider-specific capability gating
 - **Layer-aware execution** — implementer computes dependency layers and enforces parallel worker dispatch where possible
 - **Self-healing pipeline** — heartbeat + stale-stage watchdog auto-recovers stuck agent stages
 - **Human-in-the-loop** — approve plans, request changes, or let auto-mode handle everything
@@ -51,7 +52,7 @@ The agent coordinator reacts to task events via WebSocket in near real-time and 
 
 ### Authentication
 
-- **Without Docker:** Agent SDK uses `~/.claude/` credentials by default (your active Claude subscription). No API key needed.
+- **Without Docker:** Claude runtime profiles can use `~/.claude/` credentials by default (your active Claude subscription). No API key needed.
 - **With Docker:** Either set `ANTHROPIC_API_KEY` in `.env`, or log in inside the container:
   ```bash
   docker compose exec agent claude login
@@ -59,15 +60,18 @@ The agent coordinator reacts to task events via WebSocket in near real-time and 
   ```
   Copy the URL and open it in your browser. **Important:** the terminal wraps long URLs across lines — remove any line breaks and spaces before pasting, otherwise OAuth will fail with `invalid code_challenge`. Then restart to apply. Credentials are stored in a persistent `claude-auth` Docker volume.
 
+For Codex/OpenAI-compatible profiles, configure `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` (or set profile-level `apiKeyEnvVar` / `baseUrl`). See [Providers](docs/providers.md).
+
 ## Architecture
 
 ```
 packages/
 ├── shared/    # Types, schema, state machine, env, constants, logger
+├── runtime/   # Runtime registry, adapters, module loader, workflow specs
 ├── data/      # Centralized DB access layer (@aif/data)
 ├── api/       # Hono REST + WebSocket server (port 3009)
 ├── web/       # React + Vite + TailwindCSS — Kanban UI (port 5180)
-└── agent/     # Coordinator (node-cron) + Claude Agent SDK subagents
+└── agent/     # Coordinator (node-cron) + runtime-driven subagent orchestration
 ```
 
 Database access is centralized in `packages/data`. `api` and `agent` must use `@aif/data`; direct DB imports in those packages are blocked by ESLint guards.
@@ -111,7 +115,7 @@ AIF Handoff supports two execution modes, configurable globally via `AGENT_USE_S
 | Frontend     | React + Vite + TailwindCSS            |
 | Drag & Drop  | @dnd-kit                              |
 | Server State | @tanstack/react-query                 |
-| Agent SDK    | @anthropic-ai/claude-agent-sdk        |
+| Runtime SDKs | Claude Agent SDK + Codex CLI/AgentAPI |
 | Scheduler    | node-cron                             |
 
 ## Docker
@@ -178,12 +182,13 @@ AGENT_BYPASS_PERMISSIONS=true
 
 ## Documentation
 
-| Guide                                      | Description                              |
-| ------------------------------------------ | ---------------------------------------- |
-| [Getting Started](docs/getting-started.md) | Installation, setup, first steps         |
-| [Architecture](docs/architecture.md)       | Agent pipeline, state machine, data flow |
-| [API Reference](docs/api.md)               | REST endpoints, WebSocket events         |
-| [Configuration](docs/configuration.md)     | Environment variables, logging, auth     |
+| Guide                                      | Description                                   |
+| ------------------------------------------ | --------------------------------------------- |
+| [Getting Started](docs/getting-started.md) | Installation, setup, first steps              |
+| [Architecture](docs/architecture.md)       | Agent pipeline, state machine, data flow      |
+| [API Reference](docs/api.md)               | REST endpoints, WebSocket events              |
+| [Configuration](docs/configuration.md)     | Environment variables, logging, auth          |
+| [Providers](docs/providers.md)             | Runtime profiles, adapters, capability matrix |
 
 ![ui-light](https://github.com/lee-to/aif-handoff/blob/main/art/ui-light.png)
 ![ui-dark](https://github.com/lee-to/aif-handoff/blob/main/art/ui-dark.png)

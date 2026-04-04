@@ -1,5 +1,12 @@
 // Schema
-export { projects, tasks, taskComments, chatSessions, chatMessages } from "./schema.js";
+export {
+  projects,
+  tasks,
+  taskComments,
+  runtimeProfiles,
+  chatSessions,
+  chatMessages,
+} from "./schema.js";
 export type {
   ProjectRow,
   NewProjectRow,
@@ -7,6 +14,8 @@ export type {
   NewTaskRow,
   TaskCommentRow,
   NewTaskCommentRow,
+  RuntimeProfileRow,
+  NewRuntimeProfileRow,
   ChatSessionRow,
   NewChatSessionRow,
   ChatMessageRow,
@@ -39,6 +48,11 @@ export {
   type ChatErrorPayload,
   type ChatAction,
   type ChatActionCreateTask,
+  type RuntimeProfile,
+  type CreateRuntimeProfileInput,
+  type UpdateRuntimeProfileInput,
+  type EffectiveRuntimeProfileSource,
+  type EffectiveRuntimeProfileSelection,
   type ChatSessionSource,
   type ChatSession,
   type CreateChatSessionInput,

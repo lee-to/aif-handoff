@@ -13,6 +13,8 @@ export const projects = sqliteTable("projects", {
   implementerMaxBudgetUsd: real("implementer_max_budget_usd"),
   reviewSidecarMaxBudgetUsd: real("review_sidecar_max_budget_usd"),
   parallelEnabled: integer("parallel_enabled", { mode: "boolean" }).notNull().default(false),
+  defaultTaskRuntimeProfileId: text("default_task_runtime_profile_id"),
+  defaultChatRuntimeProfileId: text("default_chat_runtime_profile_id"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
@@ -63,6 +65,9 @@ export const tasks = sqliteTable("tasks", {
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   lastHeartbeatAt: text("last_heartbeat_at"),
   lastSyncedAt: text("last_synced_at"),
+  runtimeProfileId: text("runtime_profile_id"),
+  modelOverride: text("model_override"),
+  runtimeOptionsJson: text("runtime_options_json"),
   sessionId: text("session_id"),
   lockedBy: text("locked_by"),
   lockedUntil: text("locked_until"),
@@ -93,6 +98,32 @@ export const taskComments = sqliteTable("task_comments", {
 export type TaskCommentRow = typeof taskComments.$inferSelect;
 export type NewTaskCommentRow = typeof taskComments.$inferInsert;
 
+export const runtimeProfiles = sqliteTable("runtime_profiles", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  projectId: text("project_id"),
+  name: text("name").notNull(),
+  runtimeId: text("runtime_id").notNull(),
+  providerId: text("provider_id").notNull(),
+  transport: text("transport"),
+  baseUrl: text("base_url"),
+  apiKeyEnvVar: text("api_key_env_var"),
+  defaultModel: text("default_model"),
+  headersJson: text("headers_json").notNull().default("{}"),
+  optionsJson: text("options_json").notNull().default("{}"),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type RuntimeProfileRow = typeof runtimeProfiles.$inferSelect;
+export type NewRuntimeProfileRow = typeof runtimeProfiles.$inferInsert;
+
 export const chatSessions = sqliteTable("chat_sessions", {
   id: text("id")
     .primaryKey()
@@ -100,6 +131,8 @@ export const chatSessions = sqliteTable("chat_sessions", {
   projectId: text("project_id").notNull(),
   title: text("title").notNull().default("New Chat"),
   agentSessionId: text("agent_session_id"),
+  runtimeProfileId: text("runtime_profile_id"),
+  runtimeSessionId: text("runtime_session_id"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),

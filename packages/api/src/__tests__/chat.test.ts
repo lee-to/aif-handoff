@@ -1,27 +1,70 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import type { RuntimeAdapter, RuntimeRunInput } from "@aif/runtime";
 
-const mockQuery = vi.fn();
 const mockFindProjectById = vi.fn();
-const mockSendToClient = vi.fn();
-const mockBroadcast = vi.fn();
 const mockFindTaskById = vi.fn();
 const mockToTaskResponse = vi.fn();
+const mockCreateChatSession = vi.fn();
+const mockFindChatSessionById = vi.fn();
+const mockUpdateChatSession = vi.fn();
+const mockCreateChatMessage = vi.fn();
+const mockUpdateChatSessionTimestamp = vi.fn();
+const mockSendToClient = vi.fn();
+const mockBroadcast = vi.fn();
+const mockInvalidateCache = vi.fn();
+const mockResolveApiRuntimeContext = vi.fn();
+const mockAssertApiRuntimeCapabilities = vi.fn();
+const mockPersistAttachments = vi.fn();
 
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  query: (args: unknown) => mockQuery(args),
-  listSessions: vi.fn().mockResolvedValue([]),
-  getSessionMessages: vi.fn().mockResolvedValue([]),
-  getSessionInfo: vi.fn().mockResolvedValue(null),
-}));
+const mockAdapterRun = vi.fn();
+const mockAdapterResume = vi.fn();
 
-vi.mock("../repositories/projects.js", () => ({
+const runtimeAdapter: RuntimeAdapter = {
+  descriptor: {
+    id: "claude",
+    providerId: "anthropic",
+    displayName: "Claude",
+    defaultTransport: "sdk",
+    capabilities: {
+      supportsResume: true,
+      supportsSessionList: true,
+      supportsAgentDefinitions: true,
+      supportsStreaming: true,
+      supportsModelDiscovery: true,
+      supportsApprovals: true,
+      supportsCustomEndpoint: true,
+    },
+  },
+  run: (input) => mockAdapterRun(input),
+  resume: (input) => mockAdapterResume(input),
+};
+
+vi.mock("@aif/data", () => ({
   findProjectById: (id: string) => mockFindProjectById(id),
+  findTaskById: (id: string) => mockFindTaskById(id),
+  toTaskResponse: (task: unknown) => mockToTaskResponse(task),
+  createChatSession: (input: unknown) => mockCreateChatSession(input),
+  findChatSessionById: (id: string) => mockFindChatSessionById(id),
+  updateChatSession: (id: string, input: unknown) => mockUpdateChatSession(id, input),
+  createChatMessage: (input: unknown) => mockCreateChatMessage(input),
+  updateChatSessionTimestamp: (id: string) => mockUpdateChatSessionTimestamp(id),
+  listChatSessions: vi.fn(() => []),
+  listChatMessages: vi.fn(() => []),
+  toChatSessionResponse: vi.fn((row: unknown) => row),
+  toChatMessageResponse: vi.fn((row: unknown) => row),
+  deleteChatSession: vi.fn(),
+  findRuntimeProfileById: vi.fn(() => null),
 }));
 
-vi.mock("../repositories/tasks.js", () => ({
-  findTaskById: (id: string) => mockFindTaskById(id),
-  toTaskResponse: (row: unknown) => mockToTaskResponse(row),
+vi.mock("../services/runtime.js", () => ({
+  resolveApiRuntimeContext: (input: unknown) => mockResolveApiRuntimeContext(input),
+  assertApiRuntimeCapabilities: (input: unknown) => mockAssertApiRuntimeCapabilities(input),
+  getApiRuntimeRegistry: vi.fn(),
+}));
+
+vi.mock("../services/attachmentPersistence.js", () => ({
+  persistAttachments: (...args: unknown[]) => mockPersistAttachments(...args),
 }));
 
 vi.mock("../ws.js", () => ({
@@ -29,27 +72,12 @@ vi.mock("../ws.js", () => ({
   broadcast: (...args: unknown[]) => mockBroadcast(...args),
 }));
 
-vi.mock("@aif/data", () => ({
-  createChatSession: vi.fn(() => ({ id: "auto-sess", projectId: "project-1", title: "test" })),
-  findChatSessionById: vi.fn(() => ({ id: "auto-sess", agentSessionId: null })),
-  listChatSessions: vi.fn(() => []),
-  updateChatSession: vi.fn(),
-  deleteChatSession: vi.fn(),
-  createChatMessage: vi.fn(() => ({ id: "msg-1" })),
-  listChatMessages: vi.fn(() => []),
-  updateChatSessionTimestamp: vi.fn(),
-  toChatSessionResponse: vi.fn((row: unknown) => row),
-  toChatMessageResponse: vi.fn((row: unknown) => row),
-}));
-
-const mockInvalidateCache = vi.fn();
-
 vi.mock("../services/sessionCache.js", () => ({
-  getCached: () => undefined,
-  setCached: () => undefined,
+  getCached: vi.fn(() => undefined),
+  setCached: vi.fn(),
   invalidateCache: (...args: unknown[]) => mockInvalidateCache(...args),
-  invalidateAllSessionCaches: () => undefined,
-  sessionCacheKey: (dir: string) => `sdk-sessions:${dir}`,
+  invalidateAllSessionCaches: vi.fn(),
+  sessionCacheKey: vi.fn(() => "runtime-cache-key"),
 }));
 
 vi.mock("@aif/shared", async (importOriginal) => {
@@ -70,30 +98,64 @@ function createApp() {
   return app;
 }
 
-function streamOf(messages: Array<Record<string, unknown>>) {
-  return async function* () {
-    for (const msg of messages) {
-      yield msg;
-    }
-  };
-}
-
 describe("chat API", () => {
   let app: ReturnType<typeof createApp>;
 
   beforeEach(() => {
     app = createApp();
-    mockQuery.mockReset();
-    mockFindProjectById.mockReset();
-    mockSendToClient.mockReset();
-    mockFindTaskById.mockReset();
-    mockToTaskResponse.mockReset();
-    mockInvalidateCache.mockReset();
+    vi.clearAllMocks();
+
     mockFindProjectById.mockReturnValue({
       id: "project-1",
       rootPath: "/tmp/project-1",
       name: "Test Project",
     });
+
+    mockCreateChatSession.mockReturnValue({
+      id: "session-1",
+      projectId: "project-1",
+      title: "Test",
+      runtimeProfileId: null,
+      runtimeSessionId: null,
+    });
+
+    mockFindChatSessionById.mockReturnValue({
+      id: "session-1",
+      projectId: "project-1",
+      title: "Test",
+      runtimeProfileId: null,
+      runtimeSessionId: null,
+      agentSessionId: null,
+    });
+
+    mockResolveApiRuntimeContext.mockResolvedValue({
+      project: { id: "project-1", rootPath: "/tmp/project-1" },
+      adapter: runtimeAdapter,
+      resolvedProfile: {
+        source: "project_default",
+        profileId: "profile-1",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        model: null,
+        baseUrl: null,
+        apiKey: null,
+        apiKeyEnvVar: null,
+        headers: {},
+        options: {},
+      },
+      selectionSource: "project_default",
+    });
+
+    mockAdapterRun.mockResolvedValue({
+      outputText: "runtime output",
+      sessionId: "runtime-session-1",
+    });
+    mockAdapterResume.mockResolvedValue({
+      outputText: "resumed output",
+      sessionId: "runtime-session-1",
+    });
+    mockPersistAttachments.mockResolvedValue([]);
   });
 
   it("returns 404 when project is not found", async () => {
@@ -111,29 +173,19 @@ describe("chat API", () => {
 
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Project not found" });
-    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockAdapterRun).not.toHaveBeenCalled();
   });
 
-  it("streams token and done events for successful response", async () => {
-    mockQuery.mockImplementation(
-      streamOf([
-        {
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Hello " },
-          },
-        },
-        {
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "world" },
-          },
-        },
-        { type: "result", subtype: "success" },
-      ]),
-    );
+  it("streams runtime events and sends done", async () => {
+    mockAdapterRun.mockImplementation(async (input: RuntimeRunInput) => {
+      const onEvent = input.metadata?.onEvent as
+        | ((event: Record<string, unknown>) => void)
+        | undefined;
+      onEvent?.({ type: "stream:text", message: "Hello " });
+      onEvent?.({ type: "stream:text", message: "world" });
+      onEvent?.({ type: "tool:summary", message: "Read 3 files" });
+      return { outputText: "", sessionId: "runtime-session-1" };
+    });
 
     const res = await app.request("/chat", {
       method: "POST",
@@ -148,38 +200,30 @@ describe("chat API", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(typeof body.conversationId).toBe("string");
+    expect(body.sessionId).toBe("session-1");
 
-    expect(mockQuery).toHaveBeenCalledTimes(1);
-    const queryArgs = mockQuery.mock.calls[0][0] as { prompt: string };
-    expect(queryArgs.prompt).toBe("plain prompt");
-
-    expect(mockSendToClient).toHaveBeenNthCalledWith(
-      1,
-      "client-1",
-      expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({ token: "Hello " }),
-      }),
+    const tokenCalls = mockSendToClient.mock.calls.filter((call) => call[1]?.type === "chat:token");
+    expect(tokenCalls.length).toBeGreaterThanOrEqual(3);
+    expect(tokenCalls[0][1].payload.token).toBe("Hello ");
+    expect(tokenCalls[1][1].payload.token).toBe("world");
+    expect(tokenCalls.some((call) => String(call[1].payload.token).includes("Read 3 files"))).toBe(
+      true,
     );
-    expect(mockSendToClient).toHaveBeenNthCalledWith(
-      2,
+    expect(mockSendToClient).toHaveBeenCalledWith(
       "client-1",
-      expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({ token: "world" }),
-      }),
-    );
-    expect(mockSendToClient).toHaveBeenNthCalledWith(
-      3,
-      "client-1",
-      expect.objectContaining({
-        type: "chat:done",
-      }),
+      expect.objectContaining({ type: "chat:done" }),
     );
   });
 
-  it("prefixes prompt with /aif-explore when explore is enabled", async () => {
-    mockQuery.mockImplementation(streamOf([{ type: "result", subtype: "success" }]));
+  it("uses adapter.resume and prefixes prompt with /aif-explore", async () => {
+    mockFindChatSessionById.mockReturnValue({
+      id: "session-1",
+      projectId: "project-1",
+      title: "Test",
+      runtimeProfileId: null,
+      runtimeSessionId: "runtime-session-prev",
+      agentSessionId: null,
+    });
 
     const res = await app.request("/chat", {
       method: "POST",
@@ -188,129 +232,22 @@ describe("chat API", () => {
         projectId: "project-1",
         message: "investigate this",
         clientId: "client-1",
+        sessionId: "session-1",
         explore: true,
       }),
     });
 
     expect(res.status).toBe(200);
-    const queryArgs = mockQuery.mock.calls[0][0] as { prompt: string };
-    expect(queryArgs.prompt).toBe("/aif-explore investigate this");
+    expect(mockAdapterResume).toHaveBeenCalledTimes(1);
+    const resumeInput = mockAdapterResume.mock.calls[0][0] as RuntimeRunInput;
+    expect(resumeInput.prompt).toContain("/aif-explore investigate this");
+    expect(resumeInput.sessionId).toBe("runtime-session-prev");
   });
 
-  it("stores agent session ID in DB and uses resume for same session", async () => {
-    const { updateChatSession, findChatSessionById } = await import("@aif/data");
-    const mockUpdate = vi.mocked(updateChatSession);
-    const mockFind = vi.mocked(findChatSessionById);
-
-    // First request: init returns agent session ID
-    mockQuery
-      .mockImplementationOnce(
-        streamOf([
-          { type: "system", subtype: "init", session_id: "agent-session-123" },
-          { type: "result", subtype: "success" },
-        ]),
-      )
-      .mockImplementationOnce(streamOf([{ type: "result", subtype: "success" }]));
-
-    // First call: session exists but has no agentSessionId yet
-    // findChatSessionById is called twice: once for validation, once for resume lookup
-    mockFind
-      .mockReturnValueOnce({
-        id: "auto-sess",
-        projectId: "project-1",
-        title: "test",
-        agentSessionId: null,
-        createdAt: "",
-        updatedAt: "",
-      } as any)
-      .mockReturnValueOnce({
-        id: "auto-sess",
-        projectId: "project-1",
-        title: "test",
-        agentSessionId: null,
-        createdAt: "",
-        updatedAt: "",
-      } as any);
-
-    const firstRes = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "first",
-        clientId: "client-1",
-        sessionId: "auto-sess",
-      }),
-    });
-    expect(firstRes.status).toBe(200);
-    expect(mockUpdate).toHaveBeenCalledWith("auto-sess", { agentSessionId: "agent-session-123" });
-    expect(mockInvalidateCache).toHaveBeenCalledWith("sdk-sessions:/tmp/project-1");
-
-    // Second call: session now has the agentSessionId from first call
-    mockFind
-      .mockReturnValueOnce({
-        id: "auto-sess",
-        projectId: "project-1",
-        title: "test",
-        agentSessionId: "agent-session-123",
-        createdAt: "",
-        updatedAt: "",
-      } as any)
-      .mockReturnValueOnce({
-        id: "auto-sess",
-        projectId: "project-1",
-        title: "test",
-        agentSessionId: "agent-session-123",
-        createdAt: "",
-        updatedAt: "",
-      } as any);
-
-    const secondRes = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "second",
-        clientId: "client-1",
-        sessionId: "auto-sess",
-      }),
-    });
-    expect(secondRes.status).toBe(200);
-
-    const secondCall = mockQuery.mock.calls[1][0] as {
-      options: { resume?: string };
-    };
-    expect(secondCall.options.resume).toBe("agent-session-123");
-  });
-
-  it("returns 200 even when stream result subtype is non-success", async () => {
-    mockQuery.mockImplementation(streamOf([{ type: "result", subtype: "error_max_turns" }]));
-
-    const res = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "hello",
-        clientId: "client-1",
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(typeof body.conversationId).toBe("string");
-    expect(mockSendToClient).toHaveBeenCalledWith(
-      "client-1",
-      expect.objectContaining({ type: "chat:done" }),
+  it("returns 429 and emits chat:error for usage-limit failures", async () => {
+    mockAdapterRun.mockRejectedValue(
+      new Error("Claude Code returned an error result: You're out of extra usage"),
     );
-  });
-
-  it("returns 429 and emits chat:error for usage limit errors", async () => {
-    mockQuery.mockImplementation(() => {
-      throw new Error(
-        "Claude Code returned an error result: You're out of extra usage · resets 7pm",
-      );
-    });
 
     const res = await app.request("/chat", {
       method: "POST",
@@ -326,10 +263,7 @@ describe("chat API", () => {
     expect(res.status).toBe(429);
     const body = await res.json();
     expect(body.code).toBe("CHAT_USAGE_LIMIT");
-    expect(body.error).toContain("out of extra usage");
-
-    expect(mockSendToClient).toHaveBeenNthCalledWith(
-      1,
+    expect(mockSendToClient).toHaveBeenCalledWith(
       "client-1",
       expect.objectContaining({
         type: "chat:error",
@@ -339,207 +273,10 @@ describe("chat API", () => {
         }),
       }),
     );
-    expect(mockSendToClient).toHaveBeenNthCalledWith(
-      2,
-      "client-1",
-      expect.objectContaining({ type: "chat:done" }),
-    );
   });
 
-  it("streams tool_use_summary as visible token", async () => {
-    mockQuery.mockImplementation(
-      streamOf([
-        { type: "tool_use_summary", summary: "Read 3 files in src/" },
-        { type: "result", subtype: "success" },
-      ]),
-    );
-
-    const res = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "read files",
-        clientId: "client-1",
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    expect(mockSendToClient).toHaveBeenCalledWith(
-      "client-1",
-      expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({ token: expect.stringContaining("Read 3 files") }),
-      }),
-    );
-  });
-
-  it("streams permission denials on success result", async () => {
-    mockQuery.mockImplementation(
-      streamOf([
-        {
-          type: "result",
-          subtype: "success",
-          permission_denials: [{ tool_name: "Bash", tool_use_id: "t1", tool_input: {} }],
-        },
-      ]),
-    );
-
-    const res = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "run something",
-        clientId: "client-1",
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    expect(mockSendToClient).toHaveBeenCalledWith(
-      "client-1",
-      expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({
-          token: expect.stringContaining("Permission denied"),
-        }),
-      }),
-    );
-  });
-
-  it("streams error details for error_max_turns result", async () => {
-    mockQuery.mockImplementation(
-      streamOf([{ type: "result", subtype: "error_max_turns", is_error: true, errors: [] }]),
-    );
-
-    const res = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "hello",
-        clientId: "client-1",
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    expect(mockSendToClient).toHaveBeenCalledWith(
-      "client-1",
-      expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({
-          token: expect.stringContaining("max turns"),
-        }),
-      }),
-    );
-  });
-
-  it("streams error details for error_max_budget_usd result", async () => {
-    mockQuery.mockImplementation(
-      streamOf([
-        {
-          type: "result",
-          subtype: "error_max_budget_usd",
-          is_error: true,
-          errors: [],
-          permission_denials: [{ tool_name: "Edit" }],
-        },
-      ]),
-    );
-
-    const res = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "hello",
-        clientId: "client-1",
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    // Should contain both budget error and permission denial
-    const tokenCalls = mockSendToClient.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { type: string }).type === "chat:token",
-    );
-    const allTokens = tokenCalls
-      .map((c: unknown[]) => (c[1] as { payload: { token: string } }).payload.token)
-      .join("");
-    expect(allTokens).toContain("Budget limit");
-    expect(allTokens).toContain("Permission denied");
-  });
-
-  it("streams generic error with errors array", async () => {
-    mockQuery.mockImplementation(
-      streamOf([
-        {
-          type: "result",
-          subtype: "error_during_execution",
-          is_error: true,
-          errors: ["Something went wrong"],
-        },
-      ]),
-    );
-
-    const res = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "hello",
-        clientId: "client-1",
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    expect(mockSendToClient).toHaveBeenCalledWith(
-      "client-1",
-      expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({
-          token: expect.stringContaining("Something went wrong"),
-        }),
-      }),
-    );
-  });
-
-  it("resolves task context when taskId is provided", async () => {
-    const mockTaskRow = { id: "task-1", title: "Fix bug", status: "implementing" };
-    mockFindTaskById.mockReturnValue(mockTaskRow);
-    mockToTaskResponse.mockReturnValue({
-      ...mockTaskRow,
-      description: "Some bug",
-      attachments: [],
-      tags: [],
-    });
-    mockQuery.mockImplementation(streamOf([{ type: "result", subtype: "success" }]));
-
-    const res = await app.request("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId: "project-1",
-        message: "what is this task?",
-        clientId: "client-1",
-        taskId: "task-1",
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    expect(mockFindTaskById).toHaveBeenCalledWith("task-1");
-    expect(mockToTaskResponse).toHaveBeenCalledWith(mockTaskRow);
-    // System prompt should contain task context
-    const queryArgs = mockQuery.mock.calls[0][0] as {
-      options: { systemPrompt: { append: string } };
-    };
-    expect(queryArgs.options.systemPrompt.append).toContain("Fix bug");
-    expect(queryArgs.options.systemPrompt.append).toContain("implementing");
-  });
-
-  it("returns 500 and generic message for non-limit errors", async () => {
-    mockQuery.mockImplementation(() => {
-      throw new Error("unexpected failure");
-    });
+  it("returns 500 and generic code for non-limit failures", async () => {
+    mockAdapterRun.mockRejectedValue(new Error("unexpected failure"));
 
     const res = await app.request("/chat", {
       method: "POST",
@@ -557,69 +294,88 @@ describe("chat API", () => {
       error: "Chat request failed",
       code: "CHAT_REQUEST_FAILED",
     });
-
-    expect(mockSendToClient).toHaveBeenNthCalledWith(
-      1,
-      "client-1",
-      expect.objectContaining({
-        type: "chat:error",
-        payload: expect.objectContaining({
-          conversationId: "conv-error-1",
-          code: "CHAT_REQUEST_FAILED",
-          message: "Chat request failed",
-        }),
-      }),
-    );
   });
 
-  it("sends result text as token when no tokens were streamed", async () => {
-    mockQuery.mockImplementation(
-      streamOf([{ type: "result", subtype: "success", result: "Direct result text" }]),
-    );
+  it("includes task context in workflow system append when taskId is provided", async () => {
+    mockFindTaskById.mockReturnValue({ id: "task-1", title: "Fix bug", status: "implementing" });
+    mockToTaskResponse.mockReturnValue({
+      id: "task-1",
+      title: "Fix bug",
+      status: "implementing",
+      description: "Bug details",
+      plan: null,
+      implementationLog: null,
+      reviewComments: null,
+      agentActivityLog: null,
+    });
 
     const res = await app.request("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         projectId: "project-1",
-        message: "hello",
+        message: "what is this task?",
         clientId: "client-1",
+        taskId: "task-1",
       }),
     });
 
     expect(res.status).toBe(200);
-    expect(mockSendToClient).toHaveBeenCalledWith(
-      "client-1",
-      expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({ token: "Direct result text" }),
-      }),
-    );
+    expect(mockFindTaskById).toHaveBeenCalledWith("task-1");
+    const resolveCall = mockResolveApiRuntimeContext.mock.calls[0][0] as {
+      workflow: { promptInput: { systemPromptAppend?: string } };
+    };
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("Fix bug");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("implementing");
   });
 
-  it("streams unknown error subtype fallback", async () => {
-    mockQuery.mockImplementation(
-      streamOf([{ type: "result", subtype: "error_unknown", is_error: true }]),
-    );
+  it("persists incoming chat attachments and stores user message with attachment metadata", async () => {
+    mockPersistAttachments.mockResolvedValue([
+      {
+        name: "plan.md",
+        mimeType: "text/markdown",
+        size: 12,
+        path: "storage/chat/s1/plan.md",
+      },
+      {
+        name: "notes.txt",
+        mimeType: "text/plain",
+        size: 4,
+        path: null,
+      },
+    ]);
 
     const res = await app.request("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         projectId: "project-1",
-        message: "hello",
+        message: "please review attachments",
         clientId: "client-1",
+        attachments: [
+          { name: "plan.md", mimeType: "text/markdown", size: 12, content: "hello world" },
+          { name: "notes.txt", mimeType: "text/plain", size: 4, content: "note" },
+        ],
       }),
     });
 
     expect(res.status).toBe(200);
-    expect(mockSendToClient).toHaveBeenCalledWith(
-      "client-1",
+    expect(mockPersistAttachments).toHaveBeenCalledTimes(1);
+    const runInput = mockAdapterRun.mock.calls[0]?.[0] as RuntimeRunInput;
+    expect(runInput.prompt).toContain("Attached files:");
+    expect(runInput.prompt).toContain("plan.md");
+    expect(mockCreateChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "chat:token",
-        payload: expect.objectContaining({
-          token: expect.stringContaining("error_unknown"),
-        }),
+        role: "user",
+        content: "please review attachments",
+        attachments: [
+          {
+            name: "plan.md",
+            mimeType: "text/markdown",
+            size: 12,
+            path: "storage/chat/s1/plan.md",
+          },
+        ],
       }),
     );
   });

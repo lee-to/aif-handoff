@@ -1,0 +1,92 @@
+import type { RuntimeCapabilities } from "./types.js";
+import type { RuntimeWorkflowSpec } from "./workflowSpec.js";
+
+export interface RuntimePromptPolicyLogger {
+  debug?(context: Record<string, unknown>, message: string): void;
+  warn?(context: Record<string, unknown>, message: string): void;
+}
+
+export interface RuntimePromptPolicyInput {
+  runtimeId: string;
+  capabilities: RuntimeCapabilities;
+  workflow: RuntimeWorkflowSpec;
+  logger?: RuntimePromptPolicyLogger;
+}
+
+export interface RuntimePromptPolicyResult {
+  prompt: string;
+  systemPromptAppend: string;
+  agentDefinitionName?: string;
+  usedFallbackSlashCommand: boolean;
+}
+
+function prependSlashFallbackPrompt(prompt: string, fallbackSlashCommand: string): string {
+  const trimmedCommand = fallbackSlashCommand.trim();
+  if (!trimmedCommand) return prompt;
+
+  const trimmedPrompt = prompt.trim();
+  if (trimmedPrompt.startsWith(trimmedCommand)) return prompt;
+  return `${trimmedCommand}\n\n${prompt}`;
+}
+
+export function resolveRuntimePromptPolicy(
+  input: RuntimePromptPolicyInput,
+): RuntimePromptPolicyResult {
+  const canUseAgentDefinition = Boolean(
+    input.workflow.agentDefinitionName && input.capabilities.supportsAgentDefinitions,
+  );
+  const wantsSlashFallback = input.workflow.fallbackStrategy === "slash_command";
+  const hasFallbackCommand = Boolean(input.workflow.promptInput.fallbackSlashCommand?.trim());
+  const useSlashFallback = !canUseAgentDefinition && wantsSlashFallback && hasFallbackCommand;
+
+  if (!canUseAgentDefinition && input.workflow.agentDefinitionName) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+        agentDefinitionName: input.workflow.agentDefinitionName,
+        hasFallbackCommand,
+      },
+      "Runtime does not support agent definitions, checking workflow fallback strategy",
+    );
+  }
+
+  if (wantsSlashFallback && !hasFallbackCommand) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+      },
+      "Workflow requested slash fallback but no fallback slash command was provided",
+    );
+  }
+
+  const prompt = useSlashFallback
+    ? prependSlashFallbackPrompt(
+        input.workflow.promptInput.prompt,
+        input.workflow.promptInput.fallbackSlashCommand ?? "",
+      )
+    : input.workflow.promptInput.prompt;
+  const systemPromptAppend = input.workflow.promptInput.systemPromptAppend ?? "";
+  const agentDefinitionName = canUseAgentDefinition
+    ? input.workflow.agentDefinitionName
+    : undefined;
+
+  input.logger?.debug?.(
+    {
+      runtimeId: input.runtimeId,
+      workflowKind: input.workflow.workflowKind,
+      usedFallbackSlashCommand: useSlashFallback,
+      agentDefinitionName: agentDefinitionName ?? null,
+      systemPromptAppendLength: systemPromptAppend.length,
+    },
+    "Resolved runtime workflow prompt policy",
+  );
+
+  return {
+    prompt,
+    systemPromptAppend,
+    agentDefinitionName,
+    usedFallbackSlashCommand: useSlashFallback,
+  };
+}

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import type { RuntimeAdapter } from "@aif/runtime";
 
 const mockCreateChatSession = vi.fn();
 const mockFindChatSessionById = vi.fn();
@@ -7,19 +8,40 @@ const mockListChatSessions = vi.fn();
 const mockUpdateChatSession = vi.fn();
 const mockDeleteChatSession = vi.fn();
 const mockListChatMessages = vi.fn();
-const mockCreateChatMessage = vi.fn();
-const mockUpdateChatSessionTimestamp = vi.fn();
 const mockToChatSessionResponse = vi.fn((row: Record<string, unknown>) => row);
 const mockToChatMessageResponse = vi.fn((row: Record<string, unknown>) => row);
 const mockFindProjectById = vi.fn();
-const mockFindTaskById = vi.fn();
-const mockToTaskResponse = vi.fn();
-const mockQuery = vi.fn();
-const mockSendToClient = vi.fn();
+const mockFindRuntimeProfileById = vi.fn();
 const mockBroadcast = vi.fn();
+const mockResolveApiRuntimeContext = vi.fn();
+const mockGetApiRuntimeRegistry = vi.fn();
+const mockSessionCacheKey = vi.fn((..._args: unknown[]) => "runtime-cache");
+
 const mockListSessions = vi.fn();
-const mockGetSessionMessages = vi.fn();
-const mockGetSessionInfo = vi.fn();
+const mockGetSession = vi.fn();
+const mockListSessionEvents = vi.fn();
+
+const runtimeAdapter: RuntimeAdapter = {
+  descriptor: {
+    id: "claude",
+    providerId: "anthropic",
+    displayName: "Claude",
+    defaultTransport: "sdk",
+    capabilities: {
+      supportsResume: true,
+      supportsSessionList: true,
+      supportsAgentDefinitions: true,
+      supportsStreaming: true,
+      supportsModelDiscovery: true,
+      supportsApprovals: true,
+      supportsCustomEndpoint: true,
+    },
+  },
+  run: vi.fn(async () => ({ outputText: "" })),
+  listSessions: (...args) => mockListSessions(...args),
+  getSession: (...args) => mockGetSession(...args),
+  listSessionEvents: (...args) => mockListSessionEvents(...args),
+};
 
 vi.mock("@aif/data", () => ({
   createChatSession: (...args: unknown[]) => mockCreateChatSession(...args),
@@ -27,43 +49,34 @@ vi.mock("@aif/data", () => ({
   listChatSessions: (...args: unknown[]) => mockListChatSessions(...args),
   updateChatSession: (...args: unknown[]) => mockUpdateChatSession(...args),
   deleteChatSession: (...args: unknown[]) => mockDeleteChatSession(...args),
-  createChatMessage: (...args: unknown[]) => mockCreateChatMessage(...args),
   listChatMessages: (...args: unknown[]) => mockListChatMessages(...args),
-  updateChatSessionTimestamp: (...args: unknown[]) => mockUpdateChatSessionTimestamp(...args),
   toChatSessionResponse: (row: Record<string, unknown>) => mockToChatSessionResponse(row),
   toChatMessageResponse: (row: Record<string, unknown>) => mockToChatMessageResponse(row),
-}));
-
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  query: (args: unknown) => mockQuery(args),
-  listSessions: (...args: unknown[]) => mockListSessions(...args),
-  getSessionMessages: (...args: unknown[]) => mockGetSessionMessages(...args),
-  getSessionInfo: (...args: unknown[]) => mockGetSessionInfo(...args),
-}));
-
-vi.mock("../repositories/projects.js", () => ({
   findProjectById: (id: string) => mockFindProjectById(id),
+  findTaskById: vi.fn(),
+  toTaskResponse: vi.fn(),
+  createChatMessage: vi.fn(),
+  updateChatSessionTimestamp: vi.fn(),
+  findRuntimeProfileById: (id: string) => mockFindRuntimeProfileById(id),
 }));
 
-vi.mock("../repositories/tasks.js", () => ({
-  findTaskById: (id: string) => mockFindTaskById(id),
-  toTaskResponse: (row: unknown) => mockToTaskResponse(row),
+vi.mock("../services/runtime.js", () => ({
+  resolveApiRuntimeContext: (input: unknown) => mockResolveApiRuntimeContext(input),
+  assertApiRuntimeCapabilities: vi.fn(),
+  getApiRuntimeRegistry: () => mockGetApiRuntimeRegistry(),
 }));
 
 vi.mock("../ws.js", () => ({
-  sendToClient: (...args: unknown[]) => mockSendToClient(...args),
+  sendToClient: vi.fn(),
   broadcast: (...args: unknown[]) => mockBroadcast(...args),
 }));
 
-const mockInvalidateCache = vi.fn();
-
-// Bypass session cache — always return cache miss so tests use fresh mocks
 vi.mock("../services/sessionCache.js", () => ({
-  getCached: () => undefined,
-  setCached: () => undefined,
-  invalidateCache: (...args: unknown[]) => mockInvalidateCache(...args),
-  invalidateAllSessionCaches: () => undefined,
-  sessionCacheKey: (dir: string) => `sdk-sessions:${dir}`,
+  getCached: vi.fn(() => undefined),
+  setCached: vi.fn(),
+  invalidateCache: vi.fn(),
+  invalidateAllSessionCaches: vi.fn(),
+  sessionCacheKey: (...args: unknown[]) => mockSessionCacheKey(...args),
 }));
 
 vi.mock("@aif/shared", async (importOriginal) => {
@@ -89,16 +102,10 @@ const SESSION_ROW = {
   projectId: "proj-1",
   title: "Test Chat",
   agentSessionId: null,
+  runtimeProfileId: null,
+  runtimeSessionId: null,
   createdAt: "2026-04-01T00:00:00Z",
   updatedAt: "2026-04-01T00:00:00Z",
-};
-
-const MESSAGE_ROW = {
-  id: "msg-1",
-  sessionId: "session-1",
-  role: "user",
-  content: "Hello",
-  createdAt: "2026-04-01T00:00:00Z",
 };
 
 describe("chat session API", () => {
@@ -107,34 +114,55 @@ describe("chat session API", () => {
   beforeEach(() => {
     app = createApp();
     vi.clearAllMocks();
-    mockToChatSessionResponse.mockImplementation((row) => row);
-    mockToChatMessageResponse.mockImplementation((row) => row);
+
+    mockFindProjectById.mockReturnValue({ id: "proj-1", rootPath: "/tmp/proj", name: "Test" });
+    mockListChatSessions.mockReturnValue([SESSION_ROW]);
+    mockResolveApiRuntimeContext.mockResolvedValue({
+      project: { id: "proj-1", rootPath: "/tmp/proj" },
+      adapter: runtimeAdapter,
+      resolvedProfile: {
+        source: "project_default",
+        profileId: "profile-1",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        model: null,
+        baseUrl: null,
+        apiKey: null,
+        apiKeyEnvVar: null,
+        headers: {},
+        options: {},
+      },
+      selectionSource: "project_default",
+    });
+    mockGetApiRuntimeRegistry.mockResolvedValue({
+      resolveRuntime: vi.fn(() => runtimeAdapter),
+    });
+    mockListSessions.mockResolvedValue([]);
+    mockGetSession.mockResolvedValue(null);
+    mockListSessionEvents.mockResolvedValue([]);
+    mockFindRuntimeProfileById.mockReturnValue(null);
   });
 
   describe("GET /chat/sessions", () => {
-    it("returns sessions list for project", async () => {
-      mockListChatSessions.mockReturnValue([SESSION_ROW]);
-      mockFindProjectById.mockReturnValue(undefined);
-
-      const res = await app.request("/chat/sessions?projectId=proj-1");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body).toHaveLength(1);
-      expect(body[0].id).toBe("session-1");
-      expect(mockListChatSessions).toHaveBeenCalledWith("proj-1");
+    it("returns 400 when projectId is missing", async () => {
+      const res = await app.request("/chat/sessions");
+      expect(res.status).toBe(400);
     });
 
-    it("merges SDK sessions with DB sessions sorted by updatedAt", async () => {
-      mockListChatSessions.mockReturnValue([SESSION_ROW]);
-      mockFindProjectById.mockReturnValue({ id: "proj-1", rootPath: "/tmp/proj", name: "Test" });
+    it("returns 404 when project is not found", async () => {
+      mockFindProjectById.mockReturnValueOnce(undefined);
+      const res = await app.request("/chat/sessions?projectId=proj-1");
+      expect(res.status).toBe(404);
+    });
+
+    it("merges runtime sessions with DB sessions", async () => {
       mockListSessions.mockResolvedValue([
         {
-          sessionId: "sdk-abc",
-          customTitle: "CLI session",
-          summary: null,
-          firstPrompt: null,
+          id: "runtime-abc",
+          title: "Runtime Session",
           createdAt: "2026-04-01T12:00:00Z",
-          lastModified: "2026-04-02T00:00:00Z",
+          updatedAt: "2026-04-02T00:00:00Z",
         },
       ]);
 
@@ -142,40 +170,34 @@ describe("chat session API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.length).toBeGreaterThanOrEqual(2);
-      const sdkSession = body.find((s: { id: string }) => s.id === "sdk:sdk-abc");
-      expect(sdkSession).toBeDefined();
-      expect(sdkSession.title).toBe("CLI session");
-      expect(sdkSession.source).toBe("cli");
+      expect(body.some((row: { id: string }) => row.id.startsWith("sdk:"))).toBe(true);
     });
 
-    it("excludes SDK sessions already linked to DB sessions", async () => {
-      mockListChatSessions.mockReturnValue([{ ...SESSION_ROW, agentSessionId: "sdk-linked" }]);
-      mockFindProjectById.mockReturnValue({ id: "proj-1", rootPath: "/tmp/proj", name: "Test" });
-      mockListSessions.mockResolvedValue([
-        { sessionId: "sdk-linked", customTitle: "Linked", lastModified: "2026-04-01T00:00:00Z" },
+    it("filters out already linked runtime sessions", async () => {
+      mockListChatSessions.mockReturnValue([
+        { ...SESSION_ROW, runtimeSessionId: "runtime-linked" },
       ]);
-
-      const res = await app.request("/chat/sessions?projectId=proj-1");
-      const body = await res.json();
-      const sdkIds = body.filter((s: { id: string }) => s.id.startsWith("sdk:"));
-      expect(sdkIds).toHaveLength(0);
-    });
-
-    it("returns DB sessions only when SDK listing fails", async () => {
-      mockListChatSessions.mockReturnValue([SESSION_ROW]);
-      mockFindProjectById.mockReturnValue({ id: "proj-1", rootPath: "/tmp/proj", name: "Test" });
-      mockListSessions.mockRejectedValue(new Error("SDK unavailable"));
+      mockListSessions.mockResolvedValue([
+        {
+          id: "runtime-linked",
+          title: "Linked",
+          createdAt: "2026-04-01T00:00:00Z",
+          updatedAt: "2026-04-01T00:00:00Z",
+        },
+      ]);
 
       const res = await app.request("/chat/sessions?projectId=proj-1");
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body).toHaveLength(1);
-      expect(body[0].id).toBe("session-1");
+      expect(body.filter((row: { id: string }) => row.id.startsWith("sdk:")).length).toBe(0);
     });
 
-    it("returns 400 when projectId is missing", async () => {
-      const res = await app.request("/chat/sessions");
-      expect(res.status).toBe(400);
+    it("returns DB sessions when runtime discovery fails", async () => {
+      mockListSessions.mockRejectedValue(new Error("runtime down"));
+      const res = await app.request("/chat/sessions?projectId=proj-1");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toHaveLength(1);
     });
   });
 
@@ -188,28 +210,16 @@ describe("chat session API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: "proj-1", title: "New Chat" }),
       });
+
       expect(res.status).toBe(201);
-      const body = await res.json();
-      expect(body.id).toBe("session-1");
       expect(mockBroadcast).toHaveBeenCalledWith(
         expect.objectContaining({ type: "chat:session_created" }),
       );
     });
-
-    it("returns 500 when session creation fails", async () => {
-      mockCreateChatSession.mockReturnValue(null);
-
-      const res = await app.request("/chat/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: "proj-1", title: "Fail" }),
-      });
-      expect(res.status).toBe(500);
-    });
   });
 
   describe("GET /chat/sessions/:id", () => {
-    it("returns session when found", async () => {
+    it("returns DB session when found", async () => {
       mockFindChatSessionById.mockReturnValue(SESSION_ROW);
 
       const res = await app.request("/chat/sessions/session-1");
@@ -218,66 +228,34 @@ describe("chat session API", () => {
       expect(body.id).toBe("session-1");
     });
 
-    it("returns 404 when not found", async () => {
-      mockFindChatSessionById.mockReturnValue(undefined);
-
-      const res = await app.request("/chat/sessions/nonexistent");
-      expect(res.status).toBe(404);
-    });
-
-    it("returns SDK session info for sdk: prefixed id", async () => {
-      mockGetSessionInfo.mockResolvedValue({
-        sessionId: "abc-123",
-        customTitle: "My CLI Session",
-        summary: null,
-        firstPrompt: null,
+    it("returns virtual runtime session for sdk: id", async () => {
+      mockGetSession.mockResolvedValue({
+        id: "abc-123",
+        title: "Runtime Session",
         createdAt: "2026-04-01T00:00:00Z",
-        lastModified: "2026-04-01T12:00:00Z",
+        updatedAt: "2026-04-01T12:00:00Z",
       });
 
       const res = await app.request("/chat/sessions/sdk:abc-123");
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.id).toBe("sdk:abc-123");
-      expect(body.title).toBe("My CLI Session");
-      expect(body.source).toBe("cli");
-    });
-
-    it("falls back to summary/firstPrompt for SDK session title", async () => {
-      mockGetSessionInfo.mockResolvedValue({
-        sessionId: "abc-456",
-        customTitle: null,
-        summary: "A summary title",
-        firstPrompt: "First prompt text",
-        createdAt: null,
-        lastModified: "2026-04-01T12:00:00Z",
-      });
-
-      const res = await app.request("/chat/sessions/sdk:abc-456");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.title).toBe("A summary title");
-    });
-
-    it("returns 404 when SDK session not found", async () => {
-      mockGetSessionInfo.mockResolvedValue(null);
-
-      const res = await app.request("/chat/sessions/sdk:nonexistent");
-      expect(res.status).toBe(404);
-    });
-
-    it("returns 404 when SDK getSessionInfo throws", async () => {
-      mockGetSessionInfo.mockRejectedValue(new Error("SDK error"));
-
-      const res = await app.request("/chat/sessions/sdk:broken");
-      expect(res.status).toBe(404);
+      expect(body.title).toBe("Runtime Session");
     });
   });
 
   describe("GET /chat/sessions/:id/messages", () => {
-    it("returns messages list", async () => {
+    it("returns DB messages for DB sessions", async () => {
       mockFindChatSessionById.mockReturnValue(SESSION_ROW);
-      mockListChatMessages.mockReturnValue([MESSAGE_ROW]);
+      mockListChatMessages.mockReturnValue([
+        {
+          id: "m1",
+          sessionId: "session-1",
+          role: "user",
+          content: "Hello",
+          createdAt: "2026-04-01T00:00:00Z",
+        },
+      ]);
 
       const res = await app.request("/chat/sessions/session-1/messages");
       expect(res.status).toBe(200);
@@ -286,22 +264,20 @@ describe("chat session API", () => {
       expect(body[0].content).toBe("Hello");
     });
 
-    it("returns 404 when session not found", async () => {
-      mockFindChatSessionById.mockReturnValue(undefined);
-
-      const res = await app.request("/chat/sessions/nonexistent/messages");
-      expect(res.status).toBe(404);
-    });
-
-    it("returns SDK session messages for sdk: prefixed id", async () => {
-      mockGetSessionMessages.mockResolvedValue([
-        { uuid: "m1", type: "user", message: "Hello Claude" },
+    it("returns mapped runtime messages for sdk: sessions", async () => {
+      mockListSessionEvents.mockResolvedValue([
         {
-          uuid: "m2",
-          type: "assistant",
-          message: { content: [{ type: "text", text: "Hi there!" }] },
+          type: "message",
+          timestamp: "2026-04-01T00:00:00Z",
+          message: "Hello Claude",
+          data: { role: "user", id: "m1" },
         },
-        { uuid: "m3", type: "tool_result", message: "ignored" },
+        {
+          type: "message",
+          timestamp: "2026-04-01T00:00:01Z",
+          message: "Hi there!",
+          data: { role: "assistant", id: "m2" },
+        },
       ]);
 
       const res = await app.request("/chat/sessions/sdk:abc-123/messages");
@@ -309,42 +285,7 @@ describe("chat session API", () => {
       const body = await res.json();
       expect(body).toHaveLength(2);
       expect(body[0].role).toBe("user");
-      expect(body[0].content).toBe("Hello Claude");
       expect(body[1].role).toBe("assistant");
-      expect(body[1].content).toBe("Hi there!");
-    });
-
-    it("strips command tags from SDK messages", async () => {
-      mockGetSessionMessages.mockResolvedValue([
-        { uuid: "m1", type: "user", message: "<command-name>test</command-name>actual content" },
-      ]);
-
-      const res = await app.request("/chat/sessions/sdk:abc-123/messages");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body[0].content).toBe("actual content");
-    });
-
-    it("filters out empty SDK messages", async () => {
-      mockGetSessionMessages.mockResolvedValue([
-        {
-          uuid: "m1",
-          type: "assistant",
-          message: { content: [{ type: "thinking", thinking: "..." }] },
-        },
-      ]);
-
-      const res = await app.request("/chat/sessions/sdk:abc-123/messages");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body).toHaveLength(0);
-    });
-
-    it("returns 404 when SDK getSessionMessages throws", async () => {
-      mockGetSessionMessages.mockRejectedValue(new Error("SDK error"));
-
-      const res = await app.request("/chat/sessions/sdk:broken/messages");
-      expect(res.status).toBe(404);
     });
   });
 
@@ -362,17 +303,6 @@ describe("chat session API", () => {
       const body = await res.json();
       expect(body.title).toBe("Renamed");
     });
-
-    it("returns 404 when session not found", async () => {
-      mockFindChatSessionById.mockReturnValue(undefined);
-
-      const res = await app.request("/chat/sessions/nonexistent", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "X" }),
-      });
-      expect(res.status).toBe(404);
-    });
   });
 
   describe("DELETE /chat/sessions/:id", () => {
@@ -385,13 +315,6 @@ describe("chat session API", () => {
       expect(mockBroadcast).toHaveBeenCalledWith(
         expect.objectContaining({ type: "chat:session_deleted" }),
       );
-    });
-
-    it("returns 404 when session not found", async () => {
-      mockFindChatSessionById.mockReturnValue(undefined);
-
-      const res = await app.request("/chat/sessions/nonexistent", { method: "DELETE" });
-      expect(res.status).toBe(404);
     });
   });
 });

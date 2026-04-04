@@ -220,16 +220,20 @@ describe("wakeChannel", () => {
 
   describe("waitForApiReady", () => {
     it("resolves true on immediate success", async () => {
-      fetchMock.mockResolvedValueOnce({ ok: true });
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ ready: true }),
+      });
       const result = await waitForApiReady();
       expect(result).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("retries on fetch failure and succeeds", async () => {
-      fetchMock
-        .mockRejectedValueOnce(new Error("ECONNREFUSED"))
-        .mockResolvedValueOnce({ ok: true });
+      fetchMock.mockRejectedValueOnce(new Error("ECONNREFUSED")).mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ ready: true }),
+      });
 
       const promise = waitForApiReady();
       // Advance past first retry delay
@@ -241,9 +245,10 @@ describe("wakeChannel", () => {
     });
 
     it("retries on non-ok response", async () => {
-      fetchMock
-        .mockResolvedValueOnce({ ok: false, status: 503 })
-        .mockResolvedValueOnce({ ok: true });
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 503 }).mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ ready: true }),
+      });
 
       const promise = waitForApiReady();
       await vi.advanceTimersByTimeAsync(READINESS_RETRY_DELAY_MS);

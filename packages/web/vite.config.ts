@@ -21,6 +21,9 @@ const API_PORT = Number(process.env.PORT) || 3009;
 const apiTarget = `http://localhost:${API_PORT}`;
 
 export default defineConfig({
+  define: {
+    "import.meta.env.VITE_API_PORT": JSON.stringify(String(API_PORT)),
+  },
   plugins: [react(), tailwindcss()],
   build: {
     rolldownOptions: {
@@ -63,6 +66,7 @@ export default defineConfig({
       "/tasks": apiTarget,
       "/agent": apiTarget,
       "/chat": apiTarget,
+      "/runtime-profiles": apiTarget,
       "/settings": apiTarget,
       "/health": apiTarget,
       "/ws": {

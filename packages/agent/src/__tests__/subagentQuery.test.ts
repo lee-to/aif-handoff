@@ -5,6 +5,42 @@ const logActivityMock = vi.fn();
 const incrementTaskTokenUsageMock = vi.fn();
 const saveTaskSessionIdMock = vi.fn();
 const getTaskSessionIdMock = vi.fn(() => null);
+
+interface MockTaskRow {
+  id: string;
+  projectId: string;
+  runtimeOptionsJson: string | null;
+  modelOverride: string | null;
+}
+
+interface MockEffectiveRuntimeProfile {
+  source: string;
+  profile: {
+    id?: string;
+    runtimeId: string;
+    providerId: string;
+    defaultModel?: string | null;
+  } | null;
+  taskRuntimeProfileId: string | null;
+  projectRuntimeProfileId: string | null;
+  systemRuntimeProfileId: string | null;
+}
+
+const findTaskByIdMock = vi.fn<(taskId: string) => MockTaskRow | undefined>(() => ({
+  id: "task-1",
+  projectId: "project-1",
+  runtimeOptionsJson: null,
+  modelOverride: null,
+}));
+const resolveEffectiveRuntimeProfileMock = vi.fn<
+  (input: Record<string, unknown>) => MockEffectiveRuntimeProfile
+>(() => ({
+  source: "none",
+  profile: null,
+  taskRuntimeProfileId: null,
+  projectRuntimeProfileId: null,
+  systemRuntimeProfileId: null,
+}));
 (globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
   queryMock;
 
@@ -24,19 +60,8 @@ vi.mock("@aif/data", async (importOriginal) => {
     renewTaskClaim: vi.fn(),
     saveTaskSessionId: saveTaskSessionIdMock,
     getTaskSessionId: getTaskSessionIdMock,
-    findTaskById: vi.fn(() => ({
-      id: "task-1",
-      projectId: "project-1",
-      runtimeOptionsJson: null,
-      modelOverride: null,
-    })),
-    resolveEffectiveRuntimeProfile: vi.fn(() => ({
-      source: "none",
-      profile: null,
-      taskRuntimeProfileId: null,
-      projectRuntimeProfileId: null,
-      systemRuntimeProfileId: null,
-    })),
+    findTaskById: findTaskByIdMock,
+    resolveEffectiveRuntimeProfile: resolveEffectiveRuntimeProfileMock,
   };
 });
 
@@ -146,7 +171,22 @@ describe("executeSubagentQuery attribution", () => {
     incrementTaskTokenUsageMock.mockReset();
     saveTaskSessionIdMock.mockReset();
     getTaskSessionIdMock.mockReset();
+    findTaskByIdMock.mockReset();
+    resolveEffectiveRuntimeProfileMock.mockReset();
     getTaskSessionIdMock.mockReturnValue(null);
+    findTaskByIdMock.mockReturnValue({
+      id: "task-1",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+    });
+    resolveEffectiveRuntimeProfileMock.mockReturnValue({
+      source: "none",
+      profile: null,
+      taskRuntimeProfileId: null,
+      projectRuntimeProfileId: null,
+      systemRuntimeProfileId: null,
+    });
   });
 
   it("passes empty attribution to suppress Co-Authored-By trailers", async () => {
@@ -194,7 +234,22 @@ describe("executeSubagentQuery query_start_timeout retry", () => {
     incrementTaskTokenUsageMock.mockReset();
     saveTaskSessionIdMock.mockReset();
     getTaskSessionIdMock.mockReset();
+    findTaskByIdMock.mockReset();
+    resolveEffectiveRuntimeProfileMock.mockReset();
     getTaskSessionIdMock.mockReturnValue(null);
+    findTaskByIdMock.mockReturnValue({
+      id: "task-1",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+    });
+    resolveEffectiveRuntimeProfileMock.mockReturnValue({
+      source: "none",
+      profile: null,
+      taskRuntimeProfileId: null,
+      projectRuntimeProfileId: null,
+      systemRuntimeProfileId: null,
+    });
   });
 
   it("retries once after query_start_timeout and succeeds on second attempt", async () => {
@@ -227,7 +282,22 @@ describe("executeSubagentQuery session persistence policy", () => {
     incrementTaskTokenUsageMock.mockReset();
     saveTaskSessionIdMock.mockReset();
     getTaskSessionIdMock.mockReset();
+    findTaskByIdMock.mockReset();
+    resolveEffectiveRuntimeProfileMock.mockReset();
     getTaskSessionIdMock.mockReturnValue(null);
+    findTaskByIdMock.mockReturnValue({
+      id: "task-1",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+    });
+    resolveEffectiveRuntimeProfileMock.mockReturnValue({
+      source: "none",
+      profile: null,
+      taskRuntimeProfileId: null,
+      projectRuntimeProfileId: null,
+      systemRuntimeProfileId: null,
+    });
   });
 
   it("persists runtime session for resume_if_available workflows", async () => {
@@ -262,5 +332,72 @@ describe("executeSubagentQuery session persistence policy", () => {
     });
 
     expect(saveTaskSessionIdMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeSubagentQuery model fallback policy", () => {
+  beforeEach(() => {
+    (globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
+      queryMock;
+    queryMock.mockReset();
+    logActivityMock.mockReset();
+    incrementTaskTokenUsageMock.mockReset();
+    saveTaskSessionIdMock.mockReset();
+    getTaskSessionIdMock.mockReset();
+    findTaskByIdMock.mockReset();
+    resolveEffectiveRuntimeProfileMock.mockReset();
+    getTaskSessionIdMock.mockReturnValue(null);
+    findTaskByIdMock.mockReturnValue({
+      id: "task-1",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: "task-model",
+    });
+    resolveEffectiveRuntimeProfileMock.mockReturnValue({
+      source: "task_default",
+      profile: {
+        id: "profile-1",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        defaultModel: "profile-model",
+      },
+      taskRuntimeProfileId: "profile-1",
+      projectRuntimeProfileId: null,
+      systemRuntimeProfileId: null,
+    });
+  });
+
+  it("uses task/profile model fallback when suppression is disabled", async () => {
+    queryMock.mockImplementation(makeDelayedSuccess(0, "ok"));
+
+    await executeSubagentQuery({
+      taskId: "task-1",
+      projectRoot: "/tmp/project",
+      agentName: "review-gate",
+      prompt: "check",
+      workflowKind: "review-gate",
+      modelOverride: null,
+      suppressModelFallback: false,
+    });
+
+    const callOptions = queryMock.mock.calls[0][0].options as Record<string, unknown>;
+    expect(callOptions.model).toBe("task-model");
+  });
+
+  it("omits model entirely when suppression is enabled", async () => {
+    queryMock.mockImplementation(makeDelayedSuccess(0, "ok"));
+
+    await executeSubagentQuery({
+      taskId: "task-1",
+      projectRoot: "/tmp/project",
+      agentName: "review-gate",
+      prompt: "check",
+      workflowKind: "review-gate",
+      modelOverride: null,
+      suppressModelFallback: true,
+    });
+
+    const callOptions = queryMock.mock.calls[0][0].options as Record<string, unknown>;
+    expect(callOptions).not.toHaveProperty("model");
   });
 });

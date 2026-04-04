@@ -74,6 +74,8 @@ export interface SubagentQueryOptions {
   sessionReusePolicy?: RuntimeSessionReusePolicy;
   /** Runtime-level model override for this invocation. */
   modelOverride?: string | null;
+  /** Disable task/profile model fallback and force adapter invocation without model. */
+  suppressModelFallback?: boolean;
   /** Optional custom system append for the runtime workflow. */
   systemPromptAppend?: string;
   /** Optional partial-message stream mode (chat-like workflows). */
@@ -173,12 +175,16 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
   });
   const workflow = buildWorkflowSpec(options);
   const runtimeOptionsOverride = parseRuntimeOptions(task?.runtimeOptionsJson);
+  const suppressModelFallback = options.suppressModelFallback === true;
+  const modelOverride =
+    options.modelOverride ?? (suppressModelFallback ? null : (task?.modelOverride ?? null));
 
   const resolved = resolveRuntimeProfile({
     source: effective.source,
     profile: effective.profile,
     workflow,
-    modelOverride: options.modelOverride ?? task?.modelOverride ?? null,
+    modelOverride,
+    suppressModelFallback,
     runtimeOptionsOverride,
     fallbackRuntimeId: DEFAULT_RUNTIME_ID,
     fallbackProviderId: DEFAULT_PROVIDER_ID,
@@ -239,6 +245,7 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
       workflowKind: workflow.workflowKind,
       ...profileLogContext,
       usedFallbackSlashCommand: promptPolicy.usedFallbackSlashCommand,
+      suppressModelFallback,
       canResume,
     },
     "Resolved runtime execution context for subagent query",

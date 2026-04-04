@@ -103,6 +103,7 @@ describe("evaluateReviewCommentsForAutoMode", () => {
     expect(executeSubagentQueryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         modelOverride: "haiku",
+        suppressModelFallback: false,
         workflowSpec: expect.objectContaining({
           sessionReusePolicy: "never",
         }),
@@ -119,6 +120,7 @@ describe("evaluateReviewCommentsForAutoMode", () => {
     expect(executeSubagentQueryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         modelOverride: null,
+        suppressModelFallback: true,
         workflowSpec: expect.objectContaining({
           sessionReusePolicy: "never",
         }),

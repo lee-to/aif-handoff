@@ -16,6 +16,7 @@ export async function evaluateReviewCommentsForAutoMode(
   input: ReviewGateInput,
 ): Promise<ReviewGateResult> {
   const selectedModel = modelOption("haiku");
+  const suppressModelFallback = !("model" in selectedModel);
   const normalizedComments = (input.reviewComments ?? "").trim();
   const prompt = `Read the review comments and extract only the points that must be fixed.
 
@@ -47,6 +48,7 @@ Rules:
     workflowSpec,
     workflowKind: "review-gate",
     modelOverride: "model" in selectedModel ? selectedModel.model : null,
+    suppressModelFallback,
     systemPromptAppend: "Do not use tools or subagents. Reply directly in plain text.",
   });
 

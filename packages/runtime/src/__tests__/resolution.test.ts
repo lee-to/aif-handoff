@@ -61,6 +61,25 @@ describe("resolveRuntimeProfile", () => {
     expect(resolved.transport).toBe("sdk");
   });
 
+  it("omits model fallback when suppressModelFallback=true", () => {
+    const resolved = resolveRuntimeProfile({
+      source: "task_override",
+      profile: {
+        id: "profile-1",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        defaultModel: "profile-model",
+      },
+      modelOverride: "task-model",
+      suppressModelFallback: true,
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-test",
+      },
+    });
+
+    expect(resolved.model).toBeNull();
+  });
+
   it("throws when profile is disabled", () => {
     expect(() =>
       resolveRuntimeProfile({

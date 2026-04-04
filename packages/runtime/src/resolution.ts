@@ -38,6 +38,7 @@ export interface ResolveRuntimeProfileInput {
   env?: RuntimeResolutionEnv;
   workflow?: RuntimeWorkflowSpec;
   modelOverride?: string | null;
+  suppressModelFallback?: boolean;
   runtimeOptionsOverride?: Record<string, unknown> | null;
   fallbackRuntimeId?: string;
   fallbackProviderId?: string;
@@ -156,7 +157,10 @@ export function resolveRuntimeProfile(input: ResolveRuntimeProfileInput): Resolv
   const apiKey = resolveApiKey(apiKeyEnvVar, env);
   const baseUrl =
     normalizeString(profile?.baseUrl) ?? inferDefaultBaseUrl(runtimeId, providerId, env);
-  const model = normalizeString(input.modelOverride) ?? normalizeString(profile?.defaultModel);
+  const model =
+    input.suppressModelFallback === true
+      ? null
+      : (normalizeString(input.modelOverride) ?? normalizeString(profile?.defaultModel));
   const headers = profile?.headers ?? {};
   const mergedOptions = mergeRuntimeOptions(profile?.options, input.runtimeOptionsOverride);
   const options = applyTransportDefaults(transport, mergedOptions, env);
@@ -186,6 +190,7 @@ export function resolveRuntimeProfile(input: ResolveRuntimeProfileInput): Resolv
       hasBaseUrl: Boolean(resolved.baseUrl),
       hasApiKey: Boolean(resolved.apiKey),
       model: resolved.model,
+      suppressModelFallback: input.suppressModelFallback === true,
       optionKeys: Object.keys(resolved.options),
     },
     "Resolved runtime profile",

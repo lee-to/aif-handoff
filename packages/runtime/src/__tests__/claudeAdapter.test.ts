@@ -338,11 +338,7 @@ describe("Claude runtime adapter", () => {
       profileId: "profile-1",
     });
 
-    expect(models.map((model) => model.id)).toEqual([
-      "claude-sonnet-4-5",
-      "claude-opus-4-1",
-      "claude-haiku-3-5",
-    ]);
+    expect(models.map((model) => model.id)).toEqual(["sonnet", "opus", "haiku"]);
   });
 
   it("forwards resume mode and session id to Claude query options", async () => {

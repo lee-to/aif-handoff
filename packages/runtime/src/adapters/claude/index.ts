@@ -38,9 +38,9 @@ export interface CreateClaudeRuntimeAdapterOptions {
 }
 
 const DEFAULT_CLAUDE_MODELS: RuntimeModel[] = [
-  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", supportsStreaming: true },
-  { id: "claude-opus-4-1", label: "Claude Opus 4.1", supportsStreaming: true },
-  { id: "claude-haiku-3-5", label: "Claude Haiku 3.5", supportsStreaming: true },
+  { id: "sonnet", label: "Claude Sonnet", supportsStreaming: true },
+  { id: "opus", label: "Claude Opus", supportsStreaming: true },
+  { id: "haiku", label: "Claude Haiku", supportsStreaming: true },
 ];
 
 function createFallbackLogger(): ClaudeRuntimeAdapterLogger {
@@ -171,9 +171,9 @@ export function createClaudeRuntimeAdapter(
       id: runtimeId,
       providerId,
       displayName: options.displayName ?? "Claude",
-      lightModel: "claude-haiku-3-5",
+      lightModel: "haiku",
       defaultApiKeyEnvVar: "ANTHROPIC_API_KEY",
-      defaultModelPlaceholder: "claude-sonnet-4-5",
+      defaultModelPlaceholder: "sonnet",
       supportedTransports: [RuntimeTransport.SDK, RuntimeTransport.CLI, RuntimeTransport.API],
       capabilities: SDK_CAPABILITIES,
     },

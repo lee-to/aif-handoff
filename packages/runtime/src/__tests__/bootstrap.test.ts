@@ -18,7 +18,7 @@ describe("bootstrapRuntimeRegistry", () => {
     expect(claude.descriptor.capabilities.supportsResume).toBe(true);
     expect(claude.descriptor.capabilities.supportsSessionList).toBe(true);
     expect(claude.descriptor.capabilities.supportsAgentDefinitions).toBe(true);
-    expect(claude.descriptor.lightModel).toBe("claude-haiku-3-5");
+    expect(claude.descriptor.lightModel).toBe("haiku");
   });
 
   it("codex adapter has expected capabilities", async () => {

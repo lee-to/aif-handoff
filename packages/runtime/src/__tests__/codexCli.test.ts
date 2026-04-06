@@ -68,7 +68,7 @@ describe("codex cli transport", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [cliPath, args] = spawnMock.mock.calls[0] as [string, string[]];
     expect(cliPath).toBe("codex");
-    expect(args).toEqual(["exec", "--json"]);
+    expect(args).toEqual(["exec", "--json", "--model", "gpt-5.4"]);
     expect(child.stdin.write).toHaveBeenCalledWith("Implement feature");
 
     child.stdout.emit("data", "plain output");
@@ -87,7 +87,7 @@ describe("codex cli transport", () => {
     const runPromise = runCodexCli(createRunInput({ resume: true, sessionId: "thread-abc" }));
 
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-    expect(args).toEqual(["exec", "resume", "thread-abc", "--json"]);
+    expect(args).toEqual(["exec", "resume", "thread-abc", "--json", "--model", "gpt-5.4"]);
 
     child.stdout.emit("data", "resumed output");
     child.emit("close", 0);

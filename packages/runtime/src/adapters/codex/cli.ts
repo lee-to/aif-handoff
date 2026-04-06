@@ -41,10 +41,15 @@ function normalizeCliArgs(input: RuntimeRunInput): string[] {
   }
 
   // Default args — resume session or fresh exec
+  const args: string[] = ["exec"];
   if (input.resume && input.sessionId) {
-    return ["exec", "resume", input.sessionId, "--json"];
+    args.push("resume", input.sessionId);
   }
-  return ["exec", "--json"];
+  args.push("--json");
+  if (input.model) {
+    args.push("--model", input.model);
+  }
+  return args;
 }
 
 const ALLOWED_ENV_PREFIXES = [

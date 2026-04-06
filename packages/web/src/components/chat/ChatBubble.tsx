@@ -16,9 +16,10 @@ export function ChatBubble({ isOpen, onToggle }: ChatBubbleProps) {
       onClick={onToggle}
       size="icon"
       className={cn(
-        "fixed bottom-6 left-6 z-bubble h-14 w-14 rounded-full",
+        "fixed bottom-6 left-6 h-14 w-14 rounded-full",
         "transition-transform duration-300 ease-in-out hover:scale-105",
       )}
+      style={{ zIndex: "var(--z-bubble)" }}
       aria-label="Open chat"
     >
       <Bot className="h-6 w-6" />

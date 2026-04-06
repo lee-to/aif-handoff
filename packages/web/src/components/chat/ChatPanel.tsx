@@ -171,12 +171,12 @@ export function ChatPanel({ isOpen, projectId, taskId, onClose, onOpenTask }: Ch
     <div
       ref={panelRef}
       className={cn(
-        "fixed bottom-0 left-0 z-chat flex w-[800px] flex-col",
+        "fixed bottom-0 left-0 flex w-[800px] flex-col",
         "border-r border-border bg-background",
         "transition-transform duration-300 ease-in-out",
         isOpen ? "translate-x-0" : "-translate-x-full",
       )}
-      style={{ top: "var(--header-height, 65px)" }}
+      style={{ top: "var(--header-height, 65px)", zIndex: "var(--z-chat)" }}
     >
       {/* Header */}
       <div className="border-b border-border px-4 py-3">

@@ -365,7 +365,7 @@ describe("TaskDetail", () => {
     });
   });
 
-  it("should show confirmation before start_ai when plan file already exists", async () => {
+  it("should show confirmation before start_ai when plan file already exists and allow overwrite", async () => {
     const onClose = vi.fn();
     mockGetTaskPlanFileStatus.mockResolvedValueOnce({
       exists: true,
@@ -380,10 +380,33 @@ describe("TaskDetail", () => {
     });
     expect(mutateTaskEvent).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Overwrite & Re-plan" }));
     expect(mutateTaskEvent).toHaveBeenCalledWith({
       id: "detail-backlog",
       event: "start_ai",
+    });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("should accept existing plan when plan file already exists", async () => {
+    const onClose = vi.fn();
+    mockGetTaskPlanFileStatus.mockResolvedValueOnce({
+      exists: true,
+      path: "/tmp/project/.ai-factory/PLAN.md",
+    });
+
+    render(<TaskDetail taskId="detail-backlog" onClose={onClose} />, { wrapper: Wrapper });
+
+    fireEvent.click(screen.getByText("Start AI"));
+    await waitFor(() => {
+      expect(screen.getByText("Plan file already exists")).toBeDefined();
+    });
+    expect(mutateTaskEvent).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use Existing Plan" }));
+    expect(mutateTaskEvent).toHaveBeenCalledWith({
+      id: "detail-backlog",
+      event: "accept_existing_plan",
     });
     expect(onClose).toHaveBeenCalled();
   });

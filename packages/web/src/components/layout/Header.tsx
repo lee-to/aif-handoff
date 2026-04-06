@@ -74,7 +74,7 @@ export function Header({
   return (
     <header ref={headerRef} className="sticky top-0 z-60 border-b border-border bg-background">
       <div
-        className={`mx-auto flex w-full max-w-420 items-center ${isCompact ? "h-14 px-4 md:px-5" : "h-16 px-6 md:px-8"}`}
+        className={`mx-auto flex w-full items-center ${isCompact ? "h-14 px-4 md:px-5" : "h-16 px-6 md:px-8"}`}
       >
         <div className="flex items-center gap-3">
           <svg
@@ -232,7 +232,11 @@ export function Header({
         project={selectedProject}
         onImportComplete={onRoadmapImportComplete}
       />
-      <GlobalSettingsDialog open={globalSettingsOpen} onOpenChange={setGlobalSettingsOpen} />
+      <GlobalSettingsDialog
+        open={globalSettingsOpen}
+        onOpenChange={setGlobalSettingsOpen}
+        projectId={selectedProject?.id ?? null}
+      />
     </header>
   );
 }

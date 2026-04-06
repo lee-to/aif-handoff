@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   applyHumanTaskEvent,
@@ -168,9 +168,70 @@ function handleRegularTransition(input: EventHandlerInput): EventHandlerResult {
   return { ok: true, task: updated, broadcastType: "task:moved" };
 }
 
+function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult {
+  const task = findTaskById(input.taskId);
+  if (!task) {
+    return { ok: false, status: 404, error: "Task not found" };
+  }
+  if (task.status !== "backlog") {
+    return { ok: false, status: 409, error: "accept_existing_plan is only allowed from backlog" };
+  }
+
+  const project = findProjectById(task.projectId);
+  if (!project) {
+    return { ok: false, status: 404, error: "Project not found for task" };
+  }
+
+  const cfg = getProjectConfig(project.rootPath);
+  const planFilePath = task.isFix
+    ? resolve(project.rootPath, cfg.paths.fix_plan)
+    : resolve(project.rootPath, task.planPath || cfg.paths.plan);
+
+  if (!existsSync(planFilePath)) {
+    return { ok: false, status: 404, error: "Plan file not found on disk" };
+  }
+
+  const filePlan = readFileSync(planFilePath, "utf8");
+  if (!filePlan.trim()) {
+    return { ok: false, status: 409, error: "Plan file is empty" };
+  }
+
+  const nowIso = new Date().toISOString();
+  persistTaskPlanForTask({
+    taskId: input.taskId,
+    planText: filePlan,
+    projectRoot: project.rootPath,
+    isFix: task.isFix,
+    planPath: task.planPath ?? undefined,
+    updatedAt: nowIso,
+  });
+
+  setTaskFields(input.taskId, {
+    status: "plan_ready",
+    blockedReason: null,
+    blockedFromStatus: null,
+    retryAfter: null,
+    retryCount: 0,
+    reworkRequested: false,
+    reviewIterationCount: 0,
+    lastHeartbeatAt: nowIso,
+    updatedAt: nowIso,
+  });
+
+  const updated = findTaskById(input.taskId);
+  if (!updated) {
+    return { ok: false, status: 404, error: "Task not found after update" };
+  }
+
+  return { ok: true, task: updated, broadcastType: "task:moved" };
+}
+
 export async function handleTaskEvent(input: EventHandlerInput): Promise<EventHandlerResult> {
   if (input.event === "fast_fix") {
     return await handleFastFix(input);
+  }
+  if (input.event === "accept_existing_plan") {
+    return handleAcceptExistingPlan(input);
   }
   return handleRegularTransition(input);
 }

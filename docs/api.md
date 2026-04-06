@@ -350,7 +350,7 @@ Transitions a task through the state machine.
 
 | Current Status     | Valid Events                                             |
 | ------------------ | -------------------------------------------------------- |
-| `backlog`          | `start_ai`                                               |
+| `backlog`          | `start_ai`, `accept_existing_plan`                       |
 | `plan_ready`       | `start_implementation`, `request_replanning`, `fast_fix` |
 | `blocked_external` | `retry_from_blocked`                                     |
 | `done`             | `approve_done`, `request_changes`                        |
@@ -358,6 +358,7 @@ Transitions a task through the state machine.
 Additional constraints:
 
 - `start_implementation` requires `autoMode=false` (manual gate). For `autoMode=true`, implementation is picked automatically by the coordinator.
+- `accept_existing_plan` reads the plan file from disk, saves it to the database, and transitions directly to `plan_ready` — skipping the planning stage entirely. Returns `404` if the plan file does not exist on disk.
 - `fast_fix` requires `autoMode=false` and at least one human comment on the task.
 - `request_changes` transitions `done -> implementing`, sets `reworkRequested=true`, and resets watchdog retry state (`retryCount=0`).
 - With `autoMode=true`, coordinator can trigger this same `request_changes`-style rework loop automatically after review if fix items are extracted from `reviewComments`.
@@ -564,20 +565,20 @@ All events are JSON with this structure:
 }
 ```
 
-| Event             | Payload                             | Triggered By                                                                         |
-| ----------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `project:created` | Full project object                 | `POST /projects`                                                                     |
-| `task:created`    | Full task object                    | `POST /tasks`, `POST /projects/:id/roadmap/import`                                   |
-| `task:updated`    | Full task object                    | `PUT /tasks/:id`, `PATCH /tasks/:id/position`, `POST /tasks/:id/events` (`fast_fix`) |
-| `task:moved`      | Full task object                    | `POST /tasks/:id/events`                                                             |
-| `task:deleted`    | `{ id: string }`                    | `DELETE /tasks/:id`                                                                  |
-| `sync:task_created` | Full task object                  | MCP `handoff_create_task`                                                            |
-| `sync:task_updated` | Full task object                  | MCP `handoff_update_task`, `handoff_push_plan`                                       |
-| `sync:status_changed` | Full task object                | MCP `handoff_sync_status`                                                            |
-| `sync:plan_pushed` | Full task object                   | MCP `handoff_push_plan`                                                              |
-| `chat:token`      | `{ conversationId, token }`         | `POST /chat` — streaming response tokens                                             |
-| `chat:done`       | `{ conversationId }`                | `POST /chat` — stream completed                                                      |
-| `chat:error`      | `{ conversationId, message, code }` | `POST /chat` — error during streaming                                                |
+| Event                 | Payload                             | Triggered By                                                                         |
+| --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
+| `project:created`     | Full project object                 | `POST /projects`                                                                     |
+| `task:created`        | Full task object                    | `POST /tasks`, `POST /projects/:id/roadmap/import`                                   |
+| `task:updated`        | Full task object                    | `PUT /tasks/:id`, `PATCH /tasks/:id/position`, `POST /tasks/:id/events` (`fast_fix`) |
+| `task:moved`          | Full task object                    | `POST /tasks/:id/events`                                                             |
+| `task:deleted`        | `{ id: string }`                    | `DELETE /tasks/:id`                                                                  |
+| `sync:task_created`   | Full task object                    | MCP `handoff_create_task`                                                            |
+| `sync:task_updated`   | Full task object                    | MCP `handoff_update_task`, `handoff_push_plan`                                       |
+| `sync:status_changed` | Full task object                    | MCP `handoff_sync_status`                                                            |
+| `sync:plan_pushed`    | Full task object                    | MCP `handoff_push_plan`                                                              |
+| `chat:token`          | `{ conversationId, token }`         | `POST /chat` — streaming response tokens                                             |
+| `chat:done`           | `{ conversationId }`                | `POST /chat` — stream completed                                                      |
+| `chat:error`          | `{ conversationId, message, code }` | `POST /chat` — error during streaming                                                |
 
 ### Connection
 

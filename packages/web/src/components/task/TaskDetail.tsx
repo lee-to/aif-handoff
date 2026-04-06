@@ -194,17 +194,41 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
         disabled={actions.syncTaskPlanIsPending}
         onConfirm={actions.handleSyncPlanFromFile}
       />
-      <ConfirmDialog
-        open={actions.showStartAiConfirm}
-        onOpenChange={actions.setShowStartAiConfirm}
-        title="Plan file already exists"
-        description={`A plan file already exists${actions.startAiPlanPath ? ` (${actions.startAiPlanPath})` : ""}. AI will overwrite it. Continue?`}
-        confirmLabel="Continue"
-        onConfirm={() => {
-          actions.setShowStartAiConfirm(false);
-          actions.triggerStartAi();
-        }}
-      />
+      <Dialog open={actions.showStartAiConfirm} onOpenChange={actions.setShowStartAiConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Plan file already exists</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            A plan file already exists
+            {actions.startAiPlanPath ? ` (${actions.startAiPlanPath})` : ""}.
+          </p>
+          <div className="mt-4 flex flex-col gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                actions.setShowStartAiConfirm(false);
+                actions.handleAcceptExistingPlan();
+              }}
+            >
+              Use Existing Plan
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                actions.setShowStartAiConfirm(false);
+                actions.triggerStartAi();
+              }}
+            >
+              Overwrite & Re-plan
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => actions.setShowStartAiConfirm(false)}>
+              Cancel
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={actions.showApproveDoneConfirm}
         onOpenChange={actions.setShowApproveDoneConfirm}

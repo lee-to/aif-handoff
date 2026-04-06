@@ -828,6 +828,78 @@ describe("tasks API", () => {
       expect(body.status).toBe("planning");
     });
 
+    it("should accept existing plan from backlog and transition to plan_ready", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-accept-plan-"));
+      const aiFactoryDir = join(rootPath, ".ai-factory");
+      mkdirSync(aiFactoryDir, { recursive: true });
+      writeFileSync(join(aiFactoryDir, "PLAN.md"), "# Existing Plan\n\n- Step 1\n- Step 2\n");
+
+      db.insert(projects).values({ id: "proj-accept", name: "Accept", rootPath }).run();
+      db.insert(tasks)
+        .values({
+          id: "ev-accept-plan-1",
+          projectId: "proj-accept",
+          title: "Accept plan",
+          status: "backlog",
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-accept-plan-1/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "accept_existing_plan" }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("plan_ready");
+      expect(body.plan).toContain("Existing Plan");
+    });
+
+    it("should reject accept_existing_plan when plan file is missing", async () => {
+      const db = testDb.current;
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-accept-plan-missing-"));
+
+      db.insert(projects).values({ id: "proj-accept-miss", name: "Accept Miss", rootPath }).run();
+      db.insert(tasks)
+        .values({
+          id: "ev-accept-plan-2",
+          projectId: "proj-accept-miss",
+          title: "No plan file",
+          status: "backlog",
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-accept-plan-2/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "accept_existing_plan" }),
+      });
+
+      expect(res.status).toBe(404);
+    });
+
+    it("should reject accept_existing_plan from non-backlog status", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "ev-accept-plan-3",
+          projectId: "test-project",
+          title: "Wrong status",
+          status: "planning",
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-accept-plan-3/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "accept_existing_plan" }),
+      });
+
+      expect(res.status).toBe(409);
+    });
+
     it("should reject invalid event payload", async () => {
       const db = testDb.current;
       db.insert(tasks)

@@ -11,6 +11,8 @@ mkdirSync(aiFactoryDir, { recursive: true });
 
 const fakeHome = mkdtempSync(join(tmpdir(), "settings-home-"));
 
+const TEST_PROJECT_ID = "test-project-id";
+
 vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
   return {
@@ -18,6 +20,11 @@ vi.mock("@aif/shared", async (importOriginal) => {
     findMonorepoRoot: () => tempRoot,
   };
 });
+
+vi.mock("@aif/data", () => ({
+  findProjectById: (id: string) =>
+    id === TEST_PROJECT_ID ? { id, rootPath: tempRoot } : undefined,
+}));
 
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -50,8 +57,13 @@ describe("settings API — config routes", () => {
   });
 
   describe("GET /settings/config/status", () => {
-    it("returns exists: false when no config.yaml", async () => {
+    it("returns 400 when no projectId", async () => {
       const res = await app.request("/settings/config/status");
+      expect(res.status).toBe(400);
+    });
+
+    it("returns exists: false when no config.yaml", async () => {
+      const res = await app.request(`/settings/config/status?projectId=${TEST_PROJECT_ID}`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.exists).toBe(false);
@@ -59,7 +71,7 @@ describe("settings API — config routes", () => {
 
     it("returns exists: true when config.yaml exists", async () => {
       writeFileSync(configPath, "language:\n  ui: en\n");
-      const res = await app.request("/settings/config/status");
+      const res = await app.request(`/settings/config/status?projectId=${TEST_PROJECT_ID}`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.exists).toBe(true);
@@ -67,14 +79,19 @@ describe("settings API — config routes", () => {
   });
 
   describe("GET /settings/config", () => {
-    it("returns 404 when config.yaml missing", async () => {
+    it("returns 400 when no projectId", async () => {
       const res = await app.request("/settings/config");
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 404 when config.yaml missing", async () => {
+      const res = await app.request(`/settings/config?projectId=${TEST_PROJECT_ID}`);
       expect(res.status).toBe(404);
     });
 
     it("returns parsed config as JSON", async () => {
       writeFileSync(configPath, "language:\n  ui: ru\n  artifacts: en\n");
-      const res = await app.request("/settings/config");
+      const res = await app.request(`/settings/config?projectId=${TEST_PROJECT_ID}`);
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.config).toEqual({ language: { ui: "ru", artifacts: "en" } });
@@ -82,12 +99,21 @@ describe("settings API — config routes", () => {
   });
 
   describe("PUT /settings/config", () => {
+    it("returns 400 when no projectId", async () => {
+      const res = await app.request("/settings/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: { language: { ui: "en" } } }),
+      });
+      expect(res.status).toBe(400);
+    });
+
     it("writes config and returns success", async () => {
       // Create initial file so we can verify overwrite
       writeFileSync(configPath, "language:\n  ui: en\n");
 
       const newConfig = { language: { ui: "de", artifacts: "fr" }, git: { enabled: true } };
-      const res = await app.request("/settings/config", {
+      const res = await app.request(`/settings/config?projectId=${TEST_PROJECT_ID}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ config: newConfig }),
@@ -97,7 +123,7 @@ describe("settings API — config routes", () => {
       expect(body.success).toBe(true);
 
       // Verify file was actually written by reading back
-      const readRes = await app.request("/settings/config");
+      const readRes = await app.request(`/settings/config?projectId=${TEST_PROJECT_ID}`);
       const readBody = await readRes.json();
       expect(readBody.config.language.ui).toBe("de");
       expect(readBody.config.git.enabled).toBe(true);
@@ -105,7 +131,7 @@ describe("settings API — config routes", () => {
 
     it("rejects invalid config (not an object)", async () => {
       writeFileSync(configPath, "language:\n  ui: en\n");
-      const res = await app.request("/settings/config", {
+      const res = await app.request(`/settings/config?projectId=${TEST_PROJECT_ID}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ config: null }),

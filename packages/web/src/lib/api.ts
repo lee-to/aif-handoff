@@ -353,16 +353,16 @@ export const api = {
     return request("/settings/mcp", { method: "DELETE" });
   },
 
-  getConfigStatus(): Promise<{ exists: boolean; path: string }> {
-    return request("/settings/config/status");
+  getConfigStatus(projectId: string): Promise<{ exists: boolean; path: string }> {
+    return request(`/settings/config/status?projectId=${encodeURIComponent(projectId)}`);
   },
 
-  getConfig(): Promise<{ config: AifConfig }> {
-    return request("/settings/config");
+  getConfig(projectId: string): Promise<{ config: AifConfig }> {
+    return request(`/settings/config?projectId=${encodeURIComponent(projectId)}`);
   },
 
-  saveConfig(config: AifConfig): Promise<{ success: boolean }> {
-    return request("/settings/config", {
+  saveConfig(config: AifConfig, projectId: string): Promise<{ success: boolean }> {
+    return request(`/settings/config?projectId=${encodeURIComponent(projectId)}`, {
       method: "PUT",
       body: JSON.stringify({ config }),
     });

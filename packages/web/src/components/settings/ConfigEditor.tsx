@@ -40,6 +40,7 @@ const VERIFY_MODE_OPTIONS = [
 interface Props {
   config: AifConfig;
   onConfigChange: (config: AifConfig) => void;
+  projectId: string;
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -96,7 +97,7 @@ function ToggleField({
   );
 }
 
-export function ConfigEditor({ config, onConfigChange }: Props) {
+export function ConfigEditor({ config, onConfigChange, projectId }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -119,7 +120,7 @@ export function ConfigEditor({ config, onConfigChange }: Props) {
     setError(null);
     setSaved(false);
     try {
-      await api.saveConfig(config);
+      await api.saveConfig(config, projectId);
       setOriginal(JSON.stringify(config));
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);

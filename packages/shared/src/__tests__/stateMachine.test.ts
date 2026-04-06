@@ -58,6 +58,19 @@ describe("task state machine", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("allows accept_existing_plan from backlog", () => {
+    const result = applyHumanTaskEvent(makeTask("backlog"), "accept_existing_plan");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.patch.status).toBe("plan_ready");
+    }
+  });
+
+  it("rejects accept_existing_plan from non-backlog statuses", () => {
+    const result = applyHumanTaskEvent(makeTask("planning"), "accept_existing_plan");
+    expect(result.ok).toBe(false);
+  });
+
   it("allows approve_done from done", () => {
     const result = applyHumanTaskEvent(makeTask("done"), "approve_done");
     expect(result.ok).toBe(true);

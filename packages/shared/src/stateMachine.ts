@@ -33,6 +33,12 @@ export function applyHumanTaskEvent(
       }
       return { ok: true, patch: { ...CLEAN_STATE_RESET, status: "planning" } };
     }
+    case "accept_existing_plan": {
+      if (task.status !== "backlog") {
+        return { ok: false, error: "accept_existing_plan is only allowed from backlog" };
+      }
+      return { ok: true, patch: { ...CLEAN_STATE_RESET, status: "plan_ready" } };
+    }
     case "start_implementation": {
       if (task.status !== "plan_ready") {
         return { ok: false, error: "start_implementation is only allowed from plan_ready" };

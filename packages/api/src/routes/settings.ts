@@ -4,7 +4,8 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
-import { logger, findMonorepoRoot, getEnv } from "@aif/shared";
+import { findProjectById } from "@aif/data";
+import { logger, findMonorepoRoot, getEnv, clearProjectConfigCache } from "@aif/shared";
 
 const log = logger("api:settings");
 
@@ -47,7 +48,13 @@ function buildMcpServerEntry() {
   };
 }
 
-const CONFIG_PATH = join(MONOREPO_ROOT, ".ai-factory", "config.yaml");
+/** Resolve project config.yaml path from projectId query param */
+function resolveConfigPath(projectId: string | undefined): string | null {
+  if (!projectId) return null;
+  const project = findProjectById(projectId);
+  if (!project) return null;
+  return join(project.rootPath, ".ai-factory", "config.yaml");
+}
 
 export const settingsRoutes = new Hono();
 
@@ -108,18 +115,26 @@ settingsRoutes.delete("/mcp", async (c) => {
   }
 });
 
-/** Check if .ai-factory/config.yaml exists */
+/** Check if .ai-factory/config.yaml exists for a project */
 settingsRoutes.get("/config/status", (c) => {
-  return c.json({ exists: existsSync(CONFIG_PATH), path: CONFIG_PATH });
+  const configPath = resolveConfigPath(c.req.query("projectId"));
+  if (!configPath) {
+    return c.json({ error: "projectId is required" }, 400);
+  }
+  return c.json({ exists: existsSync(configPath), path: configPath });
 });
 
-/** Read .ai-factory/config.yaml as parsed JSON */
+/** Read .ai-factory/config.yaml for a project */
 settingsRoutes.get("/config", async (c) => {
-  if (!existsSync(CONFIG_PATH)) {
+  const configPath = resolveConfigPath(c.req.query("projectId"));
+  if (!configPath) {
+    return c.json({ error: "projectId is required" }, 400);
+  }
+  if (!existsSync(configPath)) {
     return c.json({ error: "config.yaml not found" }, 404);
   }
   try {
-    const raw = await readFile(CONFIG_PATH, "utf-8");
+    const raw = await readFile(configPath, "utf-8");
     const config = YAML.parse(raw) as Record<string, unknown>;
     return c.json({ config });
   } catch (error) {
@@ -131,8 +146,13 @@ settingsRoutes.get("/config", async (c) => {
   }
 });
 
-/** Write .ai-factory/config.yaml from JSON */
+/** Write .ai-factory/config.yaml for a project */
 settingsRoutes.put("/config", async (c) => {
+  const projectId = c.req.query("projectId");
+  const configPath = resolveConfigPath(projectId);
+  if (!configPath) {
+    return c.json({ error: "projectId is required" }, 400);
+  }
   try {
     const { config } = await c.req.json<{ config: Record<string, unknown> }>();
     if (!config || typeof config !== "object") {
@@ -143,8 +163,11 @@ settingsRoutes.put("/config", async (c) => {
       defaultKeyType: "PLAIN",
       defaultStringType: "PLAIN",
     });
-    await writeFile(CONFIG_PATH, yaml, "utf-8");
-    log.info("config.yaml updated");
+    await writeFile(configPath, yaml, "utf-8");
+    // Invalidate cached config so subsequent reads pick up the new values
+    const project = findProjectById(projectId!);
+    if (project) clearProjectConfigCache(project.rootPath);
+    log.info({ projectId }, "config.yaml updated");
     return c.json({ success: true });
   } catch (error) {
     log.error(

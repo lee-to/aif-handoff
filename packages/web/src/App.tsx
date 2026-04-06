@@ -159,9 +159,7 @@ function AppContent() {
         onToggleRuntimeProfiles={() => setRuntimeSettingsOpen((value) => !value)}
       />
 
-      <main
-        className={`mx-auto w-full max-w-[1680px] ${density === "compact" ? "p-4 md:p-5" : "p-6 md:p-8"}`}
-      >
+      <main className={`mx-auto w-full ${density === "compact" ? "p-4 md:p-5" : "p-6 md:p-8"}`}>
         {agentReadiness && !agentReadiness.ready ? (
           <div className="mb-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-800 dark:text-red-200">
             Runtime execution is not configured.{" "}

@@ -15,9 +15,10 @@ import type { AifConfig } from "@/lib/api";
 interface GlobalSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  projectId: string | null;
 }
 
-export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialogProps) {
+export function GlobalSettingsDialog({ open, onOpenChange, projectId }: GlobalSettingsDialogProps) {
   const [mcpInstalled, setMcpInstalled] = useState<boolean | null>(null);
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
@@ -35,23 +36,27 @@ export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialo
       () => setMcpInstalled(null),
     );
     setConfigData(null);
-    api.getConfigStatus().then(
-      (res) => {
-        setConfigExists(res.exists);
-        if (res.exists) {
-          setConfigLoading(true);
-          api.getConfig().then(
-            (r) => {
-              setConfigData(r.config);
-              setConfigLoading(false);
-            },
-            () => setConfigLoading(false),
-          );
-        }
-      },
-      () => setConfigExists(false),
-    );
-  }, [open]);
+    if (projectId) {
+      api.getConfigStatus(projectId).then(
+        (res) => {
+          setConfigExists(res.exists);
+          if (res.exists) {
+            setConfigLoading(true);
+            api.getConfig(projectId).then(
+              (r) => {
+                setConfigData(r.config);
+                setConfigLoading(false);
+              },
+              () => setConfigLoading(false),
+            );
+          }
+        },
+        () => setConfigExists(false),
+      );
+    } else {
+      setConfigExists(false);
+    }
+  }, [open, projectId]);
 
   const handleMcpInstall = async () => {
     setMcpLoading(true);
@@ -148,7 +153,11 @@ export function GlobalSettingsDialog({ open, onOpenChange }: GlobalSettingsDialo
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 </div>
               ) : configData ? (
-                <ConfigEditor config={configData} onConfigChange={setConfigData} />
+                <ConfigEditor
+                  config={configData}
+                  onConfigChange={setConfigData}
+                  projectId={projectId!}
+                />
               ) : null}
             </div>
           )}

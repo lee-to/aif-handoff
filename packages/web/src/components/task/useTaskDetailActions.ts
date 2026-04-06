@@ -210,6 +210,12 @@ export function useTaskDetailActions(task: Task | undefined, onClose: () => void
     onClose();
   };
 
+  const handleAcceptExistingPlan = () => {
+    if (!task) return;
+    taskEvent.mutate({ id: task.id, event: "accept_existing_plan" });
+    onClose();
+  };
+
   const handleStartAiClick = async () => {
     if (!task) return;
     if (isCheckingStartAiPlanFile) return;
@@ -331,6 +337,7 @@ export function useTaskDetailActions(task: Task | undefined, onClose: () => void
     startAiPlanPath,
     isCheckingStartAiPlanFile,
     triggerStartAi,
+    handleAcceptExistingPlan,
     // attachments
     handleTaskAttachmentsSelected,
     handleRemoveTaskAttachment,

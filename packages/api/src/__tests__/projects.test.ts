@@ -25,6 +25,26 @@ vi.mock("@aif/shared", async (importOriginal) => {
   };
 });
 
+vi.mock("@aif/runtime", () => ({
+  initProject: vi.fn(),
+  bootstrapRuntimeRegistry: vi.fn(() =>
+    Promise.resolve({
+      resolveRuntime: vi.fn(),
+      listRuntimes: vi.fn(() => []),
+      registerRuntimeModule: vi.fn(),
+    }),
+  ),
+}));
+
+vi.mock("../services/runtime.js", () => ({
+  getApiRuntimeRegistry: vi.fn(() =>
+    Promise.resolve({
+      resolveRuntime: vi.fn(),
+      listRuntimes: vi.fn(() => []),
+    }),
+  ),
+}));
+
 vi.mock("../ws.js", () => ({
   broadcast: vi.fn(),
   setupWebSocket: vi.fn(() => ({

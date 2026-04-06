@@ -61,6 +61,8 @@ vi.mock("@aif/runtime", () => ({
   createRuntimeModelDiscoveryService: mockCreateRuntimeModelDiscoveryService,
   createRuntimeWorkflowSpec: mockCreateRuntimeWorkflowSpec,
   redactResolvedRuntimeProfile: mockRedactResolvedRuntimeProfile,
+  resolveAdapterCapabilities: (adapter: { descriptor: { capabilities: unknown } }) =>
+    adapter.descriptor.capabilities,
   resolveRuntimeProfile: mockResolveRuntimeProfile,
   RUNTIME_TRUST_TOKEN: Symbol.for("aif.runtime.trust"),
 }));

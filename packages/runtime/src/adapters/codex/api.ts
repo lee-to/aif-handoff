@@ -154,7 +154,7 @@ export async function validateCodexAgentApiConnection(
 ): Promise<RuntimeConnectionValidationResult> {
   const baseUrl = resolveAgentApiBaseUrl(input);
   const options = asRecord(input.options);
-  const path = readString(options.agentApiValidationPath) ?? "/v1/runtime/health";
+  const path = readString(options.agentApiValidationPath) ?? "/v1/models";
   const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 
   try {

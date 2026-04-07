@@ -128,7 +128,7 @@ describe("codex agentapi transport", () => {
 
     expect(result).toEqual({ ok: true, message: "AgentAPI connection validated" });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://agent.example.com/v1/runtime/health");
+    expect(url).toBe("https://agent.example.com/v1/models");
     expect(init.method).toBe("GET");
   });
 
@@ -192,7 +192,7 @@ describe("codex agentapi transport", () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://agent.env/v1/runtime/health");
+    expect(url).toBe("https://agent.env/v1/models");
     const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe("Bearer env-key");
   });

@@ -52,7 +52,6 @@ export function ProjectRuntimeSettings({
   const [creating, setCreating] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusVariant, setStatusVariant] = useState<"success" | "error" | "neutral">("neutral");
-  const [profileApiKeys, setProfileApiKeys] = useState<Record<string, string>>({});
 
   const updateProject = useUpdateProject();
   const createProfile = useCreateRuntimeProfile();
@@ -100,11 +99,7 @@ export function ProjectRuntimeSettings({
     setStatusMessage(null);
     setStatusVariant("neutral");
     try {
-      const result = await validateProfile.mutateAsync({
-        profileId,
-        forceRefresh: true,
-        apiKey: profileApiKeys[profileId]?.trim() || undefined,
-      });
+      const result = await validateProfile.mutateAsync({ profileId, forceRefresh: true });
       const expectedEnvVar =
         result.details && typeof result.details.expectedEnvVar === "string"
           ? result.details.expectedEnvVar
@@ -272,45 +267,21 @@ export function ProjectRuntimeSettings({
             {profiles.map((profile) => (
               <div
                 key={profile.id}
-                className="space-y-1 rounded border border-border bg-background/40 px-2 py-1.5"
+                className="flex items-center justify-between rounded border border-border bg-background/40 px-2 py-1.5"
               >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium">
-                      {profile.name}{" "}
-                      <span className="text-muted-foreground">
-                        ({profile.runtimeId}/{profile.providerId})
-                      </span>
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      transport={profile.transport ?? "default"} model=
-                      {profile.defaultModel ?? "auto"} {profile.enabled ? "" : "disabled"}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Button size="sm" variant="outline" onClick={() => setEditingProfile(profile)}>
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => setDeletingProfile(profile)}
-                    >
-                      Delete
-                    </Button>
-                  </div>
+                <div>
+                  <p className="text-xs font-medium">
+                    {profile.name}{" "}
+                    <span className="text-muted-foreground">
+                      ({profile.runtimeId}/{profile.providerId})
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    transport={profile.transport ?? "default"} model=
+                    {profile.defaultModel ?? "auto"} {profile.enabled ? "" : "disabled"}
+                  </p>
                 </div>
                 <div className="flex items-center gap-1">
-                  <input
-                    type="password"
-                    className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs"
-                    value={profileApiKeys[profile.id] ?? ""}
-                    onChange={(e) =>
-                      setProfileApiKeys((prev) => ({ ...prev, [profile.id]: e.target.value }))
-                    }
-                    placeholder="API Key (not stored)"
-                    autoComplete="off"
-                  />
                   <Button
                     size="sm"
                     variant="outline"
@@ -318,6 +289,16 @@ export function ProjectRuntimeSettings({
                     disabled={validateProfile.isPending}
                   >
                     Validate
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setEditingProfile(profile)}>
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setDeletingProfile(profile)}
+                  >
+                    Delete
                   </Button>
                 </div>
               </div>

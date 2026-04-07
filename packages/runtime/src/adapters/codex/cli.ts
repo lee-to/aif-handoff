@@ -51,6 +51,11 @@ function normalizeCliArgs(input: RuntimeRunInput): string[] {
   if (input.model) {
     args.push("--model", input.model);
   }
+  // On Windows with shell: true, stdin piping through cmd.exe is unreliable.
+  // Pass the prompt via --prompt arg instead to avoid "Reading prompt from stdin..." hangs.
+  if (IS_WINDOWS && input.prompt) {
+    args.push("--prompt", input.prompt);
+  }
   return args;
 }
 

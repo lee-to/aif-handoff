@@ -51,7 +51,7 @@ packages/
 │       └── adapters/
 │           ├── TEMPLATE.ts      # Adapter development guide + skeleton
 │           ├── claude/          # Claude adapter (Agent SDK transport)
-│           └── codex/           # Codex adapter (CLI + API transports)
+│           └── codex/           # Codex adapter (SDK + CLI + API transports)
 ├── data/                # @aif/data — centralized data-access layer
 │   └── src/
 │       └── index.ts         # Repository-style DB operations for API/Agent

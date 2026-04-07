@@ -61,6 +61,20 @@ describe("resolveRuntimeProfile", () => {
     expect(resolved.transport).toBe("sdk");
   });
 
+  it("falls back to codex CLI defaults when no profile is selected", () => {
+    const resolved = resolveRuntimeProfile({
+      source: "none",
+      profile: null,
+      fallbackRuntimeId: "codex",
+      fallbackProviderId: "openai",
+      env: {},
+    });
+
+    expect(resolved.runtimeId).toBe("codex");
+    expect(resolved.providerId).toBe("openai");
+    expect(resolved.transport).toBe("cli");
+  });
+
   it("falls back to ANTHROPIC_MODEL when profile/default overrides are missing", () => {
     const resolved = resolveRuntimeProfile({
       source: "none",

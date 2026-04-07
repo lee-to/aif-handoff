@@ -115,8 +115,6 @@ CLI-specific options:
 
 Uses `@openai/codex-sdk` which wraps the Codex CLI with thread-based conversations, streaming events, and resume support. Auth is handled by the CLI's own login (`codex auth login`), same as Claude SDK.
 
-If `runtimeId=codex` is selected without an explicit `transport`, the system now defaults to `sdk`.
-
 ```json
 {
   "projectId": null,

@@ -8,6 +8,5 @@ import { z } from "zod";
  * the direct call fail on stricter TypeScript configurations.
  */
 export function jsonValidator<T extends z.ZodTypeAny>(schema: T) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return zValidator("json", schema as any);
 }

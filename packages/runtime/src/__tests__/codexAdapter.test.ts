@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runCodexCliMock = vi.fn();
 const runCodexAgentApiMock = vi.fn();
+const runCodexSdkMock = vi.fn();
 const validateCodexAgentApiConnectionMock = vi.fn();
 
 vi.mock("../adapters/codex/cli.js", () => ({
@@ -12,6 +13,10 @@ vi.mock("../adapters/codex/api.js", () => ({
   runCodexAgentApi: (...args: unknown[]) => runCodexAgentApiMock(...args),
   validateCodexAgentApiConnection: (...args: unknown[]) =>
     validateCodexAgentApiConnectionMock(...args),
+}));
+
+vi.mock("../adapters/codex/sdk.js", () => ({
+  runCodexSdk: (...args: unknown[]) => runCodexSdkMock(...args),
 }));
 
 const { createCodexRuntimeAdapter } = await import("../adapters/codex/index.js");
@@ -32,12 +37,14 @@ describe("Codex runtime adapter", () => {
   beforeEach(() => {
     runCodexCliMock.mockReset();
     runCodexAgentApiMock.mockReset();
+    runCodexSdkMock.mockReset();
     validateCodexAgentApiConnectionMock.mockReset();
     runCodexCliMock.mockResolvedValue({ outputText: "cli-output", sessionId: "cli-session" });
     runCodexAgentApiMock.mockResolvedValue({
       outputText: "agentapi-output",
       sessionId: "agentapi-session",
     });
+    runCodexSdkMock.mockResolvedValue({ outputText: "sdk-output", sessionId: "sdk-session" });
     validateCodexAgentApiConnectionMock.mockResolvedValue({
       ok: true,
       message: "agentapi ok",
@@ -52,6 +59,7 @@ describe("Codex runtime adapter", () => {
     expect(adapter.descriptor.capabilities.supportsModelDiscovery).toBe(true);
     expect(adapter.descriptor.capabilities.supportsCustomEndpoint).toBe(true);
     expect(adapter.descriptor.capabilities.supportsAgentDefinitions).toBe(false);
+    expect(adapter.descriptor.capabilities.supportsSessionList).toBe(false);
   });
 
   it("runs via CLI transport by default", async () => {

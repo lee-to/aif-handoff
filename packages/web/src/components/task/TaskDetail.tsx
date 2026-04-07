@@ -28,7 +28,13 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
   const { data: task } = useTask(taskId);
   const [selectedTab, setSelectedTab] = useState<TaskDetailTab | null>(null);
   const actions = useTaskDetailActions(task, onClose);
-  const defaultTab: TaskDetailTab = task?.status === "review" ? "review" : "implementation";
+  const defaultTab: TaskDetailTab = (() => {
+    if (!task) return "implementation";
+    if (task.status === "review") return "review";
+    if (task.implementationLog?.trim()) return "implementation";
+    if (task.agentActivityLog?.trim()) return "activity";
+    return "implementation";
+  })();
   const activeTab: TaskDetailTab = selectedTab ?? defaultTab;
 
   return (

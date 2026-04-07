@@ -109,6 +109,15 @@ const mockTaskNoPlanNoLog: Task = {
   agentActivityLog: null,
 };
 
+const mockPlanningTaskWithActivityOnly: Task = {
+  ...mockTask,
+  id: "detail-planning-activity",
+  status: "planning",
+  title: "Planning With Activity",
+  implementationLog: null,
+  agentActivityLog: "[2026-01-01] Tool: Read spec\n[2026-01-01] Agent: planning started",
+};
+
 const mutateUpdateTask = vi.fn();
 const mutateDeleteTask = vi.fn();
 const mutateTaskEvent = vi.fn();
@@ -145,7 +154,9 @@ vi.mock("@/hooks/useTasks", () => ({
                       ? mockTaskWithAttachment
                       : id === "detail-no-plan-no-log"
                         ? mockTaskNoPlanNoLog
-                        : null,
+                        : id === "detail-planning-activity"
+                          ? mockPlanningTaskWithActivityOnly
+                          : null,
   }),
   useUpdateTask: () => ({ mutate: mutateUpdateTask }),
   useDeleteTask: () => ({ mutate: mutateDeleteTask }),
@@ -242,6 +253,15 @@ describe("TaskDetail", () => {
     expect(screen.getAllByText("Read").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Write").length).toBeGreaterThan(0);
     expect(screen.getAllByText("TOOL").length).toBeGreaterThan(0);
+  });
+
+  it("defaults to activity tab when implementation log is empty but agent activity exists", () => {
+    render(<TaskDetail taskId="detail-planning-activity" onClose={vi.fn()} />, {
+      wrapper: Wrapper,
+    });
+
+    expect(screen.getByText(/Agent:\s+planning started/i)).toBeDefined();
+    expect(screen.getAllByText("AGENT").length).toBeGreaterThan(0);
   });
 
   it("should clear agent activity log with confirmation", () => {

@@ -17,6 +17,7 @@ import {
   type RuntimeWorkflowSpec,
 } from "@aif/runtime";
 import { getEnv, logger } from "@aif/shared";
+import { getCodexExecutionHooks } from "./codexExecutionHooks.js";
 import {
   findProjectById,
   findRuntimeProfileById,
@@ -288,6 +289,11 @@ export async function runApiRuntimeOneShot(input: {
         ? { HANDOFF_MODE: "1", HANDOFF_TASK_ID: input.taskId }
         : { HANDOFF_MODE: "1" },
       hooks: {
+        ...getCodexExecutionHooks({
+          runtimeId: context.resolvedProfile.runtimeId,
+          transport: context.resolvedProfile.transport,
+          bypassPermissions,
+        }),
         permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
         allowDangerouslySkipPermissions: bypassPermissions,
         _trustToken: RUNTIME_TRUST_TOKEN,

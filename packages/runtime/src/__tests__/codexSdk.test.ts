@@ -206,6 +206,36 @@ describe("runCodexSdk", () => {
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-5.4" }));
   });
 
+  it("passes approval policy and sandbox mode to thread options", async () => {
+    mockRunStreamed.mockResolvedValue({
+      events: createMockEvents([
+        { type: "thread.started", thread_id: "thread-approval" },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 },
+        },
+      ]),
+    });
+
+    await runCodexSdk(
+      createRunInput({
+        execution: {
+          hooks: {
+            approvalPolicy: "on-request",
+            sandboxMode: "workspace-write",
+          },
+        },
+      }),
+    );
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+      }),
+    );
+  });
+
   it("passes outputSchema to turn options", async () => {
     const schema = { type: "object", properties: { summary: { type: "string" } } };
     mockRunStreamed.mockResolvedValue({

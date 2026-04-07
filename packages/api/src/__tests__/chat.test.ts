@@ -178,7 +178,7 @@ describe("chat API", () => {
 
   it("streams runtime events and sends done", async () => {
     mockAdapterRun.mockImplementation(async (input: RuntimeRunInput) => {
-      const onEvent = input.metadata?.onEvent as
+      const onEvent = input.execution?.onEvent as
         | ((event: Record<string, unknown>) => void)
         | undefined;
       onEvent?.({ type: "stream:text", message: "Hello " });

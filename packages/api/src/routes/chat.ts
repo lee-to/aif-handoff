@@ -5,6 +5,7 @@ import {
   createRuntimeWorkflowSpec,
   getResultSessionId,
   isRuntimeErrorCategory,
+  RUNTIME_TRUST_TOKEN,
   resolveAdapterCapabilities,
   RuntimeTransport,
   type RuntimeAdapter,
@@ -40,6 +41,7 @@ import {
 import { chatRequestSchema, createChatSessionSchema, updateChatSessionSchema } from "../schemas.js";
 import { persistAttachments } from "../services/attachmentPersistence.js";
 import { readAttachment } from "../services/attachmentStorage.js";
+import { getCodexExecutionHooks } from "../services/codexExecutionHooks.js";
 import { broadcast, sendToClient } from "../ws.js";
 import {
   getCached,
@@ -808,19 +810,27 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
           ? { apiKeyEnvVar: runtimeContext.resolvedProfile.apiKeyEnvVar }
           : {}),
       },
-      metadata: {
-        permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
-        allowDangerouslySkipPermissions: bypassPermissions,
-        settings: { attribution: { commit: "", pr: "" } },
-        settingSources: ["project"],
+      execution: {
         includePartialMessages: true,
         maxTurns: 20,
+        onEvent: onRuntimeEvent,
+        systemPromptAppend: systemAppend,
         environment: {
           HANDOFF_MODE: "1",
           ...(taskId ? { HANDOFF_TASK_ID: taskId } : {}),
         },
-        systemPromptAppend: systemAppend,
-        onEvent: onRuntimeEvent,
+        hooks: {
+          ...getCodexExecutionHooks({
+            runtimeId,
+            transport: runtimeContext.resolvedProfile.transport,
+            bypassPermissions,
+          }),
+          permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
+          allowDangerouslySkipPermissions: bypassPermissions,
+          _trustToken: RUNTIME_TRUST_TOKEN,
+          settings: { attribution: { commit: "", pr: "" } },
+          settingSources: ["project"],
+        },
       },
     };
 

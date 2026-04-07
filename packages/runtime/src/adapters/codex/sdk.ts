@@ -139,6 +139,16 @@ function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
     threadOpts.model = input.model;
   }
 
+  const approvalPolicy = readString(options.approvalPolicy) ?? readString(hooks.approvalPolicy);
+  if (
+    approvalPolicy === "never" ||
+    approvalPolicy === "on-request" ||
+    approvalPolicy === "on-failure" ||
+    approvalPolicy === "untrusted"
+  ) {
+    threadOpts.approvalPolicy = approvalPolicy;
+  }
+
   // Skip git repo check if explicitly requested
   if (options.skipGitRepoCheck === true || hooks.skipGitRepoCheck === true) {
     threadOpts.skipGitRepoCheck = true;
@@ -152,6 +162,16 @@ function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
     sandboxMode === "danger-full-access"
   ) {
     threadOpts.sandboxMode = sandboxMode;
+  }
+
+  const networkAccessEnabled =
+    typeof options.networkAccessEnabled === "boolean"
+      ? options.networkAccessEnabled
+      : typeof hooks.networkAccessEnabled === "boolean"
+        ? hooks.networkAccessEnabled
+        : null;
+  if (typeof networkAccessEnabled === "boolean") {
+    threadOpts.networkAccessEnabled = networkAccessEnabled;
   }
 
   // Reasoning effort

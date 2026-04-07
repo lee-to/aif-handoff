@@ -104,18 +104,13 @@ describe("evaluateReviewCommentsForAutoMode", () => {
 
     await evaluateReviewCommentsForAutoMode(baseInput);
 
-    expect(executeSubagentQueryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelOverride: "claude-haiku-3-5",
-        suppressModelFallback: false,
-        workflowSpec: expect.objectContaining({
-          sessionReusePolicy: "never",
-        }),
-      }),
-    );
+    const call = executeSubagentQueryMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.modelOverride).toBe("claude-haiku-3-5");
+    expect(call.suppressModelFallback).toBeUndefined();
+    expect(call.workflowSpec).toEqual(expect.objectContaining({ sessionReusePolicy: "never" }));
   });
 
-  it("suppresses model fallback when adapter has no lightModel", async () => {
+  it("uses profile model fallback when adapter has no lightModel", async () => {
     resolveAdapterForTaskMock.mockResolvedValueOnce({
       descriptor: { lightModel: null },
     });
@@ -123,14 +118,9 @@ describe("evaluateReviewCommentsForAutoMode", () => {
 
     await evaluateReviewCommentsForAutoMode(baseInput);
 
-    expect(executeSubagentQueryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelOverride: null,
-        suppressModelFallback: true,
-        workflowSpec: expect.objectContaining({
-          sessionReusePolicy: "never",
-        }),
-      }),
-    );
+    const call = executeSubagentQueryMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.modelOverride).toBeNull();
+    expect(call.suppressModelFallback).toBeUndefined();
+    expect(call.workflowSpec).toEqual(expect.objectContaining({ sessionReusePolicy: "never" }));
   });
 });

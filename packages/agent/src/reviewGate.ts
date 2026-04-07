@@ -47,7 +47,6 @@ Rules:
     workflowSpec,
     workflowKind: "review-gate",
     modelOverride: lightModel,
-    suppressModelFallback: lightModel === null,
     systemPromptAppend: "Do not use tools or subagents. Reply directly in plain text.",
   });
 

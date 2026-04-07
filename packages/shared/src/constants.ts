@@ -1,9 +1,6 @@
 import type { TaskStatus } from "./types.js";
 
-export const STATUS_CONFIG: Record<
-  TaskStatus,
-  { label: string; color: string; order: number }
-> = {
+export const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string; order: number }> = {
   backlog: { label: "Backlog", color: "#6B7280", order: 0 },
   planning: { label: "Planning", color: "#F59E0B", order: 1 },
   plan_ready: { label: "Plan Ready", color: "#3B82F6", order: 2 },

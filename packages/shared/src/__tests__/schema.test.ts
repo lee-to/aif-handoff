@@ -38,10 +38,7 @@ describe("tasks schema", () => {
     const id = crypto.randomUUID();
     db.insert(tasks).values({ id, projectId: "test-project", title: "Original" }).run();
 
-    db.update(tasks)
-      .set({ title: "Updated", status: "planning" })
-      .where(eq(tasks.id, id))
-      .run();
+    db.update(tasks).set({ title: "Updated", status: "planning" }).where(eq(tasks.id, id)).run();
 
     const result = db.select().from(tasks).where(eq(tasks.id, id)).get();
     expect(result!.title).toBe("Updated");
@@ -61,15 +58,17 @@ describe("tasks schema", () => {
   it("should order tasks by position", () => {
     const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
 
-    db.insert(tasks).values({ id: ids[0], projectId: "test-project", title: "Third", position: 3000.0 }).run();
-    db.insert(tasks).values({ id: ids[1], projectId: "test-project", title: "First", position: 1000.0 }).run();
-    db.insert(tasks).values({ id: ids[2], projectId: "test-project", title: "Second", position: 2000.0 }).run();
+    db.insert(tasks)
+      .values({ id: ids[0], projectId: "test-project", title: "Third", position: 3000.0 })
+      .run();
+    db.insert(tasks)
+      .values({ id: ids[1], projectId: "test-project", title: "First", position: 1000.0 })
+      .run();
+    db.insert(tasks)
+      .values({ id: ids[2], projectId: "test-project", title: "Second", position: 2000.0 })
+      .run();
 
-    const results = db
-      .select()
-      .from(tasks)
-      .orderBy(tasks.position)
-      .all();
+    const results = db.select().from(tasks).orderBy(tasks.position).all();
 
     expect(results[0].title).toBe("First");
     expect(results[1].title).toBe("Second");
@@ -79,16 +78,18 @@ describe("tasks schema", () => {
   it("should support fractional position indexing", () => {
     const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
 
-    db.insert(tasks).values({ id: ids[0], projectId: "test-project", title: "A", position: 1000.0 }).run();
-    db.insert(tasks).values({ id: ids[1], projectId: "test-project", title: "C", position: 2000.0 }).run();
+    db.insert(tasks)
+      .values({ id: ids[0], projectId: "test-project", title: "A", position: 1000.0 })
+      .run();
+    db.insert(tasks)
+      .values({ id: ids[1], projectId: "test-project", title: "C", position: 2000.0 })
+      .run();
     // Insert between A and C
-    db.insert(tasks).values({ id: ids[2], projectId: "test-project", title: "B", position: 1500.0 }).run();
+    db.insert(tasks)
+      .values({ id: ids[2], projectId: "test-project", title: "B", position: 1500.0 })
+      .run();
 
-    const results = db
-      .select()
-      .from(tasks)
-      .orderBy(tasks.position)
-      .all();
+    const results = db.select().from(tasks).orderBy(tasks.position).all();
 
     expect(results.map((r) => r.title)).toEqual(["A", "B", "C"]);
   });
@@ -107,7 +108,9 @@ describe("tasks schema", () => {
 
     for (const status of statuses) {
       const id = crypto.randomUUID();
-      db.insert(tasks).values({ id, projectId: "test-project", title: `Task ${status}`, status }).run();
+      db.insert(tasks)
+        .values({ id, projectId: "test-project", title: `Task ${status}`, status })
+        .run();
       const result = db.select().from(tasks).where(eq(tasks.id, id)).get();
       expect(result!.status).toBe(status);
     }

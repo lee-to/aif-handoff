@@ -1,28 +1,40 @@
 import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
+import { jsonValidator } from "../middleware/zodValidator.js";
+import { z } from "zod";
 import {
-  query,
-  listSessions,
-  getSessionMessages,
-  getSessionInfo,
-} from "@anthropic-ai/claude-agent-sdk";
-import { logger, getEnv, findClaudePath, type ChatMessageAttachment } from "@aif/shared";
-
-const CLAUDE_PATH = findClaudePath();
-import type { ChatSession, ChatSessionMessage } from "@aif/shared";
-import { findProjectById } from "../repositories/projects.js";
-import { findTaskById, toTaskResponse } from "../repositories/tasks.js";
+  createRuntimeWorkflowSpec,
+  getResultSessionId,
+  isRuntimeErrorCategory,
+  resolveAdapterCapabilities,
+  RuntimeTransport,
+  type RuntimeAdapter,
+  type RuntimeEvent,
+  type RuntimeRunInput,
+} from "@aif/runtime";
 import {
-  createChatSession,
-  findChatSessionById,
-  listChatSessions,
-  updateChatSession,
-  deleteChatSession,
+  logger,
+  getEnv,
+  type ChatMessageAttachment,
+  type ChatSession,
+  type ChatSessionMessage,
+  type Task,
+  type WsEvent,
+} from "@aif/shared";
+import {
   createChatMessage,
+  createChatSession,
+  deleteChatSession,
+  findChatSessionById,
+  findProjectById,
+  findRuntimeProfileById,
+  findTaskById,
   listChatMessages,
-  updateChatSessionTimestamp,
-  toChatSessionResponse,
+  listChatSessions,
   toChatMessageResponse,
+  toChatSessionResponse,
+  toTaskResponse,
+  updateChatSession,
+  updateChatSessionTimestamp,
 } from "@aif/data";
 import { chatRequestSchema, createChatSessionSchema, updateChatSessionSchema } from "../schemas.js";
 import { persistAttachments } from "../services/attachmentPersistence.js";
@@ -30,11 +42,15 @@ import { readAttachment } from "../services/attachmentStorage.js";
 import { broadcast, sendToClient } from "../ws.js";
 import {
   getCached,
-  setCached,
   invalidateCache,
   sessionCacheKey,
+  setCached,
 } from "../services/sessionCache.js";
-import type { WsEvent, Task } from "@aif/shared";
+import {
+  assertApiRuntimeCapabilities,
+  getApiRuntimeRegistry,
+  resolveApiRuntimeContext,
+} from "../services/runtime.js";
 
 const PROJECT_SCOPE_SYSTEM_APPEND =
   "Project scope rule: work strictly inside the current working directory (project root). " +
@@ -56,6 +72,17 @@ Set "isFix" to true when the user describes a bug, defect, or asks to fix/repair
 
 2. TASK SUMMARY: When the user asks to summarize what was done on the current task (or any task you have context for), generate a concise summary covering: what was planned, what was implemented, review results, and current status.
 `.trim();
+
+const log = logger("chat-route");
+const API_RUNTIME_LOG = "api-runtime";
+type CreateChatSessionPayload = z.infer<typeof createChatSessionSchema>;
+type UpdateChatSessionPayload = z.infer<typeof updateChatSessionSchema>;
+type ChatRequestPayload = z.infer<typeof chatRequestSchema>;
+
+interface VirtualRuntimeSessionRef {
+  runtimeId: string;
+  sessionId: string;
+}
 
 function buildContextAppend(projectName: string, task: Task | null): string {
   const parts = [PROJECT_SCOPE_SYSTEM_APPEND];
@@ -82,11 +109,48 @@ function buildContextAppend(projectName: string, task: Task | null): string {
   return parts.join("\n");
 }
 
-const log = logger("chat-route");
+function normalizeRuntimeId(value: string): string {
+  return value.trim().toLowerCase();
+}
 
-function extractErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  return raw.replace(/^Claude Code returned an error result:\s*/i, "").trim();
+function formatVirtualRuntimeSessionId(
+  runtimeId: string,
+  runtimeSessionId: string,
+  transport?: string,
+): string {
+  if (transport === RuntimeTransport.SDK || transport === undefined) {
+    return `sdk:${runtimeSessionId}`;
+  }
+  return `runtime:${encodeURIComponent(runtimeId)}:${encodeURIComponent(runtimeSessionId)}`;
+}
+
+function parseVirtualRuntimeSessionId(
+  id: string,
+  fallbackRuntimeId?: string,
+): VirtualRuntimeSessionRef | null {
+  if (id.startsWith("sdk:")) {
+    const sessionId = id.slice(4).trim();
+    return sessionId
+      ? { runtimeId: fallbackRuntimeId ?? getEnv().AIF_DEFAULT_RUNTIME_ID, sessionId }
+      : null;
+  }
+
+  if (!id.startsWith("runtime:")) {
+    return null;
+  }
+
+  const match = /^runtime:([^:]+):(.+)$/.exec(id);
+  if (!match) return null;
+
+  const runtimeId = decodeURIComponent(match[1] ?? "").trim();
+  const sessionId = decodeURIComponent(match[2] ?? "").trim();
+
+  if (!runtimeId || !sessionId) return null;
+  return { runtimeId: normalizeRuntimeId(runtimeId), sessionId };
+}
+
+function runtimeSourceFromTransport(transport: string): "cli" | "agent" {
+  return transport === RuntimeTransport.CLI ? "cli" : "agent";
 }
 
 function classifyChatError(err: unknown): {
@@ -94,45 +158,27 @@ function classifyChatError(err: unknown): {
   code: string;
   message: string;
 } {
-  const message = extractErrorMessage(err);
-  const lowered = message.toLowerCase();
+  const message = err instanceof Error ? err.message : String(err);
 
-  if (
-    lowered.includes("out of extra usage") ||
-    lowered.includes("usage limit") ||
-    lowered.includes("rate limit")
-  ) {
-    return {
-      status: 429,
-      code: "CHAT_USAGE_LIMIT",
-      message,
-    };
+  if (isRuntimeErrorCategory(err, "rate_limit")) {
+    return { status: 429, code: "CHAT_USAGE_LIMIT", message };
   }
 
-  return {
-    status: 500,
-    code: "CHAT_REQUEST_FAILED",
-    message: "Chat request failed",
-  };
+  if (isRuntimeErrorCategory(err, "auth")) {
+    return { status: 500, code: "CHAT_AUTH_ERROR", message };
+  }
+
+  return { status: 500, code: "CHAT_REQUEST_FAILED", message: "Chat request failed" };
 }
 
-/**
- * Strip Claude Code internal XML tags from user messages (command-name, command-message, etc.)
- */
-function stripCommandTags(text: string): string {
-  return text
-    .replace(/<command-name>[^<]*<\/command-name>/g, "")
-    .replace(/<command-message>[^<]*<\/command-message>/g, "")
-    .replace(/<command-args>([^<]*)<\/command-args>/g, "$1")
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-    .replace(/<user-prompt-submit-hook>[\s\S]*?<\/user-prompt-submit-hook>/g, "")
-    .trim();
+/** Runtime-aware input sanitization. Uses adapter.sanitizeInput if available, otherwise passthrough. */
+function sanitizeRuntimeInput(text: string, adapter?: RuntimeAdapter): string {
+  return adapter?.sanitizeInput ? adapter.sanitizeInput(text) : text.trim();
 }
 
 /**
  * Strip the "Attached files:" block appended to user prompts.
- * SDK stores the full prompt; we only want the original user message.
+ * Runtime adapters may store the full prompt; we only want the original user message.
  */
 function stripAttachedFilesBlock(text: string): string {
   const idx = text.indexOf("\n\n---\nAttached files:\n");
@@ -140,16 +186,17 @@ function stripAttachedFilesBlock(text: string): string {
 }
 
 /**
- * Extract human-readable text from an SDK SessionMessage.message field.
- * Returns only user-visible text — skips thinking, tool_use, tool_result blocks.
+ * Extract human-readable text from message payloads.
+ * Returns only user-visible text — skips thinking/tool blocks.
  */
-function extractMessageContent(message: unknown): string {
-  if (typeof message === "string") return stripAttachedFilesBlock(stripCommandTags(message));
+function extractMessageContent(message: unknown, adapter?: RuntimeAdapter): string {
+  const sanitize = (t: string) => sanitizeRuntimeInput(t, adapter);
+
+  if (typeof message === "string") return stripAttachedFilesBlock(sanitize(message));
   if (!message || typeof message !== "object") return "";
 
   const msg = message as Record<string, unknown>;
-  if (typeof msg.content === "string")
-    return stripAttachedFilesBlock(stripCommandTags(msg.content));
+  if (typeof msg.content === "string") return stripAttachedFilesBlock(sanitize(msg.content));
 
   if (Array.isArray(msg.content)) {
     const parts: string[] = [];
@@ -158,14 +205,62 @@ function extractMessageContent(message: unknown): string {
       if (!b || typeof b !== "object") continue;
 
       if (b.type === "text" && typeof b.text === "string") {
-        parts.push(stripCommandTags(b.text));
+        parts.push(sanitize(b.text));
       }
-      // Skip thinking, tool_use, tool_result — intermediate turns, not user-visible
     }
     return stripAttachedFilesBlock(parts.join("\n\n").trim());
   }
 
   return "";
+}
+
+function eventRole(event: RuntimeEvent): "user" | "assistant" | null {
+  const roleValue =
+    event.data && typeof event.data === "object" && typeof event.data.role === "string"
+      ? event.data.role
+      : null;
+  if (roleValue === "user" || roleValue === "assistant") {
+    return roleValue;
+  }
+  return null;
+}
+
+function eventId(event: RuntimeEvent): string {
+  const raw =
+    event.data && typeof event.data === "object" && typeof event.data.id === "string"
+      ? event.data.id
+      : null;
+  return raw ?? crypto.randomUUID();
+}
+
+function buildChatRuntimeWorkflow(prompt: string, systemPromptAppend: string) {
+  return createRuntimeWorkflowSpec({
+    workflowKind: "chat",
+    prompt,
+    requiredCapabilities: [],
+    sessionReusePolicy: "resume_if_available",
+    systemPromptAppend,
+  });
+}
+
+async function resolveChatRuntimeAdapter(projectId: string, prompt: string, systemAppend: string) {
+  const workflow = buildChatRuntimeWorkflow(prompt, systemAppend);
+  const context = await resolveApiRuntimeContext({
+    projectId,
+    mode: "chat",
+    workflow,
+  });
+  assertApiRuntimeCapabilities({
+    adapter: context.adapter,
+    resolvedProfile: context.resolvedProfile,
+    workflow,
+  });
+  return { workflow, context };
+}
+
+async function getAdapterForRuntimeId(runtimeId: string): Promise<RuntimeAdapter> {
+  const registry = await getApiRuntimeRegistry();
+  return registry.resolveRuntime(runtimeId);
 }
 
 export const chatRouter = new Hono();
@@ -180,52 +275,98 @@ chatRouter.get("/sessions", async (c) => {
   }
   log.debug("GET /chat/sessions projectId=%s", projectId);
 
+  const project = findProjectById(projectId);
+  if (!project) {
+    return c.json({ error: "Project not found" }, 404);
+  }
+
   // DB-backed web sessions
   const dbRows = listChatSessions(projectId);
   const dbSessions = dbRows.map(toChatSessionResponse);
 
-  // Collect agentSessionIds that are already linked to DB sessions (avoid duplicates)
-  const linkedAgentSessionIds = new Set(
-    dbRows.map((r) => r.agentSessionId).filter(Boolean) as string[],
+  // Collect linked external runtime session IDs to avoid duplicates
+  const linkedRuntimeSessionIds = new Set(
+    dbRows.map((r) => r.runtimeSessionId ?? r.agentSessionId).filter(Boolean) as string[],
   );
 
-  // SDK sessions (CLI + agent) — scoped to project directory, cached with TTL
-  let sdkSessions: ChatSession[] = [];
+  let runtimeSessions: ChatSession[] = [];
+  const systemAppend = buildContextAppend(project.name, null);
   try {
-    const project = findProjectById(projectId);
-    if (project) {
-      const cacheKey = sessionCacheKey(project.rootPath);
-      let sdkList = getCached<Awaited<ReturnType<typeof listSessions>>>(cacheKey);
-      if (!sdkList) {
-        sdkList = await listSessions({ dir: project.rootPath });
-        setCached(cacheKey, sdkList);
-      }
-      log.debug(
-        "SDK listSessions returned %d sessions for dir=%s",
-        sdkList.length,
+    const { context } = await resolveChatRuntimeAdapter(
+      projectId,
+      "session-discovery",
+      systemAppend,
+    );
+    const adapter = context.adapter;
+    const runtimeId = context.resolvedProfile.runtimeId;
+    const caps = resolveAdapterCapabilities(adapter, context.resolvedProfile.transport);
+    if (!caps.supportsSessionList || !adapter.listSessions) {
+      log.warn(
+        {
+          projectId,
+          runtimeId,
+          profileId: context.resolvedProfile.profileId,
+        },
+        "WARN [chat-route] Runtime does not support external session listing; returning DB sessions only",
+      );
+    } else {
+      const cacheKey = sessionCacheKey(
+        runtimeId,
+        context.resolvedProfile.profileId,
         project.rootPath,
       );
+      let listed =
+        getCached<Awaited<ReturnType<NonNullable<typeof adapter.listSessions>>>>(cacheKey);
+      if (!listed) {
+        listed = await adapter.listSessions({
+          runtimeId,
+          providerId: context.resolvedProfile.providerId,
+          profileId: context.resolvedProfile.profileId,
+          projectRoot: project.rootPath,
+          limit: 50,
+        });
+        setCached(cacheKey, listed);
+      }
 
-      sdkSessions = sdkList
-        .filter((s) => !linkedAgentSessionIds.has(s.sessionId))
-        .map((s) => ({
-          id: `sdk:${s.sessionId}`,
+      runtimeSessions = listed
+        .filter((session) => !linkedRuntimeSessionIds.has(session.id))
+        .map((session) => ({
+          id: formatVirtualRuntimeSessionId(
+            runtimeId,
+            session.id,
+            context.resolvedProfile.transport,
+          ),
           projectId,
-          title: s.customTitle || s.summary || s.firstPrompt?.slice(0, 80) || "Untitled",
-          agentSessionId: s.sessionId,
-          source: "cli" as const,
-          createdAt: s.createdAt
-            ? new Date(s.createdAt).toISOString()
-            : new Date(s.lastModified).toISOString(),
-          updatedAt: new Date(s.lastModified).toISOString(),
+          title: session.title || "Untitled",
+          agentSessionId: null,
+          runtimeProfileId: context.resolvedProfile.profileId,
+          runtimeSessionId: session.id,
+          source: runtimeSourceFromTransport(context.resolvedProfile.transport),
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
         }));
+
+      log.debug(
+        {
+          projectId,
+          runtimeId,
+          profileId: context.resolvedProfile.profileId,
+          discovered: listed.length,
+          mergedRuntimeSessions: runtimeSessions.length,
+          dbSessions: dbSessions.length,
+        },
+        "DEBUG [chat-route] Runtime session discovery completed",
+      );
     }
   } catch (err) {
-    log.warn({ err }, "Failed to list SDK sessions, returning DB sessions only");
+    log.warn(
+      { err, projectId },
+      "WARN [chat-route] Failed runtime session discovery; returning DB sessions only",
+    );
   }
 
   // Merge, sort by updatedAt DESC, cap at 20
-  const all = [...dbSessions, ...sdkSessions]
+  const all = [...dbSessions, ...runtimeSessions]
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 20);
 
@@ -233,8 +374,8 @@ chatRouter.get("/sessions", async (c) => {
 });
 
 // POST /chat/sessions
-chatRouter.post("/sessions", zValidator("json", createChatSessionSchema as any), async (c) => {
-  const body = c.req.valid("json");
+chatRouter.post("/sessions", jsonValidator(createChatSessionSchema), async (c) => {
+  const body = c.req.valid("json") as CreateChatSessionPayload;
   log.debug("POST /chat/sessions projectId=%s title=%s", body.projectId, body.title);
   const row = createChatSession({ projectId: body.projectId, title: body.title });
   if (!row) {
@@ -250,28 +391,36 @@ chatRouter.get("/sessions/:id", async (c) => {
   const id = c.req.param("id");
   log.debug("GET /chat/sessions/%s", id);
 
-  // Handle SDK session IDs (prefixed with "sdk:")
-  if (id.startsWith("sdk:")) {
-    const sdkSessionId = id.slice(4);
+  const virtual = parseVirtualRuntimeSessionId(id);
+  if (virtual) {
     try {
-      const info = await getSessionInfo(sdkSessionId);
+      const adapter = await getAdapterForRuntimeId(virtual.runtimeId);
+      if (!adapter.getSession) {
+        return c.json({ error: "Runtime does not support session details" }, 404);
+      }
+      const info = await adapter.getSession({
+        runtimeId: virtual.runtimeId,
+        providerId: adapter.descriptor.providerId,
+        profileId: null,
+        sessionId: virtual.sessionId,
+      });
       if (!info) {
         return c.json({ error: "Chat session not found" }, 404);
       }
       const session: ChatSession = {
         id,
         projectId: "",
-        title: info.customTitle || info.summary || info.firstPrompt?.slice(0, 80) || "Untitled",
-        agentSessionId: info.sessionId,
-        source: "cli",
-        createdAt: info.createdAt
-          ? new Date(info.createdAt).toISOString()
-          : new Date(info.lastModified).toISOString(),
-        updatedAt: new Date(info.lastModified).toISOString(),
+        title: info.title || "Untitled",
+        agentSessionId: null,
+        runtimeProfileId: null,
+        runtimeSessionId: info.id,
+        source: "agent",
+        createdAt: info.createdAt,
+        updatedAt: info.updatedAt,
       };
       return c.json(session);
     } catch (err) {
-      log.warn({ err, sdkSessionId }, "Failed to get SDK session info");
+      log.warn({ err, runtimeId: virtual.runtimeId }, "Failed to get runtime session info");
       return c.json({ error: "Chat session not found" }, 404);
     }
   }
@@ -288,29 +437,42 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
   const id = c.req.param("id");
   log.debug("GET /chat/sessions/%s/messages", id);
 
-  // Handle SDK session messages
-  if (id.startsWith("sdk:")) {
-    const sdkSessionId = id.slice(4);
+  const virtual = parseVirtualRuntimeSessionId(id);
+  if (virtual) {
     try {
-      const sdkMessages = await getSessionMessages(sdkSessionId);
-      log.debug(
-        "SDK getSessionMessages returned %d messages for session=%s",
-        sdkMessages.length,
-        sdkSessionId,
-      );
-      const messages: ChatSessionMessage[] = sdkMessages
-        .filter((m) => m.type === "user" || m.type === "assistant")
-        .map((m) => ({
-          id: m.uuid,
-          sessionId: id,
-          role: m.type as "user" | "assistant",
-          content: extractMessageContent(m.message),
-          createdAt: new Date().toISOString(),
-        }))
-        .filter((m) => m.content.trim() !== "");
+      const adapter = await getAdapterForRuntimeId(virtual.runtimeId);
+      if (!adapter.listSessionEvents) {
+        return c.json({ error: "Runtime does not support session message listing" }, 404);
+      }
+
+      const runtimeEvents = await adapter.listSessionEvents({
+        runtimeId: virtual.runtimeId,
+        providerId: adapter.descriptor.providerId,
+        profileId: null,
+        sessionId: virtual.sessionId,
+      });
+
+      const messages: ChatSessionMessage[] = runtimeEvents
+        .map((event) => {
+          const role = eventRole(event);
+          const content = event.message ?? "";
+          if (!role || !content.trim()) return null;
+          return {
+            id: eventId(event),
+            sessionId: id,
+            role,
+            content: extractMessageContent(content, adapter),
+            createdAt: event.timestamp,
+          } as ChatSessionMessage;
+        })
+        .filter((message): message is ChatSessionMessage => Boolean(message));
+
       return c.json(messages);
     } catch (err) {
-      log.warn({ err, sdkSessionId }, "Failed to get SDK session messages");
+      log.warn(
+        { err, runtimeId: virtual.runtimeId, runtimeSessionId: virtual.sessionId },
+        "Failed to get runtime session messages",
+      );
       return c.json({ error: "Chat session not found" }, 404);
     }
   }
@@ -320,41 +482,69 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
     return c.json({ error: "Chat session not found" }, 404);
   }
 
-  // Linked SDK session — messages live in SDK, not DB
-  if (session.agentSessionId) {
-    try {
-      const sdkMessages = await getSessionMessages(session.agentSessionId);
-      // Load DB messages to merge attachment metadata (DB stores what SDK doesn't)
-      const dbMessages = listChatMessages(id);
-      const dbAttachmentsByContent = new Map<string, ChatSessionMessage["attachments"]>();
-      for (const dbMsg of dbMessages) {
-        const resp = toChatMessageResponse(dbMsg);
-        if (resp.attachments?.length) {
-          dbAttachmentsByContent.set(resp.content, resp.attachments);
-        }
-      }
+  const project = findProjectById(session.projectId);
+  const linkedRuntimeSessionId = session.runtimeSessionId ?? session.agentSessionId;
 
-      const messages: ChatSessionMessage[] = sdkMessages
-        .filter((m) => m.type === "user" || m.type === "assistant")
-        .map((m) => {
-          const content = extractMessageContent(m.message);
-          return {
-            id: m.uuid,
-            sessionId: id,
-            role: m.type as "user" | "assistant",
-            content,
-            ...(dbAttachmentsByContent.has(content)
-              ? { attachments: dbAttachmentsByContent.get(content) }
-              : {}),
-            createdAt: new Date().toISOString(),
-          };
-        })
-        .filter((m) => m.content.trim() !== "");
-      return c.json(messages);
+  if (linkedRuntimeSessionId && project) {
+    let runtimeId = getEnv().AIF_DEFAULT_RUNTIME_ID;
+    let providerId = getEnv().AIF_DEFAULT_PROVIDER_ID;
+    let profileId = session.runtimeProfileId ?? null;
+
+    if (session.runtimeProfileId) {
+      const profile = findRuntimeProfileById(session.runtimeProfileId);
+      if (profile) {
+        runtimeId = profile.runtimeId;
+        providerId = profile.providerId;
+        profileId = profile.id;
+      }
+    }
+
+    try {
+      const adapter = await getAdapterForRuntimeId(runtimeId);
+      if (adapter.listSessionEvents) {
+        const runtimeEvents = await adapter.listSessionEvents({
+          runtimeId,
+          providerId,
+          profileId,
+          projectRoot: project.rootPath,
+          sessionId: linkedRuntimeSessionId,
+        });
+
+        // Merge DB attachment metadata into runtime messages (attachments are persisted locally)
+        const dbMessages = listChatMessages(id);
+        const dbAttachmentsByContent = new Map<string, ChatSessionMessage["attachments"]>();
+        for (const dbMsg of dbMessages) {
+          const response = toChatMessageResponse(dbMsg);
+          if (response.attachments?.length) {
+            dbAttachmentsByContent.set(response.content, response.attachments);
+          }
+        }
+
+        const messages: ChatSessionMessage[] = runtimeEvents
+          .map((event) => {
+            const role = eventRole(event);
+            const rawContent = event.message ?? "";
+            const content = extractMessageContent(rawContent, adapter);
+            if (!role || !content.trim()) return null;
+            return {
+              id: eventId(event),
+              sessionId: id,
+              role,
+              content,
+              ...(dbAttachmentsByContent.has(content)
+                ? { attachments: dbAttachmentsByContent.get(content) }
+                : {}),
+              createdAt: event.timestamp,
+            } as ChatSessionMessage;
+          })
+          .filter((message): message is ChatSessionMessage => Boolean(message));
+
+        return c.json(messages);
+      }
     } catch (err) {
       log.warn(
-        { err, agentSessionId: session.agentSessionId },
-        "Failed to load SDK messages, falling back to DB",
+        { err, runtimeId, runtimeSessionId: linkedRuntimeSessionId },
+        "WARN [chat-route] Failed runtime session event load, falling back to DB messages",
       );
     }
   }
@@ -364,9 +554,9 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 });
 
 // PUT /chat/sessions/:id
-chatRouter.put("/sessions/:id", zValidator("json", updateChatSessionSchema as any), async (c) => {
+chatRouter.put("/sessions/:id", jsonValidator(updateChatSessionSchema), async (c) => {
   const id = c.req.param("id");
-  const body = c.req.valid("json");
+  const body = c.req.valid("json") as UpdateChatSessionPayload;
   log.debug("PUT /chat/sessions/%s title=%s", id, body.title);
   const existing = findChatSessionById(id);
   if (!existing) {
@@ -401,7 +591,6 @@ chatRouter.get("/sessions/:sessionId/attachments/:filename", async (c) => {
   const messages = listChatMessages(sessionId);
   const decodedFilename = decodeURIComponent(filename);
 
-  // Search all messages for the attachment
   for (const msg of messages) {
     const response = toChatMessageResponse(msg);
     const attachment = response.attachments?.find((a) => a.name === decodedFilename);
@@ -422,8 +611,8 @@ chatRouter.get("/sessions/:sessionId/attachments/:filename", async (c) => {
 });
 
 // POST /chat
-chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => {
-  const body = c.req.valid("json");
+chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
+  const body = c.req.valid("json") as ChatRequestPayload;
   const { projectId, message, clientId, conversationId, explore, taskId, attachments } = body;
   let { sessionId: inputSessionId } = body;
 
@@ -439,23 +628,33 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
     if (row) currentTask = toTaskResponse(row);
   }
 
+  const systemAppend = buildContextAppend(project.name, currentTask);
+  const runtimeResolution = await resolveChatRuntimeAdapter(projectId, message, systemAppend);
+  const runtimeContext = runtimeResolution.context;
+  const adapter = runtimeContext.adapter;
+  const runtimeId = runtimeContext.resolvedProfile.runtimeId;
+  const runtimeProfileId = runtimeContext.resolvedProfile.profileId;
+  const runtimeProviderId = runtimeContext.resolvedProfile.providerId;
+
   // Resolve or auto-create a chat session
   let chatSessionId = inputSessionId ?? null;
+  const incomingVirtual = chatSessionId ? parseVirtualRuntimeSessionId(chatSessionId) : null;
 
-  // SDK sessions (sdk:*) are virtual — create a real DB session linked to the agent session
-  if (chatSessionId?.startsWith("sdk:")) {
-    const sdkAgentSessionId = chatSessionId.slice(4);
-    log.debug("Resolving SDK session sdk:%s to DB session", sdkAgentSessionId);
+  // External runtime sessions are virtual — create a DB session linked to the runtime session
+  if (incomingVirtual) {
     const autoTitle = message.slice(0, 80);
-    const session = createChatSession({ projectId, title: autoTitle });
+    const session = createChatSession({
+      projectId,
+      title: autoTitle,
+      runtimeProfileId,
+      runtimeSessionId: incomingVirtual.sessionId,
+    });
     if (session) {
       chatSessionId = session.id;
-      updateChatSession(session.id, { agentSessionId: sdkAgentSessionId });
-      log.debug(
-        "Created DB session %s linked to SDK agent session %s",
-        chatSessionId,
-        sdkAgentSessionId,
-      );
+      updateChatSession(session.id, {
+        runtimeProfileId,
+        runtimeSessionId: incomingVirtual.sessionId,
+      });
       broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
     } else {
       chatSessionId = null;
@@ -470,13 +669,14 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
 
   if (!chatSessionId) {
     const autoTitle = message.slice(0, 80);
-    const session = createChatSession({ projectId, title: autoTitle });
+    const session = createChatSession({
+      projectId,
+      title: autoTitle,
+      runtimeProfileId,
+    });
     chatSessionId = session?.id ?? null;
-    if (chatSessionId) {
-      log.debug("Auto-created chat session sessionId=%s title=%s", chatSessionId, autoTitle);
-      if (session) {
-        broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
-      }
+    if (session) {
+      broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
     }
   }
 
@@ -487,20 +687,22 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
       clientId,
       conversationId: chatConversationId,
       sessionId: chatSessionId,
+      runtimeId,
+      runtimeProfileId,
+      runtimeProviderId,
+      logNamespace: API_RUNTIME_LOG,
       explore,
       taskId,
     },
-    "Chat request started",
+    "INFO [api-runtime] Chat request started",
   );
 
-  // Look up agentSessionId from DB for multi-turn resume
   const dbSession = chatSessionId ? findChatSessionById(chatSessionId) : null;
-  const resumeAgentSessionId = dbSession?.agentSessionId ?? undefined;
-  // Persist user message in DB (always, even for resumed SDK sessions — DB stores attachment metadata).
-  // For messages with attachments, persistence happens after file save in the try block below.
+  const resumeRuntimeSessionId =
+    dbSession?.runtimeSessionId ?? dbSession?.agentSessionId ?? undefined;
+
   if (chatSessionId && !attachments?.length) {
-    const userMsg = createChatMessage({ sessionId: chatSessionId, role: "user", content: message });
-    log.debug("Persisting user message sessionId=%s messageId=%s", chatSessionId, userMsg?.id);
+    createChatMessage({ sessionId: chatSessionId, role: "user", content: message });
   }
   if (chatSessionId) {
     updateChatSessionTimestamp(chatSessionId);
@@ -526,44 +728,19 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
         .join("\n\n");
       prompt = `${prompt}\n\n---\nAttached files:\n${fileContext}`;
     }
-    // Persist user message with attachment metadata (after files are saved)
+
     if (chatSessionId && attachments?.length) {
-      const userMsg = createChatMessage({
+      createChatMessage({
         sessionId: chatSessionId,
         role: "user",
         content: message,
         attachments: savedAttachments,
       });
-      log.debug(
-        "Persisting user message with attachments sessionId=%s messageId=%s",
-        chatSessionId,
-        userMsg?.id,
-      );
     }
 
-    const stream = query({
-      prompt,
-      options: {
-        ...(CLAUDE_PATH ? { pathToClaudeCodeExecutable: CLAUDE_PATH } : {}),
-        cwd: project.rootPath,
-        env: { ...process.env, HANDOFF_MODE: "1", ...(taskId ? { HANDOFF_TASK_ID: taskId } : {}) },
-        permissionMode: getEnv().AGENT_BYPASS_PERMISSIONS ? "bypassPermissions" : "acceptEdits",
-        ...(getEnv().AGENT_BYPASS_PERMISSIONS ? { allowDangerouslySkipPermissions: true } : {}),
-        settings: { attribution: { commit: "", pr: "" } },
-        settingSources: ["project"],
-        includePartialMessages: true,
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          append: buildContextAppend(project.name, currentTask),
-        },
-        ...(resumeAgentSessionId ? { resume: resumeAgentSessionId } : {}),
-        maxTurns: 20,
-      },
-    });
-
-    let agentSessionId: string | undefined;
+    const bypassPermissions = getEnv().AGENT_BYPASS_PERMISSIONS;
     let fullAssistantResponse = "";
+    let hasStreamedTokens = false;
 
     const sendToken = (text: string) => {
       const tokenEvent: WsEvent = {
@@ -573,138 +750,134 @@ chatRouter.post("/", zValidator("json", chatRequestSchema as any), async (c) => 
       sendToClient(clientId, tokenEvent);
     };
 
-    let hasStreamedTokens = false;
-
-    for await (const msg of stream) {
-      if (!msg || typeof msg !== "object" || !("type" in msg)) continue;
-      const typed = msg as { type: string; [key: string]: unknown };
-
-      // Capture session_id from init message for multi-turn resume
-      if (
-        typed.type === "system" &&
-        typed.subtype === "init" &&
-        typeof typed.session_id === "string"
-      ) {
-        agentSessionId = typed.session_id;
-        if (chatSessionId) {
-          updateChatSession(chatSessionId, { agentSessionId });
-        }
-        // New SDK session file exists on disk — invalidate cached listing
-        invalidateCache(sessionCacheKey(project.rootPath));
-        log.debug(
-          { agentSessionId, resumeAgentSessionId, conversationId: chatConversationId },
-          "Chat agent session initialized",
-        );
+    const onRuntimeEvent = (event: RuntimeEvent) => {
+      if (event.type === "stream:text" && event.message) {
+        hasStreamedTokens = true;
+        fullAssistantResponse += event.message;
+        sendToken(event.message);
+        return;
       }
 
-      // Stream text tokens to client via WS
-      if (typed.type === "stream_event") {
-        const event = (
-          typed as { event?: { type?: string; delta?: { type?: string; text?: string } } }
-        ).event;
-        if (
-          event?.type === "content_block_delta" &&
-          event.delta?.type === "text_delta" &&
-          event.delta.text
-        ) {
-          hasStreamedTokens = true;
-          fullAssistantResponse += event.delta.text;
-          sendToken(event.delta.text);
-          log.debug(
-            { conversationId: chatConversationId, tokenLength: event.delta.text.length },
-            "Streamed chat token",
-          );
-        }
+      if (event.type === "tool:summary" && event.message) {
+        sendToken(`\n\n> ${event.message}\n\n`);
       }
+    };
 
-      // Stream tool use summaries as visible text
-      if (typed.type === "tool_use_summary" && typeof typed.summary === "string") {
-        sendToken(`\n\n> ${typed.summary}\n\n`);
-        log.debug({ conversationId: chatConversationId }, "Streamed tool use summary");
-      }
+    const runInput: RuntimeRunInput = {
+      runtimeId,
+      providerId: runtimeProviderId,
+      profileId: runtimeProfileId,
+      workflowKind: "chat",
+      transport: runtimeContext.resolvedProfile.transport,
+      prompt,
+      model: runtimeContext.resolvedProfile.model ?? undefined,
+      sessionId: resumeRuntimeSessionId,
+      resume: Boolean(resumeRuntimeSessionId),
+      projectRoot: project.rootPath,
+      cwd: project.rootPath,
+      headers: runtimeContext.resolvedProfile.headers,
+      options: {
+        ...runtimeContext.resolvedProfile.options,
+        ...(runtimeContext.resolvedProfile.baseUrl
+          ? { baseUrl: runtimeContext.resolvedProfile.baseUrl }
+          : {}),
+        ...(runtimeContext.resolvedProfile.apiKey
+          ? { apiKey: runtimeContext.resolvedProfile.apiKey }
+          : {}),
+        ...(runtimeContext.resolvedProfile.apiKeyEnvVar
+          ? { apiKeyEnvVar: runtimeContext.resolvedProfile.apiKeyEnvVar }
+          : {}),
+      },
+      metadata: {
+        permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
+        allowDangerouslySkipPermissions: bypassPermissions,
+        settings: { attribution: { commit: "", pr: "" } },
+        settingSources: ["project"],
+        includePartialMessages: true,
+        maxTurns: 20,
+        environment: {
+          HANDOFF_MODE: "1",
+          ...(taskId ? { HANDOFF_TASK_ID: taskId } : {}),
+        },
+        systemPromptAppend: systemAppend,
+        onEvent: onRuntimeEvent,
+      },
+    };
 
-      // Handle result message — surface errors and permission denials
-      if (typed.type === "result") {
-        if (typed.subtype === "success") {
-          log.info({ conversationId: chatConversationId }, "Chat request completed successfully");
+    const chatCapsForResume = resolveAdapterCapabilities(
+      adapter,
+      runtimeContext.resolvedProfile.transport,
+    );
+    const canResume =
+      Boolean(resumeRuntimeSessionId) &&
+      chatCapsForResume.supportsResume &&
+      Boolean(adapter.resume);
+    const result =
+      canResume && adapter.resume
+        ? await adapter.resume({ ...runInput, sessionId: resumeRuntimeSessionId! })
+        : await adapter.run({
+            ...runInput,
+            sessionId: undefined,
+            resume: false,
+          });
 
-          // If no tokens were streamed (e.g. SDK returned a result without calling the model),
-          // surface the result text directly so the user sees the response.
-          if (!hasStreamedTokens && typeof typed.result === "string" && typed.result) {
-            fullAssistantResponse += typed.result;
-            sendToken(typed.result);
-          }
-
-          // Surface permission denials
-          const denials = typed.permission_denials as
-            | Array<{ tool_name: string; tool_input?: Record<string, unknown> }>
-            | undefined;
-          if (denials?.length) {
-            const names = denials.map((d) => d.tool_name).join(", ");
-            sendToken(
-              `\n\n**Permission denied** for tool(s): ${names}. The operation was blocked by the current permission mode.\n`,
-            );
-          }
-        } else {
-          log.error(
-            { conversationId: chatConversationId, subtype: typed.subtype },
-            "Chat query ended with non-success",
-          );
-
-          // Surface error details and permission denials to the user
-          const errors = typed.errors as string[] | undefined;
-          const denials = typed.permission_denials as Array<{ tool_name: string }> | undefined;
-          const parts: string[] = [];
-
-          if (typed.subtype === "error_max_turns") {
-            parts.push("**Reached max turns limit** — the agent stopped after 20 turns.");
-          } else if (typed.subtype === "error_max_budget_usd") {
-            parts.push("**Budget limit reached** — the agent exceeded the allowed cost.");
-          } else if (errors?.length) {
-            parts.push(`**Error:** ${errors.join("; ")}`);
-          } else {
-            parts.push(`**Error:** agent stopped unexpectedly (${String(typed.subtype)}).`);
-          }
-
-          if (denials?.length) {
-            const names = denials.map((d) => d.tool_name).join(", ");
-            parts.push(`**Permission denied** for: ${names}.`);
-          }
-
-          sendToken("\n\n" + parts.join("\n") + "\n");
-        }
-      }
+    const chatCaps = resolveAdapterCapabilities(adapter, runtimeContext.resolvedProfile.transport);
+    const runtimeSessionId = getResultSessionId(result, chatCaps) ?? resumeRuntimeSessionId ?? null;
+    if (chatSessionId && runtimeSessionId) {
+      updateChatSession(chatSessionId, {
+        runtimeProfileId,
+        runtimeSessionId,
+      });
+      invalidateCache(sessionCacheKey(runtimeId, runtimeProfileId, project.rootPath));
+      log.debug(
+        {
+          runtimeId,
+          runtimeProfileId,
+          runtimeSessionId,
+          sessionId: chatSessionId,
+        },
+        "DEBUG [chat-route] Persisted runtime session link",
+      );
     }
 
-    // Persist assistant response (skip for linked SDK sessions — SDK stores via resume)
-    if (chatSessionId && fullAssistantResponse && !resumeAgentSessionId) {
+    if (!hasStreamedTokens && result.outputText) {
+      fullAssistantResponse += result.outputText;
+      sendToken(result.outputText);
+    }
+
+    // Persist assistant response only for non-resume sessions to avoid duplicates in external stores
+    if (chatSessionId && fullAssistantResponse && !resumeRuntimeSessionId) {
       createChatMessage({
         sessionId: chatSessionId,
         role: "assistant",
         content: fullAssistantResponse,
       });
-      log.debug("Persisting assistant response sessionId=%s", chatSessionId);
     }
     if (chatSessionId) {
       updateChatSessionTimestamp(chatSessionId);
     }
 
-    // Signal completion
     const doneEvent: WsEvent = {
       type: "chat:done",
       payload: { conversationId: chatConversationId },
     };
     sendToClient(clientId, doneEvent);
 
-    log.info({ conversationId: chatConversationId }, "Chat request ended");
-
     return c.json({
       conversationId: chatConversationId,
       sessionId: chatSessionId,
+      runtime: {
+        runtimeId,
+        profileId: runtimeProfileId,
+        providerId: runtimeProviderId,
+      },
       ...(savedAttachments?.length ? { attachments: savedAttachments } : {}),
     });
   } catch (err) {
-    log.error({ err, conversationId: chatConversationId }, "Chat request failed");
+    log.error(
+      { err, runtimeId, runtimeProfileId, runtimeProviderId, conversationId: chatConversationId },
+      "Chat request failed",
+    );
     const classified = classifyChatError(err);
 
     const errorEvent: WsEvent = {

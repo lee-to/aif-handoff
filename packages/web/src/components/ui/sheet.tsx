@@ -48,7 +48,7 @@ function SheetContent({ className, children, ...props }: React.HTMLAttributes<HT
   return (
     <div
       className={cn(
-        "fixed right-0 bottom-0 z-50 w-full max-w-lg border-l border-border bg-card p-6 transition-transform duration-200",
+        "fixed right-0 bottom-0 w-full max-w-lg border-l border-border bg-card p-6 transition-transform duration-200",
         className,
       )}
       style={{ top: "var(--header-height, 65px)", ...props.style }}

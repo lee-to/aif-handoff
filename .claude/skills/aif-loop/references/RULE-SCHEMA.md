@@ -17,14 +17,14 @@ Format, conventions, and scoring formula for evaluation rules.
 
 ### Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | yes | Unique identifier (see ID Convention below) |
-| `description` | string | yes | Human-readable description of what the rule checks |
-| `severity` | enum | yes | `fail`, `warn`, or `info` |
-| `weight` | number | yes | Score weight: `fail`=2, `warn`=1, `info`=0 |
-| `phase` | string | yes | Phase level when rule activates: `A` or `B` |
-| `check` | string | yes | Human-readable instruction for how to verify this rule. PREPARE phase materializes this into concrete executable/content checks |
+| Field         | Type   | Required | Description                                                                                                                     |
+| ------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | string | yes      | Unique identifier (see ID Convention below)                                                                                     |
+| `description` | string | yes      | Human-readable description of what the rule checks                                                                              |
+| `severity`    | enum   | yes      | `fail`, `warn`, or `info`                                                                                                       |
+| `weight`      | number | yes      | Score weight: `fail`=2, `warn`=1, `info`=0                                                                                      |
+| `phase`       | string | yes      | Phase level when rule activates: `A` or `B`                                                                                     |
+| `check`       | string | yes      | Human-readable instruction for how to verify this rule. PREPARE phase materializes this into concrete executable/content checks |
 
 ## ID Convention
 
@@ -35,6 +35,7 @@ Format: `<phase>.<category>.<specific>`
 - `<specific>`: concrete aspect (e.g., `endpoints`, `naming`, `examples`, `schemas`)
 
 Examples:
+
 - `a.correctness.endpoints` - core endpoints present (phase A)
 - `a.completeness.examples` - JSON examples included (phase A)
 - `b.style.naming` - consistent naming conventions (phase B)
@@ -42,11 +43,11 @@ Examples:
 
 ## Severity Levels
 
-| Severity | Effect | Weight | Description |
-|----------|--------|--------|-------------|
-| `fail` | Blocks pass | 2 | Must be fixed before iteration can pass |
-| `warn` | Reduces score | 1 | Should be fixed but does not hard-block |
-| `info` | No score impact | 0 | Informational, tracked but not scored |
+| Severity | Effect          | Weight | Description                             |
+| -------- | --------------- | ------ | --------------------------------------- |
+| `fail`   | Blocks pass     | 2      | Must be fixed before iteration can pass |
+| `warn`   | Reduces score   | 1      | Should be fixed but does not hard-block |
+| `info`   | No score impact | 0      | Informational, tracked but not scored   |
 
 ## Score Formula
 
@@ -55,6 +56,7 @@ score = sum(passed_weights) / sum(all_active_weights)
 ```
 
 Where:
+
 - `passed_weights` = sum of `weight` for all rules with verdict `pass`
 - `all_active_weights` = sum of `weight` for all rules active in current phase level (excluding `info` rules with weight 0)
 

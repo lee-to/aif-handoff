@@ -1,10 +1,5 @@
 {
   "name": "aif-handoff",
-  "groups": [
-    "ai"
-  ],
-  "share": [
-    "package.json",
-    "README.md"
-  ]
+  "groups": ["ai"],
+  "share": ["package.json", "README.md"]
 }

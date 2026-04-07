@@ -106,6 +106,7 @@ Requirements:
     projectRoot,
     agentName: AGENT_NAME,
     prompt,
+    profileMode: "plan",
     maxBudgetUsd: planCheckerBudget,
   });
 

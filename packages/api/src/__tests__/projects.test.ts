@@ -25,6 +25,26 @@ vi.mock("@aif/shared", async (importOriginal) => {
   };
 });
 
+vi.mock("@aif/runtime", () => ({
+  initProject: vi.fn(),
+  bootstrapRuntimeRegistry: vi.fn(() =>
+    Promise.resolve({
+      resolveRuntime: vi.fn(),
+      listRuntimes: vi.fn(() => []),
+      registerRuntimeModule: vi.fn(),
+    }),
+  ),
+}));
+
+vi.mock("../services/runtime.js", () => ({
+  getApiRuntimeRegistry: vi.fn(() =>
+    Promise.resolve({
+      resolveRuntime: vi.fn(),
+      listRuntimes: vi.fn(() => []),
+    }),
+  ),
+}));
+
 vi.mock("../ws.js", () => ({
   broadcast: vi.fn(),
   setupWebSocket: vi.fn(() => ({
@@ -201,5 +221,44 @@ describe("projects API", () => {
     const body = await res.json();
     expect(body.name).toBe("Demo");
     expect(body.rootPath).toBe("/tmp/demo-project");
+  });
+
+  it("persists per-stage runtime profile IDs on project update", async () => {
+    // Create a project first
+    const createRes = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Staged", rootPath: "/tmp/staged-project" }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json();
+
+    // Update with per-stage profile IDs
+    const updateRes = await app.request(`/projects/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Staged",
+        rootPath: "/tmp/staged-project",
+        defaultTaskRuntimeProfileId: "profile-task",
+        defaultPlanRuntimeProfileId: "profile-plan",
+        defaultReviewRuntimeProfileId: "profile-review",
+        defaultChatRuntimeProfileId: "profile-chat",
+      }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+
+    expect(updated.defaultTaskRuntimeProfileId).toBe("profile-task");
+    expect(updated.defaultPlanRuntimeProfileId).toBe("profile-plan");
+    expect(updated.defaultReviewRuntimeProfileId).toBe("profile-review");
+    expect(updated.defaultChatRuntimeProfileId).toBe("profile-chat");
+
+    // Verify persistence by re-fetching
+    const getRes = await app.request(`/projects`);
+    const projects = await getRes.json();
+    const refetched = projects.find((p: { id: string }) => p.id === created.id);
+    expect(refetched.defaultPlanRuntimeProfileId).toBe("profile-plan");
+    expect(refetched.defaultReviewRuntimeProfileId).toBe("profile-review");
   });
 });

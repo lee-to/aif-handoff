@@ -54,10 +54,7 @@ export class RateLimiter {
     );
 
     if (bucket.tokens < 1) {
-      log.warn(
-        { toolName, category, tokens: bucket.tokens.toFixed(2) },
-        "Rate limit hit",
-      );
+      log.warn({ toolName, category, tokens: bucket.tokens.toFixed(2) }, "Rate limit hit");
       return false;
     }
 

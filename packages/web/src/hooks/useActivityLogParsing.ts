@@ -3,12 +3,20 @@ import { useMemo, useState } from "react";
 export type ActivityKind = "tool" | "error" | "agent" | "info";
 export type ActivityFilter = "all" | "tool" | "error" | "agent";
 
+export interface RuntimeMeta {
+  runtimeId?: string;
+  transport?: string;
+  profileId?: string;
+  model?: string;
+}
+
 export interface ParsedEntry {
   raw: string;
   timestamp: string | null;
   message: string;
   kind: ActivityKind;
   toolName?: string;
+  runtimeMeta?: RuntimeMeta;
 }
 
 export function parseEntry(line: string): ParsedEntry {
@@ -33,7 +41,28 @@ export function parseEntry(line: string): ParsedEntry {
   const isError = lower.includes("failed") || lower.includes("error");
   const kind: ActivityKind = isError ? "error" : isAgent ? "agent" : "info";
 
-  return { raw: line, timestamp, message: content, kind };
+  const runtimeMeta = parseRuntimeMeta(content);
+  const cleanMessage = runtimeMeta ? content.replace(/\s*\(runtime=[^)]*\)/, "").trim() : content;
+
+  return { raw: line, timestamp, message: cleanMessage, kind, runtimeMeta };
+}
+
+function parseRuntimeMeta(content: string): RuntimeMeta | undefined {
+  const match = content.match(/\(runtime=([^,)]+)/);
+  if (!match) return undefined;
+
+  const block = content.match(/\([^)]*\)$/)?.[0] ?? "";
+  const get = (key: string) => {
+    const m = block.match(new RegExp(`${key}=([^,)]+)`));
+    return m && m[1] !== "default" ? m[1] : undefined;
+  };
+
+  return {
+    runtimeId: get("runtime"),
+    transport: get("transport"),
+    profileId: get("profile"),
+    model: get("model"),
+  };
 }
 
 export function useActivityLogParsing(activityLog: string | null) {

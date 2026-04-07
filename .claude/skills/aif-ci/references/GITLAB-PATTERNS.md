@@ -20,13 +20,13 @@ default:
 
 ## Job Organization
 
-| Stage | Jobs | Notes |
-|-------|------|-------|
-| `install` | `install` | Install dependencies, cache + artifact for downstream |
-| `lint` | `code-style`, `lint`, `static-analysis`, `rector` | All `needs: [install]`, run in parallel |
-| `test` | `tests` | `needs: [install]` |
-| `build` | `build` | `needs: [tests, lint, ...]` |
-| `security` | `security` | `needs: [install]`, `allow_failure: true` |
+| Stage      | Jobs                                              | Notes                                                 |
+| ---------- | ------------------------------------------------- | ----------------------------------------------------- |
+| `install`  | `install`                                         | Install dependencies, cache + artifact for downstream |
+| `lint`     | `code-style`, `lint`, `static-analysis`, `rector` | All `needs: [install]`, run in parallel               |
+| `test`     | `tests`                                           | `needs: [install]`                                    |
+| `build`    | `build`                                           | `needs: [tests, lint, ...]`                           |
+| `security` | `security`                                        | `needs: [install]`, `allow_failure: true`             |
 
 ## GitLab-Specific Features
 
@@ -54,12 +54,12 @@ variables:
 
 ## Report Formats for GitLab Integration
 
-| Tool | Flag | Report Type |
-|------|------|-------------|
-| PHPStan | `--error-format=gitlab` | `codequality` |
-| ESLint | `--format json` | `codequality` |
-| Ruff | `--output-format=gitlab` | `codequality` |
+| Tool          | Flag                        | Report Type   |
+| ------------- | --------------------------- | ------------- |
+| PHPStan       | `--error-format=gitlab`     | `codequality` |
+| ESLint        | `--format json`             | `codequality` |
+| Ruff          | `--output-format=gitlab`    | `codequality` |
 | golangci-lint | `--out-format code-climate` | `codequality` |
-| PHPUnit | `--log-junit report.xml` | `junit` |
-| Jest | `--reporters=jest-junit` | `junit` |
-| pytest | `--junitxml=report.xml` | `junit` |
+| PHPUnit       | `--log-junit report.xml`    | `junit`       |
+| Jest          | `--reporters=jest-junit`    | `junit`       |
+| pytest        | `--junitxml=report.xml`     | `junit`       |

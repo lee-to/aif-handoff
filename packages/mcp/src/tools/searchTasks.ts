@@ -14,7 +14,13 @@ export function register(server: McpServer, context: ToolContext): void {
     {
       query: z.string().min(1).max(200).describe("Search query string (max 200 chars)"),
       projectId: z.string().uuid().optional().describe("Optional project ID to scope the search"),
-      limit: z.number().int().min(1).max(50).optional().describe("Max results per page (default 20, max 50)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe("Max results per page (default 20, max 50)"),
       offset: z.number().int().min(0).optional().describe("Number of results to skip (default 0)"),
     },
     async (args) => {
@@ -54,15 +60,17 @@ export function register(server: McpServer, context: ToolContext): void {
         );
 
         return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              items,
-              total: result.total,
-              limit: result.limit,
-              offset: result.offset,
-            }),
-          }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                items,
+                total: result.total,
+                limit: result.limit,
+                offset: result.offset,
+              }),
+            },
+          ],
         };
       } catch (error) {
         throw toMcpError(error);

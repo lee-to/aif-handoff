@@ -21,6 +21,21 @@ function hasIdPayload(value: unknown): value is { id: string } {
   return isRecord(value) && typeof value.id === "string";
 }
 
+function resolveWsUrl(): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  if (!import.meta.env.DEV) {
+    return `${protocol}//${window.location.host}/ws`;
+  }
+
+  const configuredPort = import.meta.env.VITE_API_PORT;
+  const apiPort =
+    typeof configuredPort === "string" && configuredPort.trim().length > 0
+      ? configuredPort.trim()
+      : "3009";
+
+  return `${protocol}//${window.location.hostname}:${apiPort}/ws`;
+}
+
 /** Per-client WS identifier assigned by server on connect */
 let currentClientId: string | null = null;
 
@@ -63,8 +78,7 @@ export function useWebSocket() {
   );
 
   const connect = useCallback(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/ws`;
+    const url = resolveWsUrl();
 
     console.debug("[ws] Connecting to", url);
     const ws = new WebSocket(url);

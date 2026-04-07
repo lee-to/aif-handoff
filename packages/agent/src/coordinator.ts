@@ -10,14 +10,8 @@ import {
   type TaskFieldsPatch,
   type TaskRow,
 } from "@aif/data";
-import {
-  logger,
-  initProjectDirectory,
-  getEnv,
-  CLEAN_STATE_RESET,
-  withTimeout,
-  type TaskStatus,
-} from "@aif/shared";
+import { initProject, type RuntimeRegistry } from "@aif/runtime";
+import { logger, getEnv, CLEAN_STATE_RESET, withTimeout, type TaskStatus } from "@aif/shared";
 import { runPlanner } from "./subagents/planner.js";
 import { runPlanChecker } from "./subagents/planChecker.js";
 import { runImplementer } from "./subagents/implementer.js";
@@ -35,6 +29,11 @@ const env = getEnv();
 const STAGE_RUN_TIMEOUT_MS = Math.max(env.AGENT_STAGE_RUN_TIMEOUT_MS, 60_000);
 const CLAIM_LOCK_DURATION_MS = STAGE_RUN_TIMEOUT_MS + 5 * 60 * 1000; // stage timeout + 5 min buffer
 export const COORDINATOR_ID = crypto.randomUUID();
+
+let _runtimeRegistry: RuntimeRegistry | null = null;
+export function setRuntimeRegistry(registry: RuntimeRegistry): void {
+  _runtimeRegistry = registry;
+}
 setCoordinatorId(COORDINATOR_ID);
 
 const runtimeCounters = {
@@ -183,7 +182,9 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
     return false;
   }
 
-  initProjectDirectory(project.rootPath);
+  if (_runtimeRegistry) {
+    initProject({ projectRoot: project.rootPath, registry: _runtimeRegistry });
+  }
 
   log.info(
     { taskId: task.id, title: task.title, stage: stage.label, projectRoot: project.rootPath },

@@ -2,12 +2,12 @@
 
 ## Overview
 
-Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically: **Backlog → Planning → Plan Ready → Implementing → Review → Done** — each stage handled by specialized Claude Agent SDK subagents powered by ai-factory infrastructure.
+Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically: **Backlog → Planning → Plan Ready → Implementing → Review → Done** — each stage handled by specialized subagents routed through a pluggable runtime layer, powered by ai-factory infrastructure.
 
 ## Core Features
 
 - Kanban board with drag-and-drop task management
-- Automated task pipeline via Claude Agent SDK subagents
+- Automated task pipeline via pluggable runtime adapters (Claude, Codex, custom)
 - Real-time updates via WebSocket
 - Plan generation, implementation, and code review — all autonomous
 
@@ -15,7 +15,8 @@ Autonomous task management system with Kanban board and AI subagents. Tasks flow
 
 - **Runtime:** Node.js + TypeScript (ES2022, ESNext modules)
 - **Monorepo:** Turborepo (npm workspaces)
-- **Agent SDK:** @anthropic-ai/claude-agent-sdk
+- **Runtime Modularity:** `@aif/runtime` workspace for runtime/provider contracts and registry
+- **Runtime Adapters:** Claude (Agent SDK), Codex (CLI/API), extensible via AIF_RUNTIME_MODULES
 - **Database:** SQLite (better-sqlite3 + drizzle-orm)
 - **API:** Hono + @hono/node-server + WebSocket (ws)
 - **Validation:** zod + @hono/zod-validator
@@ -29,12 +30,13 @@ Autonomous task management system with Kanban board and AI subagents. Tasks flow
 ## Architecture
 
 - **shared** (`@aif/shared`) — Types, SQLite schema (drizzle-orm), state machine, constants, env, logger
+- **runtime** (`@aif/runtime`) — Runtime/provider adapter contracts, registry, and module-loading extension surface
 - **data** (`@aif/data`) — Centralized data-access layer for all DB reads/writes
 - **api** (`@aif/api`) — Hono REST + WebSocket server (port 3009)
 - **web** (`@aif/web`) — React SPA Kanban UI (port 5180)
-- **agent** (`@aif/agent`) — Coordinator (node-cron polling) + Claude Agent SDK subagents
+- **agent** (`@aif/agent`) — Runtime-neutral coordinator (node-cron polling) + subagent orchestration
 
-Lint guard enforces DB boundaries: `api` and `agent` can access DB only through `@aif/data`.
+Lint guard enforces DB boundaries: `api`, `agent`, and `runtime` can access DB only through `@aif/data`.
 
 ## Agent Pipeline
 

@@ -6,31 +6,31 @@ services:
       context: .
       target: development
     volumes:
-      - .:/app                           # Hot reload via bind mount
-      - /app/node_modules               # Preserve container's node_modules
+      - .:/app # Hot reload via bind mount
+      - /app/node_modules # Preserve container's node_modules
     ports:
       - "${APP_PORT:-3000}:3000"
-      - "9229:9229"                      # Debug port (Node.js inspector / Delve)
+      - "9229:9229" # Debug port (Node.js inspector / Delve)
     environment:
       NODE_ENV: development
       LOG_LEVEL: debug
-    command: npm run dev                  # Override to dev server
+    command: npm run dev # Override to dev server
 
   db:
     ports:
-      - "${DB_PORT:-5432}:5432"          # Expose for local DB tools
+      - "${DB_PORT:-5432}:5432" # Expose for local DB tools
 
   redis:
     ports:
-      - "${REDIS_PORT:-6379}:6379"       # Expose for local tools
+      - "${REDIS_PORT:-6379}:6379" # Expose for local tools
 
   # --- Dev-only services ---
 
   mailpit:
     image: axllent/mailpit:latest
     ports:
-      - "8025:8025"                       # Web UI
-      - "1025:1025"                       # SMTP
+      - "8025:8025" # Web UI
+      - "1025:1025" # SMTP
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8025/readyz"]
       interval: 15s

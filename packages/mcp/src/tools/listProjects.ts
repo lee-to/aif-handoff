@@ -7,26 +7,21 @@ import { rateLimitError, toMcpError } from "../middleware/errorHandler.js";
 const log = logger("mcp:tool:list-projects");
 
 export function register(server: McpServer, context: ToolContext): void {
-  server.tool(
-    "handoff_list_projects",
-    "List all available projects",
-    {},
-    async () => {
-      try {
-        if (!context.rateLimiter.check("handoff_list_projects", "read")) {
-          throw rateLimitError("handoff_list_projects");
-        }
-
-        log.debug("handoff_list_projects called");
-
-        const results = listProjects();
-
-        log.info({ resultCount: results.length }, "handoff_list_projects completed");
-
-        return { content: [{ type: "text" as const, text: JSON.stringify(results) }] };
-      } catch (error) {
-        throw toMcpError(error);
+  server.tool("handoff_list_projects", "List all available projects", {}, async () => {
+    try {
+      if (!context.rateLimiter.check("handoff_list_projects", "read")) {
+        throw rateLimitError("handoff_list_projects");
       }
-    },
-  );
+
+      log.debug("handoff_list_projects called");
+
+      const results = listProjects();
+
+      log.info({ resultCount: results.length }, "handoff_list_projects completed");
+
+      return { content: [{ type: "text" as const, text: JSON.stringify(results) }] };
+    } catch (error) {
+      throw toMcpError(error);
+    }
+  });
 }

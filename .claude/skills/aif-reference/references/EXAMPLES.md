@@ -5,6 +5,7 @@ Practical examples of `/aif-reference` usage and expected output.
 ## Example 1: Single URL — Library Documentation
 
 **Input:**
+
 ```
 /aif-reference https://zod.dev --name zod-validation
 ```
@@ -33,17 +34,19 @@ type validation, form parsing, API request/response validation.
 ## API / Interface
 
 ### Primitive schemas
-| Method | Validates |
-|--------|-----------|
-| `z.string()` | string |
-| `z.number()` | number |
-| `z.boolean()` | boolean |
-| `z.date()` | Date instance |
-| `z.undefined()` | undefined |
-| `z.null()` | null |
-| `z.any()` | any (no validation) |
+
+| Method          | Validates           |
+| --------------- | ------------------- |
+| `z.string()`    | string              |
+| `z.number()`    | number              |
+| `z.boolean()`   | boolean             |
+| `z.date()`      | Date instance       |
+| `z.undefined()` | undefined           |
+| `z.null()`      | null                |
+| `z.any()`       | any (no validation) |
 
 ### String validations
+
 - `z.string().min(n)` — minimum length
 - `z.string().max(n)` — maximum length
 - `z.string().email()` — email format
@@ -56,6 +59,7 @@ type validation, form parsing, API request/response validation.
 ## Example 2: Multiple URLs — Cross-Referencing
 
 **Input:**
+
 ```
 /aif-reference https://docs.astro.build/en/getting-started/ https://docs.astro.build/en/guides/content-collections/
 ```
@@ -68,6 +72,7 @@ noting which information came from which source when there are differences.
 ## Example 3: Local File
 
 **Input:**
+
 ```
 /aif-reference ./docs/api-spec.yaml --name internal-api
 ```
@@ -80,6 +85,7 @@ with endpoints, parameters, response types, and example requests.
 ## Example 4: Update Existing
 
 **Input:**
+
 ```
 /aif-reference --update --name zod-validation
 ```
@@ -91,6 +97,7 @@ creation date.
 ## Example 5: Interactive Mode
 
 **Input:**
+
 ```
 /aif-reference
 ```
@@ -115,6 +122,7 @@ When a single reference exceeds ~1000 lines:
 ## Reference Output Quality Checklist
 
 A good reference:
+
 - [ ] Has source URLs in the header
 - [ ] Has Created/Updated dates
 - [ ] Overview explains what + when to use in 1-3 paragraphs

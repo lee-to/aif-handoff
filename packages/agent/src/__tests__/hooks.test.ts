@@ -35,6 +35,13 @@ const TASK_ID = "test-task-1";
 function makeEnv(overrides: Record<string, unknown> = {}) {
   return {
     ANTHROPIC_API_KEY: undefined,
+    OPENAI_API_KEY: undefined,
+    OPENAI_BASE_URL: undefined,
+    CODEX_CLI_PATH: undefined,
+    AGENTAPI_BASE_URL: undefined,
+    AIF_RUNTIME_MODULES: [],
+    AIF_DEFAULT_RUNTIME_ID: "claude",
+    AIF_DEFAULT_PROVIDER_ID: "anthropic",
     PORT: 3009,
     POLL_INTERVAL_MS: 30000,
     AGENT_STAGE_STALE_TIMEOUT_MS: 5400000,

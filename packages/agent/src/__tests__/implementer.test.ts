@@ -8,6 +8,8 @@ import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
 const queryMock = vi.fn();
+(globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
+  queryMock;
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
@@ -39,6 +41,8 @@ describe("runImplementer rework behavior", () => {
   let projectRoot: string;
 
   beforeEach(() => {
+    (globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
+      queryMock;
     testDb.current = createTestDb();
     queryMock.mockReset();
     queryMock.mockReturnValue(streamSuccess("Implementation done"));

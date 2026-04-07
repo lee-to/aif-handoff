@@ -4,13 +4,13 @@
 
 ```typescript
 // ✅ Good: Secure password hashing
-import { hash, verify } from 'argon2';
+import { hash, verify } from "argon2";
 
 const hashedPassword = await hash(password, {
   type: argon2id,
   memoryCost: 65536,
   timeCost: 3,
-  parallelism: 4
+  parallelism: 4,
 });
 
 // ✅ Good: Timing-safe comparison
@@ -41,19 +41,21 @@ if (Hash::check($inputPassword, $user->password)) {
 
 ```typescript
 // ✅ Good: Secure cookie settings
-app.use(session({
-  secret: process.env.SESSION_SECRET,
-  name: '__Host-session', // __Host- prefix enforces secure
-  cookie: {
-    httpOnly: true,       // No JS access
-    secure: true,         // HTTPS only
-    sameSite: 'strict',   // CSRF protection
-    maxAge: 3600000,      // 1 hour
-    domain: undefined,    // No cross-subdomain
-  },
-  resave: false,
-  saveUninitialized: false,
-}));
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    name: "__Host-session", // __Host- prefix enforces secure
+    cookie: {
+      httpOnly: true, // No JS access
+      secure: true, // HTTPS only
+      sameSite: "strict", // CSRF protection
+      maxAge: 3600000, // 1 hour
+      domain: undefined, // No cross-subdomain
+    },
+    resave: false,
+    saveUninitialized: false,
+  }),
+);
 ```
 
 ## JWT Security

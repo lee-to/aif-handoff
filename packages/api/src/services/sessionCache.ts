@@ -43,7 +43,13 @@ export function invalidateAllSessionCaches(): void {
   cache.clear();
 }
 
-/** Cache key for SDK session listings by project directory. */
-export function sessionCacheKey(dir: string): string {
-  return `sdk-sessions:${dir}`;
+/**
+ * Cache key for runtime session listings by runtime/profile/project directory.
+ * `dir` may be empty for runtimes that don't require project-root scoping.
+ */
+export function sessionCacheKey(runtimeId: string, profileId: string | null, dir?: string): string {
+  const normalizedRuntimeId = runtimeId.trim().toLowerCase();
+  const normalizedProfileId = profileId?.trim() || "default";
+  const normalizedDir = dir?.trim() || "none";
+  return `runtime-sessions:${normalizedRuntimeId}:${normalizedProfileId}:${normalizedDir}`;
 }

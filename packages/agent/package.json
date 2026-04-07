@@ -1,7 +1,7 @@
 {
   "name": "@aif/agent",
   "version": "0.1.0",
-  "description": "AI coordinator and Claude subagents for AIF Handoff",
+  "description": "AI coordinator and subagents for AIF Handoff",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -16,8 +16,8 @@
   },
   "dependencies": {
     "@aif/data": "*",
+    "@aif/runtime": "*",
     "@aif/shared": "*",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.86",
     "node-cron": "^4.2.1"
   },
   "devDependencies": {

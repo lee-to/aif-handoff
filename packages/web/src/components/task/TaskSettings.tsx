@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Settings2 } from "lucide-react";
+import { Cpu, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
 import { useProjects } from "@/hooks/useProjects";
+import { useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
 import type { Task, UpdateTaskInput } from "@aif/shared/browser";
 
 interface Props {
@@ -14,6 +15,8 @@ interface Props {
 
 export function TaskSettings({ task, onSave }: Props) {
   const { data: projectsList } = useProjects();
+  const { data: runtimeProfiles = [] } = useRuntimeProfiles(task.projectId, true);
+  const { data: runtimes = [] } = useRuntimes();
   const isParallel = projectsList?.find((p) => p.id === task.projectId)?.parallelEnabled ?? false;
   const [open, setOpen] = useState(false);
   const [autoMode, setAutoMode] = useState(task.autoMode);
@@ -26,6 +29,17 @@ export function TaskSettings({ task, onSave }: Props) {
   const [planDocs, setPlanDocs] = useState(task.planDocs);
   const [planTests, setPlanTests] = useState(task.planTests);
   const [maxReviewIterations, setMaxReviewIterations] = useState(task.maxReviewIterations);
+  const [runtimeProfileId, setRuntimeProfileId] = useState(task.runtimeProfileId ?? "");
+  const [modelOverride, setModelOverride] = useState(task.modelOverride ?? "");
+  const [runtimeOverrideOpen, setRuntimeOverrideOpen] = useState(
+    Boolean(task.runtimeProfileId || task.modelOverride),
+  );
+
+  const selectedRuntimeProfile =
+    runtimeProfiles.find((profile) => profile.id === runtimeProfileId) ?? null;
+  const selectedRuntimeDescriptor = selectedRuntimeProfile
+    ? runtimes.find((runtime) => runtime.id === selectedRuntimeProfile.runtimeId)
+    : null;
 
   const showPlanner = !task.isFix && task.status !== "done";
   const hasChanges =
@@ -33,6 +47,8 @@ export function TaskSettings({ task, onSave }: Props) {
     skipReview !== task.skipReview ||
     useSubagents !== task.useSubagents ||
     maxReviewIterations !== task.maxReviewIterations ||
+    (runtimeProfileId || null) !== (task.runtimeProfileId ?? null) ||
+    (modelOverride.trim() || null) !== (task.modelOverride ?? null) ||
     (showPlanner &&
       (plannerMode !== task.plannerMode ||
         planPath !== task.planPath ||
@@ -46,6 +62,12 @@ export function TaskSettings({ task, onSave }: Props) {
     if (useSubagents !== task.useSubagents) input.useSubagents = useSubagents;
     if (maxReviewIterations !== task.maxReviewIterations)
       input.maxReviewIterations = maxReviewIterations;
+    if ((runtimeProfileId || null) !== (task.runtimeProfileId ?? null)) {
+      input.runtimeProfileId = runtimeProfileId || null;
+    }
+    if ((modelOverride.trim() || null) !== (task.modelOverride ?? null)) {
+      input.modelOverride = modelOverride.trim() || null;
+    }
     if (showPlanner) {
       if (plannerMode !== task.plannerMode) input.plannerMode = plannerMode;
       if (planPath !== task.planPath) input.planPath = planPath;
@@ -89,6 +111,8 @@ export function TaskSettings({ task, onSave }: Props) {
               setPlanPath(task.planPath);
               setPlanDocs(task.planDocs);
               setPlanTests(task.planTests);
+              setRuntimeProfileId(task.runtimeProfileId ?? "");
+              setModelOverride(task.modelOverride ?? "");
               setOpen(false);
             }}
           >
@@ -185,6 +209,56 @@ export function TaskSettings({ task, onSave }: Props) {
           </div>
         </div>
       )}
+
+      <div className="space-y-2 border-t border-border/60 pt-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setRuntimeOverrideOpen((v) => !v)}
+          className="gap-1.5 text-muted-foreground"
+        >
+          <Cpu className="h-3.5 w-3.5" />
+          Runtime override
+        </Button>
+        {runtimeOverrideOpen && (
+          <div className="space-y-2 border border-border/60 bg-muted/20 p-2">
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Runtime profile
+              </p>
+              <select
+                className="h-7 w-full rounded border border-input bg-background px-2 text-xs"
+                value={runtimeProfileId}
+                onChange={(e) => setRuntimeProfileId(e.target.value)}
+              >
+                <option value="">(project default)</option>
+                {runtimeProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name} ({profile.runtimeId}/{profile.providerId})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Model override
+              </p>
+              <Input
+                value={modelOverride}
+                onChange={(e) => setModelOverride(e.target.value)}
+                placeholder="runtime default"
+                className="h-7 text-xs"
+              />
+            </div>
+            {selectedRuntimeDescriptor &&
+              !selectedRuntimeDescriptor.capabilities.supportsAgentDefinitions && (
+                <p className="text-[10px] text-muted-foreground">
+                  This runtime does not support subagents — skills mode will be used instead.
+                </p>
+              )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

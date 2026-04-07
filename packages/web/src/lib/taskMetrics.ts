@@ -27,21 +27,31 @@ function toNonNegativeNumber(value: unknown): number {
 export function calculateTaskMetrics(tasks: Task[]): TaskMetricsSummary {
   const totalTasks = tasks.length;
 
-  const completedTasks = tasks.filter((task) => task.status === "done" || task.status === "verified").length;
+  const completedTasks = tasks.filter(
+    (task) => task.status === "done" || task.status === "verified",
+  ).length;
   const verifiedTasks = tasks.filter((task) => task.status === "verified").length;
   const backlogTasks = tasks.filter((task) => task.status === "backlog").length;
   const blockedTasks = tasks.filter((task) => task.status === "blocked_external").length;
   const activeTasks = tasks.filter(
-    (task) =>
-      task.status !== "backlog" && task.status !== "done" && task.status !== "verified"
+    (task) => task.status !== "backlog" && task.status !== "done" && task.status !== "verified",
   ).length;
   const autoModeTasks = tasks.filter((task) => task.autoMode).length;
   const fixTasks = tasks.filter((task) => task.isFix).length;
 
   const totalRetries = tasks.reduce((sum, task) => sum + toNonNegativeNumber(task.retryCount), 0);
-  const totalTokenInput = tasks.reduce((sum, task) => sum + toNonNegativeNumber(task.tokenInput), 0);
-  const totalTokenOutput = tasks.reduce((sum, task) => sum + toNonNegativeNumber(task.tokenOutput), 0);
-  const totalTokenTotal = tasks.reduce((sum, task) => sum + toNonNegativeNumber(task.tokenTotal), 0);
+  const totalTokenInput = tasks.reduce(
+    (sum, task) => sum + toNonNegativeNumber(task.tokenInput),
+    0,
+  );
+  const totalTokenOutput = tasks.reduce(
+    (sum, task) => sum + toNonNegativeNumber(task.tokenOutput),
+    0,
+  );
+  const totalTokenTotal = tasks.reduce(
+    (sum, task) => sum + toNonNegativeNumber(task.tokenTotal),
+    0,
+  );
   const totalCostUsd = tasks.reduce((sum, task) => sum + toNonNegativeNumber(task.costUsd), 0);
 
   const averageTokensPerTask = totalTasks > 0 ? totalTokenTotal / totalTasks : 0;

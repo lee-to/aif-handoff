@@ -47,9 +47,7 @@ export function rateLimitError(toolName: string): McpError {
  * Create an MCP error for validation failures with field-level detail.
  */
 export function validationError(message: string, fieldErrors?: Record<string, string[]>): McpError {
-  const detail = fieldErrors
-    ? ` Fields: ${JSON.stringify(fieldErrors)}`
-    : "";
+  const detail = fieldErrors ? ` Fields: ${JSON.stringify(fieldErrors)}` : "";
   log.error({ message, fieldErrors }, "Validation failure");
   return new McpError(ErrorCode.InvalidParams, `${message}${detail}`);
 }

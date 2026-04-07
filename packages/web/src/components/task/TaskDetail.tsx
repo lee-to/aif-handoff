@@ -155,12 +155,20 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
 
       {/* Toast notifications */}
       {actions.maintenanceSuccess && (
-        <AlertBox variant="success" className="fixed bottom-4 left-4 z-bubble text-xs">
+        <AlertBox
+          variant="success"
+          className="fixed bottom-4 left-4 text-xs"
+          style={{ zIndex: "var(--z-bubble)" }}
+        >
           {actions.maintenanceSuccess}
         </AlertBox>
       )}
       {actions.maintenanceError && (
-        <AlertBox variant="error" className="fixed bottom-4 right-4 z-bubble text-xs">
+        <AlertBox
+          variant="error"
+          className="fixed bottom-4 right-4 text-xs"
+          style={{ zIndex: "var(--z-bubble)" }}
+        >
           {actions.maintenanceError}
         </AlertBox>
       )}
@@ -218,7 +226,7 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
               size="sm"
               onClick={() => {
                 actions.setShowStartAiConfirm(false);
-                actions.triggerStartAi();
+                actions.triggerStartAi({ deletePlanFile: true });
               }}
             >
               Overwrite & Re-plan

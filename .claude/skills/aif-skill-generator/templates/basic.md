@@ -29,12 +29,16 @@ Explanation and examples.
 
 ### Good Example
 ```
+
 code or text
+
 ```
 
 ### Bad Example
 ```
+
 code or text
+
 ```
 
 ## Checklist

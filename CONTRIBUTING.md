@@ -47,12 +47,13 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 The project is a Turborepo monorepo with four packages:
 
-| Package | Description |
-|---------|-------------|
-| `packages/shared` | Types, DB schema, state machine, constants |
-| `packages/api` | Hono REST + WebSocket server |
-| `packages/web` | React Kanban UI |
-| `packages/agent` | Coordinator + Claude Agent SDK subagents |
+| Package            | Description                                            |
+| ------------------ | ------------------------------------------------------ |
+| `packages/shared`  | Types, DB schema, state machine, constants             |
+| `packages/api`     | Hono REST + WebSocket server                           |
+| `packages/web`     | React Kanban UI                                        |
+| `packages/runtime` | Pluggable AI provider adapters (Claude, Codex, custom) |
+| `packages/agent`   | Runtime-neutral coordinator + subagent orchestration   |
 
 See [docs/architecture.md](docs/architecture.md) for detailed architecture information.
 

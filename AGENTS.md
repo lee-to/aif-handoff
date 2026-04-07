@@ -4,16 +4,18 @@
 
 ## Project Overview
 
-Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by specialized Claude Agent SDK subagents.
+Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved subagent workflows (Claude adapter first).
 
 ## Tech Stack
 
 - **Language:** TypeScript (ES2022, ESNext modules)
 - **Monorepo:** Turborepo (npm workspaces)
 - **API:** Hono + WebSocket
+- **Runtime Abstraction:** `@aif/runtime` workspace (runtime/provider contracts + registry)
 - **Database:** SQLite (better-sqlite3 + drizzle-orm)
 - **Frontend:** React 19 + Vite + TailwindCSS 4
-- **Agent:** Claude Agent SDK + node-cron
+- **Runtime:** Pluggable adapter system (`@aif/runtime`) — built-in Claude (Agent SDK) + Codex (CLI/API) adapters
+- **Agent:** Runtime-neutral coordinator + node-cron
 - **Testing:** Vitest
 
 ## Project Structure
@@ -23,21 +25,42 @@ packages/
 ├── shared/              # @aif/shared — contracts, schema, state machine, env, constants, logger
 │   └── src/
 │       ├── schema.ts        # Drizzle ORM schema (SQLite)
-│       ├── types.ts         # Shared TypeScript types
+│       ├── types.ts         # Shared TypeScript types + RuntimeTransport enum
 │       ├── stateMachine.ts  # Task stage transitions
 │       ├── constants.ts     # App constants
 │       ├── env.ts           # Environment validation
 │       ├── logger.ts        # Pino logger setup
 │       ├── index.ts         # Node exports
 │       └── browser.ts       # Browser-safe exports
+├── runtime/             # @aif/runtime — runtime/provider contracts, registry, validation/discovery services, adapters
+│   └── src/
+│       ├── index.ts         # Public API exports
+│       ├── types.ts         # RuntimeAdapter interface, capabilities, execution intent
+│       ├── registry.ts      # RuntimeRegistry — adapter registration and lookup
+│       ├── bootstrap.ts     # Factory: create registry with built-in adapters
+│       ├── resolution.ts    # Profile resolution (task → project → system → env fallback)
+│       ├── readiness.ts     # Health check across all registered runtimes
+│       ├── capabilities.ts  # Capability assertion before workflow execution
+│       ├── promptPolicy.ts  # Agent definition vs slash-command fallback
+│       ├── workflowSpec.ts  # Workflow kind, session reuse, required capabilities
+│       ├── modelDiscovery.ts # Model listing + connection validation with cache
+│       ├── cache.ts         # Generic in-memory TTL cache
+│       ├── trust.ts         # Opaque Symbol-based trust token for permission bypass
+│       ├── errors.ts        # Runtime error hierarchy
+│       ├── module.ts        # Dynamic module loader for external adapters
+│       └── adapters/
+│           ├── TEMPLATE.ts      # Adapter development guide + skeleton
+│           ├── claude/          # Claude adapter (Agent SDK transport)
+│           └── codex/           # Codex adapter (CLI + API transports)
 ├── data/                # @aif/data — centralized data-access layer
 │   └── src/
 │       └── index.ts         # Repository-style DB operations for API/Agent
 ├── api/                 # @aif/api — Hono REST + WebSocket server (port 3009)
 │   └── src/
 │       ├── index.ts         # Server entry point
-│       ├── routes/          # tasks.ts, projects.ts
-│       ├── middleware/      # logger.ts
+│       ├── routes/          # tasks.ts, projects.ts, chat.ts, runtimeProfiles.ts
+│       ├── services/        # runtime.ts, fastFix.ts, roadmapGeneration.ts
+│       ├── middleware/      # logger.ts, rateLimit.ts, zodValidator.ts
 │       ├── schemas.ts       # Zod request validation
 │       └── ws.ts            # WebSocket handler
 ├── web/                 # @aif/web — React Kanban UI (port 5180)
@@ -47,35 +70,41 @@ packages/
 │       │   ├── kanban/      # Board, Column, TaskCard, AddTaskForm
 │       │   ├── task/        # TaskDetail, TaskPlan, TaskLog, AgentTimeline
 │       │   ├── layout/      # Header, CommandPalette
-│       │   ├── project/     # ProjectSelector
+│       │   ├── project/     # ProjectSelector, ProjectRuntimeSettings
+│       │   ├── settings/    # RuntimeProfileForm
 │       │   └── ui/          # Reusable UI primitives (badge, button, dialog, etc.)
-│       ├── hooks/           # useTasks, useProjects, useWebSocket, useTheme
+│       ├── hooks/           # useTasks, useProjects, useWebSocket, useTheme, useRuntimeProfiles
 │       └── lib/             # api.ts, notifications.ts, utils.ts
-└── agent/               # @aif/agent — Coordinator + Claude subagents
+└── agent/               # @aif/agent — Coordinator + runtime-driven subagent orchestration
     └── src/
         ├── index.ts         # Agent entry point
         ├── coordinator.ts   # Polling coordinator (node-cron)
-        ├── hooks.ts         # Agent lifecycle hooks
+        ├── subagentQuery.ts # Universal runtime-backed query execution
+        ├── reviewGate.ts    # Auto-review gate using adapter lightModel
+        ├── hooks.ts         # Activity logging, project root
+        ├── stderrCollector.ts # Generic stderr ring-buffer
         ├── notifier.ts      # Notification system
-        ├── claudeDiagnostics.ts  # Agent SDK diagnostics
         └── subagents/       # planner.ts, implementer.ts, reviewer.ts
 
-.claude/agents/          # Agent definitions (loaded by Claude Agent SDK)
+.claude/agents/          # Agent definitions (loaded by runtimes that support them)
+.docker/                 # Dockerfile, entrypoint, Angie configs
 data/                    # SQLite database files (gitignored)
 .ai-factory/             # AI Factory context and references
 ```
 
 ## Key Entry Points
 
-| File                                  | Purpose                            |
-| ------------------------------------- | ---------------------------------- |
-| `packages/api/src/index.ts`           | API server entry (Hono, port 3009) |
-| `packages/web/src/main.tsx`           | Web app entry (React, port 5180)   |
-| `packages/agent/src/index.ts`         | Agent coordinator entry            |
-| `packages/data/src/index.ts`          | Centralized data-access API        |
-| `packages/shared/src/schema.ts`       | Database schema (drizzle-orm)      |
-| `packages/shared/src/stateMachine.ts` | Task state transitions             |
-| `turbo.json`                          | Turborepo task definitions         |
+| File                                  | Purpose                               |
+| ------------------------------------- | ------------------------------------- |
+| `packages/api/src/index.ts`           | API server entry (Hono, port 3009)    |
+| `packages/web/src/main.tsx`           | Web app entry (React, port 5180)      |
+| `packages/agent/src/index.ts`         | Agent coordinator entry               |
+| `packages/agent/src/subagentQuery.ts` | Runtime-aware subagent execution path |
+| `packages/runtime/src/index.ts`       | Shared runtime/provider contracts     |
+| `packages/data/src/index.ts`          | Centralized data-access API           |
+| `packages/shared/src/schema.ts`       | Database schema (drizzle-orm)         |
+| `packages/shared/src/stateMachine.ts` | Task state transitions                |
+| `turbo.json`                          | Turborepo task definitions            |
 
 ## Documentation
 
@@ -96,7 +125,7 @@ data/                    # SQLite database files (gitignored)
 | .ai-factory/DESCRIPTION.md  | Project specification and tech stack  |
 | .ai-factory/ARCHITECTURE.md | Architecture decisions and guidelines |
 | .ai-factory/RULES.md        | Project rules and conventions         |
-| .ai-factory/references/     | Claude Agent SDK reference docs       |
+| .ai-factory/references/     | AI provider SDK reference docs        |
 
 ## Agent Rules
 
@@ -104,7 +133,7 @@ data/                    # SQLite database files (gitignored)
   - Wrong: `git checkout main && git pull`
   - Right: Two separate Bash tool calls — first `git checkout main`, then `git pull`
 
-- DB boundary is mandatory: `api` and `agent` access database only through `@aif/data`. Direct imports of DB helpers from `@aif/shared/server` and direct SQL construction imports are blocked by ESLint.
+- DB boundary is mandatory: `api`, `agent`, and `runtime` access database only through `@aif/data`. Direct imports of DB helpers from `@aif/shared/server` and direct SQL construction imports are blocked by ESLint.
 
 ## UI Component Rules
 
@@ -119,6 +148,14 @@ data/                    # SQLite database files (gitignored)
   - `.docker/Dockerfile` — add build stages, `COPY` directives, and build steps for the new package.
   - `docker-compose.yml` / `docker-compose.production.yml` — add or update services, volumes, and dependency links as needed.
   - Verify the Docker build still succeeds after changes: `docker compose build`.
+
+## Runtime Adapter Sync Rule
+
+- **Docs must stay in sync when adding or modifying runtime adapters.** When a new adapter is added to `packages/runtime/src/adapters/` or an existing adapter's capabilities change:
+  - `docs/providers.md` — update the "Supported Runtimes" table.
+  - `packages/runtime/src/adapters/TEMPLATE.ts` — verify the template still reflects current conventions.
+  - `packages/runtime/src/bootstrap.ts` — register the new built-in adapter.
+  - `.docker/Dockerfile` — add any new system-level dependencies.
 
 ## Project Rules
 

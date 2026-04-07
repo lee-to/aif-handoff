@@ -1,11 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parsePlanAnnotations, insertPlanAnnotation } from "../sync.js";
-import type {
-  SyncDirection,
-  ConflictResolution,
-  SyncEvent,
-  PlanAnnotation,
-} from "../sync.js";
+import type { SyncDirection, ConflictResolution, SyncEvent, PlanAnnotation } from "../sync.js";
 
 // ── Test Helpers ────────────────────────────────────────────
 
@@ -75,13 +70,9 @@ describe("parsePlanAnnotations", () => {
   });
 
   it("returns annotations sorted by line number", () => {
-    const md = [
-      annotation(UUID_C),
-      "text",
-      annotation(UUID_A),
-      "text",
-      annotation(UUID_B),
-    ].join("\n");
+    const md = [annotation(UUID_C), "text", annotation(UUID_A), "text", annotation(UUID_B)].join(
+      "\n",
+    );
 
     const result = parsePlanAnnotations(md);
     expect(result).toHaveLength(3);

@@ -14,6 +14,10 @@ import type {
   UpdateChatSessionInput,
   ChatSessionMessage,
   ChatMessageAttachment,
+  RuntimeDescriptor,
+  RuntimeProfile,
+  CreateRuntimeProfileInput,
+  UpdateRuntimeProfileInput,
 } from "@aif/shared/browser";
 
 export interface AifConfig {
@@ -63,6 +67,43 @@ const API_BASE = "/tasks";
 const REQUEST_TIMEOUT_MS = 15000;
 const FAST_FIX_TIMEOUT_MS = 120000;
 
+export interface SettingsResponse {
+  useSubagents: boolean;
+  maxReviewIterations: number;
+  runtimeReadiness: {
+    availableRuntimeCount: number;
+    runtimeProfileCount: number;
+    enabledRuntimeProfileCount: number;
+  };
+  runtimeDefaults: {
+    modules: string[];
+    openAiBaseUrlConfigured: boolean;
+    agentApiBaseUrlConfigured: boolean;
+    codexCliPathConfigured: boolean;
+  };
+}
+
+export interface RuntimeReadinessValidation {
+  ok: boolean;
+  message?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface AgentReadinessResponse {
+  ready: boolean;
+  runtimeCount: number;
+  enabledRuntimeProfileCount: number;
+  runtimes: Array<{
+    runtimeId: string;
+    providerId: string;
+    displayName: string;
+    capabilities: Record<string, boolean>;
+    validation: RuntimeReadinessValidation;
+  }>;
+  message: string;
+  checkedAt: string;
+}
+
 async function request<T>(
   url: string,
   options?: RequestInit,
@@ -89,27 +130,45 @@ async function request<T>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    let message: string | null = null;
+    if (typeof body?.error === "string") {
+      message = body.error;
+    } else if (typeof body?.message === "string") {
+      message = body.message;
+    } else if (body?.error && typeof body.error === "object") {
+      const issues: unknown[] =
+        "issues" in body.error && Array.isArray(body.error.issues)
+          ? (body.error.issues as unknown[])
+          : [];
+      const firstIssue = issues.find(
+        (issue: unknown): issue is { message?: unknown } =>
+          typeof issue === "object" && issue !== null,
+      );
+      if (typeof firstIssue?.message === "string") {
+        message = firstIssue.message;
+      }
+    }
+    if (!message && body?.fieldErrors && typeof body.fieldErrors === "object") {
+      const firstFieldError = Object.values(body.fieldErrors).find(
+        (value: unknown): value is string[] => Array.isArray(value) && value.length > 0,
+      );
+      if (firstFieldError) {
+        message = firstFieldError[0] ?? null;
+      }
+    }
+    throw new Error(message ?? `HTTP ${res.status}`);
   }
 
   return res.json();
 }
 
 export const api = {
-  getSettings(): Promise<{ useSubagents: boolean; maxReviewIterations: number }> {
+  getSettings(): Promise<SettingsResponse> {
     console.debug("[api] GET /settings");
     return request("/settings");
   },
 
-  getAgentReadiness(): Promise<{
-    ready: boolean;
-    hasApiKey: boolean;
-    hasClaudeAuth: boolean;
-    authSource: "api_key" | "claude_profile" | "both" | "none";
-    detectedPath: string | null;
-    message: string;
-    checkedAt: string;
-  }> {
+  getAgentReadiness(): Promise<AgentReadinessResponse> {
     console.debug("[api] GET /agent/readiness");
     return request("/agent/readiness");
   },
@@ -281,11 +340,19 @@ export const api = {
     });
   },
 
-  getMcpStatus(): Promise<{ installed: boolean; serverName: string; config: unknown }> {
+  getMcpStatus(): Promise<{
+    installed: boolean;
+    serverName: string;
+    runtimes: Array<{ runtimeId: string; installed: boolean; config?: unknown }>;
+  }> {
     return request("/settings/mcp");
   },
 
-  installMcp(): Promise<{ success: boolean; serverName: string }> {
+  installMcp(): Promise<{
+    success: boolean;
+    serverName: string;
+    runtimes: Array<{ runtimeId: string; success: boolean; error?: string }>;
+  }> {
     return request("/settings/mcp/install", {
       method: "POST",
       body: JSON.stringify({}),
@@ -370,5 +437,120 @@ export const api = {
   deleteChatSession(id: string): Promise<void> {
     console.debug("[api] DELETE /chat/sessions/%s", id);
     return request(`/chat/sessions/${id}`, { method: "DELETE" });
+  },
+
+  // Runtime profiles
+  listRuntimeProfiles(params?: {
+    projectId?: string;
+    includeGlobal?: boolean;
+    enabledOnly?: boolean;
+  }): Promise<RuntimeProfile[]> {
+    const qs = new URLSearchParams();
+    if (params?.projectId) qs.set("projectId", params.projectId);
+    if (params?.includeGlobal !== undefined) qs.set("includeGlobal", String(params.includeGlobal));
+    if (params?.enabledOnly !== undefined) qs.set("enabledOnly", String(params.enabledOnly));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<RuntimeProfile[]>(`/runtime-profiles${suffix}`);
+  },
+
+  listRuntimes(): Promise<RuntimeDescriptor[]> {
+    return request("/runtime-profiles/runtimes");
+  },
+
+  createRuntimeProfile(input: CreateRuntimeProfileInput): Promise<RuntimeProfile> {
+    return request("/runtime-profiles", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateRuntimeProfile(id: string, input: UpdateRuntimeProfileInput): Promise<RuntimeProfile> {
+    return request(`/runtime-profiles/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+
+  deleteRuntimeProfile(id: string): Promise<{ success: boolean }> {
+    return request(`/runtime-profiles/${id}`, {
+      method: "DELETE",
+    });
+  },
+
+  validateRuntimeProfile(input: {
+    projectId?: string;
+    profileId?: string;
+    profile?: CreateRuntimeProfileInput;
+    modelOverride?: string | null;
+    runtimeOptions?: Record<string, unknown> | null;
+    apiKey?: string;
+    forceRefresh?: boolean;
+  }): Promise<{
+    ok: boolean;
+    message: string;
+    details: Record<string, unknown> | null;
+    profile: Record<string, unknown>;
+  }> {
+    return request("/runtime-profiles/validate", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  listRuntimeModels(input: {
+    projectId?: string;
+    profileId?: string;
+    profile?: CreateRuntimeProfileInput;
+    modelOverride?: string | null;
+    runtimeOptions?: Record<string, unknown> | null;
+    apiKey?: string;
+    forceRefresh?: boolean;
+  }): Promise<{
+    models: Array<{
+      id: string;
+      label?: string;
+      supportsStreaming?: boolean;
+      metadata?: Record<string, unknown>;
+    }>;
+    profile: Record<string, unknown>;
+  }> {
+    return request("/runtime-profiles/models", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  getEffectiveTaskRuntime(taskId: string): Promise<{
+    source: string;
+    profile: RuntimeProfile | null;
+    taskRuntimeProfileId: string | null;
+    projectRuntimeProfileId: string | null;
+    systemRuntimeProfileId: string | null;
+  }> {
+    return request(`/runtime-profiles/effective/task/${taskId}`);
+  },
+
+  getEffectiveChatRuntime(projectId: string): Promise<{
+    source: string;
+    profile: RuntimeProfile | null;
+    taskRuntimeProfileId: string | null;
+    projectRuntimeProfileId: string | null;
+    systemRuntimeProfileId: string | null;
+    resolved: {
+      source: string;
+      profileId: string | null;
+      runtimeId: string;
+      providerId: string;
+      transport: string;
+      baseUrl: string | null;
+      apiKeyEnvVar: string | null;
+      hasApiKey: boolean;
+      model: string | null;
+      headers: string[];
+      optionKeys: string[];
+      workflowKind: string | null;
+    };
+  }> {
+    return request(`/runtime-profiles/effective/chat/${projectId}`);
   },
 };

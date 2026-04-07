@@ -43,6 +43,7 @@ Options:
 ```
 
 **If fixing:**
+
 - For missing jobs → add new jobs to existing pipeline
 - For configuration issues → edit existing jobs
 - Preserve existing structure, job names, and ordering conventions

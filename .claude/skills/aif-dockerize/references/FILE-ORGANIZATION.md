@@ -1,11 +1,13 @@
 # File Organization
 
 ## Root Directory — only files Docker expects by convention:
+
 - `Dockerfile` — CI/CD, Docker Hub, GitHub Actions look for it in root
 - `compose.yml`, `compose.override.yml`, `compose.production.yml` — `docker compose` looks in root
 - `.dockerignore` — must be in build context root
 
 ## `docker/` Directory — all service configs and supporting files:
+
 ```
 docker/
 ├── angie/                    # Reverse proxy (if used)
@@ -22,6 +24,7 @@ docker/
 ```
 
 ## `deploy/` Directory — production ops scripts:
+
 ```
 deploy/
 └── scripts/
@@ -39,30 +42,31 @@ deploy/
 
 **Always created (root):**
 
-| File | Purpose |
-|------|---------|
-| `Dockerfile` | Multi-stage (dev + prod) |
-| `compose.yml` | Base configuration with `COMPOSE_PROJECT_NAME` |
-| `compose.override.yml` | Development overrides |
-| `compose.production.yml` | Production hardened |
-| `.dockerignore` | Build context exclusions |
+| File                     | Purpose                                        |
+| ------------------------ | ---------------------------------------------- |
+| `Dockerfile`             | Multi-stage (dev + prod)                       |
+| `compose.yml`            | Base configuration with `COMPOSE_PROJECT_NAME` |
+| `compose.override.yml`   | Development overrides                          |
+| `compose.production.yml` | Production hardened                            |
+| `.dockerignore`          | Build context exclusions                       |
 
 **Conditionally created (`docker/`):**
 
-| Directory | When |
-|-----------|------|
-| `docker/angie/` | Reverse proxy selected (Angie/Nginx) |
-| `docker/postgres/` | Custom init scripts needed |
-| `docker/php/` | PHP project (php.ini, php-fpm.conf) |
-| `docker/redis/` | Custom Redis config needed |
+| Directory          | When                                 |
+| ------------------ | ------------------------------------ |
+| `docker/angie/`    | Reverse proxy selected (Angie/Nginx) |
+| `docker/postgres/` | Custom init scripts needed           |
+| `docker/php/`      | PHP project (php.ini, php-fpm.conf)  |
+| `docker/redis/`    | Custom Redis config needed           |
 
 **Always created:**
 
-| Directory | Purpose |
-|-----------|---------|
+| Directory         | Purpose                         |
+| ----------------- | ------------------------------- |
 | `deploy/scripts/` | Production ops scripts (Step 8) |
 
 Update compose volumes to reference `docker/` paths:
+
 ```yaml
 # Example: Angie config mount
 volumes:

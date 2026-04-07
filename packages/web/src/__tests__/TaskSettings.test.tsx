@@ -6,6 +6,11 @@ vi.mock("@/hooks/useProjects", () => ({
   useProjects: () => ({ data: [{ id: "test-project", parallelEnabled: false }] }),
 }));
 
+vi.mock("@/hooks/useRuntimeProfiles", () => ({
+  useRuntimeProfiles: () => ({ data: [] }),
+  useRuntimes: () => ({ data: [] }),
+}));
+
 const mockTask: Task = {
   id: "ts-1",
   projectId: "test-project",
@@ -180,6 +185,24 @@ describe("TaskSettings", () => {
     fireEvent.click(screen.getByText("Save"));
 
     expect(onSave).toHaveBeenCalledWith({ maxReviewIterations: 7 });
+  });
+
+  it("opens runtime override panel", () => {
+    render(<TaskSettings task={mockTask} onSave={onSave} />);
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Runtime override" }));
+
+    expect(screen.getByText("Runtime profile")).toBeDefined();
+    expect(screen.getByPlaceholderText("runtime default")).toBeDefined();
+  });
+
+  it("auto-opens runtime override when task has runtimeProfileId", () => {
+    const taskWithRuntime = { ...mockTask, runtimeProfileId: "some-profile" };
+    render(<TaskSettings task={taskWithRuntime} onSave={onSave} />);
+    fireEvent.click(screen.getByText("Settings"));
+
+    // Panel should already be open
+    expect(screen.getByText("Runtime profile")).toBeDefined();
   });
 
   it("does not include planner fields in save for fix tasks", () => {

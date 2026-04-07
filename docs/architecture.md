@@ -4,7 +4,7 @@
 
 ## Overview
 
-AIF Handoff is a Turborepo monorepo with five packages. The system automates task management: a React Kanban UI lets users create tasks, the API and agent operate through a centralized data layer backed by SQLite, and an agent coordinator dispatches Claude Agent SDK subagents to plan, implement, and review each task.
+AIF Handoff is a Turborepo monorepo with six packages. The system automates task management: a React Kanban UI lets users create tasks, the API and agent operate through a centralized data layer backed by SQLite, and runtime execution goes through `@aif/runtime` so orchestration is provider-neutral.
 
 ```
 ┌─────────────┐     HTTP/WS      ┌─────────────┐
@@ -12,10 +12,16 @@ AIF Handoff is a Turborepo monorepo with five packages. The system automates tas
 │  React+Vite │                  │    Hono      │
 └─────────────┘                  └──────┬───────┘
                                         │
-┌─────────────┐     HTTP         ┌──────┴───────┐
-│ Claude Agent │ ◄──────────────► │    Agent     │
-│    SDK       │                  │ Coordinator  │
-└─────────────┘                  └──────┬───────┘
+┌───────────────┐   Runtime API   ┌──────┴───────┐
+│ Runtime/Provider│ ◄────────────► │    Agent     │
+│ adapters        │                │ Coordinator  │
+└───────────────┘                  └──────┬───────┘
+                                          │
+                                   ┌──────┴───────┐
+                                   │ @aif/runtime  │
+                                   │ (registry +   │
+                                   │ workflow spec)│
+                                   └──────┬───────┘
                                         │
                                  ┌──────┴───────┐
                                  │ @aif/data     │
@@ -30,18 +36,22 @@ AIF Handoff is a Turborepo monorepo with five packages. The system automates tas
 
 ## Packages
 
-| Package           | Name          | Purpose                                                     |
-| ----------------- | ------------- | ----------------------------------------------------------- |
-| `packages/shared` | `@aif/shared` | Types, schema, state machine, constants, env, logger        |
-| `packages/data`   | `@aif/data`   | Centralized DB access layer (all SQL/repository operations) |
-| `packages/api`    | `@aif/api`    | Hono REST + WebSocket server (port 3009)                    |
-| `packages/web`    | `@aif/web`    | React Kanban UI (port 5180)                                 |
-| `packages/agent`  | `@aif/agent`  | Coordinator + Claude Agent SDK subagents                    |
+| Package            | Name           | Purpose                                                       |
+| ------------------ | -------------- | ------------------------------------------------------------- |
+| `packages/shared`  | `@aif/shared`  | Types, schema, state machine, constants, env, logger          |
+| `packages/runtime` | `@aif/runtime` | Runtime/provider contracts, registry, adapters, module loader |
+| `packages/data`    | `@aif/data`    | Centralized DB access layer (all SQL/repository operations)   |
+| `packages/api`     | `@aif/api`     | Hono REST + WebSocket server (port 3009)                      |
+| `packages/web`     | `@aif/web`     | React Kanban UI (port 5180)                                   |
+| `packages/agent`   | `@aif/agent`   | Coordinator + runtime-driven subagent orchestration           |
 
 ### Dependency Graph
 
 ```
 shared ← data
+shared ← runtime
+runtime ← api
+runtime ← agent
 shared ← web (browser export only)
 data   ← api
 data   ← agent
@@ -50,10 +60,26 @@ data   ← agent
 No cross-dependencies between `api`, `web`, and `agent`. Runtime integration is:
 
 - `web` ↔ `api` via HTTP/WebSocket
-- `agent` → Claude Agent SDK via SDK calls
+- `agent`/`api` → `@aif/runtime` for run/resume/session/model-discovery flows
 - `api`/`agent` → SQLite via `@aif/data`
 - `agent` → `api` via HTTP for best-effort broadcast notifications
 - Lint guard enforces this boundary: `api` and `agent` cannot import DB helpers from `@aif/shared` or SQL builders directly.
+
+## Runtime Registry and Profile Resolution
+
+Runtime execution is centralized in `packages/runtime`:
+
+- `registry.ts` registers built-in adapters and optional external modules (`AIF_RUNTIME_MODULES`).
+- `workflowSpec.ts` defines runtime-independent execution intent (`planner`, `implementer`, `reviewer`, one-shot API flows).
+- `resolution.ts` merges profile data + env secrets + model/runtime overrides with capability checks.
+
+Effective task profile selection order is:
+
+1. Task override (`tasks.runtime_profile_id`)
+2. Project default (`projects.default_task_runtime_profile_id`)
+3. System default (optional runtime bootstrap configuration)
+
+The same pattern applies to chat mode using `default_chat_runtime_profile_id`.
 
 ## Agent Pipeline
 
@@ -61,7 +87,7 @@ The coordinator (`packages/agent/src/coordinator.ts`) uses a dual-trigger model:
 
 The coordinator supports **parallel task execution** (experimental, per-project). When a project has "Parallel Execution" enabled in settings, up to `COORDINATOR_MAX_CONCURRENT_TASKS` (default 3) tasks per stage run concurrently via `Promise.allSettled`. This value also serves as the global cap on total concurrent Claude processes across all stages and projects. Non-parallel projects always process 1 task at a time. Tasks are atomically claimed (`lockedBy`/`lockedUntil` columns) with lock duration tied to the stage timeout; heartbeats renew the lock periodically. Stale claims (expired TTL or dead heartbeat) are auto-released. On shutdown, active locks are released immediately.
 
-It delegates to `.claude/agents/` definitions:
+It delegates workflow stages to `.claude/agents/` definitions, but actual execution transport/model/session behavior is adapter-owned through `@aif/runtime`:
 
 ```
 Backlog ──[start_ai]──► Planning ──► Plan Ready ──► Implementing ──► Review ──► Done ──► Verified
@@ -102,7 +128,7 @@ This makes parallelism explicit:
 
 ### Agent Definitions
 
-All agents are defined as markdown files in `.claude/agents/*.md` and loaded by the Claude Agent SDK via `settingSources: ["project"]`. The `agent` package orchestrates _when_ to invoke them; the markdown files define _what_ they do.
+All agents are defined as markdown files in `.claude/agents/*.md` and loaded by runtimes that support agent definitions (e.g. Claude adapter via `settingSources: ["project"]`). The `agent` package orchestrates _when_ to invoke them; the markdown files define _what_ they do. For runtimes without agent definition support, the prompt policy falls back to slash-command injection.
 
 ## Task State Machine
 
@@ -131,7 +157,7 @@ Tasks have a `paused` flag (default `false`). When `true`, the coordinator skips
 - `listDueBlockedExternalTasks` — paused blocked tasks are not auto-released when their retry window elapses.
 - `listStaleInProgressTasks` — paused tasks are not treated as stale by the watchdog, so they won't be force-recovered to `blocked_external`.
 
-**Important:** pausing a task does **not** abort an already running agent session. If a Claude SDK query is in flight, it will finish. The pause takes effect on the **next** coordinator cycle — the task simply won't be picked up for the next stage transition.
+**Important:** pausing a task does **not** abort an already running runtime session. If a query is in flight, it will finish. The pause takes effect on the **next** coordinator cycle — the task simply won't be picked up for the next stage transition.
 
 The Pause/Resume button is shown in the TaskDetail Actions bar for active processing stages (`planning`, `plan_ready`, `implementing`, `review`, `blocked_external`). It is hidden for `backlog`, `done`, and `verified` where the agent pipeline is not running.
 
@@ -179,11 +205,13 @@ Agent tool events are tracked in each task's `agentActivityLog` field. Two modes
 
 SQLite via `better-sqlite3` with `drizzle-orm` for type-safe queries. Schema is defined in `packages/shared/src/schema.ts`, and all DB reads/writes are executed through `packages/data/src/index.ts`.
 
-Three tables:
+Key tables:
 
-- **tasks** — task data, status, plan, implementation log, review comments, agent activity, heartbeat metadata
+- **tasks** — task data, status, plan/logs, heartbeat metadata, runtime override fields (`runtime_profile_id`, `model_override`, `runtime_options_json`), runtime session id (`session_id`)
+- **runtime_profiles** — project-scoped or global runtime/provider profiles with non-secret transport/model config
+- **projects** — project metadata plus default runtime profile ids for tasks and chat
+- **chat_sessions / chat_messages** — persisted chat state with runtime profile/session linkage
 - **task_comments** — human/agent comments with optional attachments
-- **projects** — project metadata (name, root path, agent budgets)
 
 ### Indexes
 

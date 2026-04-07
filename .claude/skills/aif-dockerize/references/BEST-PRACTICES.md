@@ -18,13 +18,13 @@ Comprehensive reference for generating production-grade Docker configurations.
 
 ### Base Image Selection
 
-| Base | Size | Shell | Package Manager | Best For |
-|------|------|-------|-----------------|----------|
-| `scratch` | 0 MB | No | No | Go static binaries |
-| `distroless` | ~2-20 MB | No | No | Go, Java, Node.js |
-| `alpine` | ~7 MB | Yes | apk | General purpose |
-| `*-slim` | ~45 MB | Yes | apt | Python, Node.js, PHP |
-| Full Debian | ~130 MB | Yes | apt | Build stages only |
+| Base         | Size     | Shell | Package Manager | Best For             |
+| ------------ | -------- | ----- | --------------- | -------------------- |
+| `scratch`    | 0 MB     | No    | No              | Go static binaries   |
+| `distroless` | ~2-20 MB | No    | No              | Go, Java, Node.js    |
+| `alpine`     | ~7 MB    | Yes   | apk             | General purpose      |
+| `*-slim`     | ~45 MB   | Yes   | apt             | Python, Node.js, PHP |
+| Full Debian  | ~130 MB  | Yes   | apt             | Build stages only    |
 
 ### Multi-Stage Build Pattern
 
@@ -147,17 +147,13 @@ x-security: &default-security
   cap_drop:
     - ALL
 
-services:
-  ...
+services: ...
 
-volumes:
-  ...
+volumes: ...
 
-networks:
-  ...
+networks: ...
 
-secrets:
-  ...
+secrets: ...
 ```
 
 ### Profiles
@@ -166,12 +162,12 @@ Selectively activate services by context:
 
 ```yaml
 services:
-  app:          # No profile = always starts
+  app: # No profile = always starts
     ...
   mailpit:
-    profiles: [dev]       # Only with --profile dev
+    profiles: [dev] # Only with --profile dev
   test-runner:
-    profiles: [test]      # Only with --profile test
+    profiles: [test] # Only with --profile test
 ```
 
 > **Note:** Don't add database admin UIs (pgAdmin, Adminer) to compose. Use native GUI clients (TablePlus, DBeaver, DataGrip) via the exposed DB port instead — less attack surface, fewer services to manage.
@@ -192,12 +188,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
-        restart: true          # Restart app if db restarts
+        restart: true # Restart app if db restarts
       migrations:
         condition: service_completed_successfully
 ```
 
 Three conditions:
+
 - `service_started` — container running (default)
 - `service_healthy` — healthcheck passing
 - `service_completed_successfully` — exited with code 0
@@ -277,6 +274,7 @@ healthcheck:
 ### Angie vs Nginx
 
 **Prefer Angie** for new projects. Angie is a fully Nginx-compatible fork with:
+
 - Dynamic upstream management without reload
 - Built-in Prometheus metrics exporter (`/metrics`)
 - Active development and regular releases
@@ -325,7 +323,7 @@ networks:
     driver: bridge
   backend:
     driver: bridge
-    internal: true    # No external internet access
+    internal: true # No external internet access
 
 services:
   proxy:
@@ -333,7 +331,7 @@ services:
   app:
     networks: [frontend, backend]
   db:
-    networks: [backend]   # DB cannot reach internet
+    networks: [backend] # DB cannot reach internet
 ```
 
 ### Environment Management — `env_file` over `environment`
@@ -343,7 +341,7 @@ Use `env_file: .env` on the app service. Only use `environment:` for values that
 ```yaml
 services:
   app:
-    env_file: .env                        # App reads all its config from here
+    env_file: .env # App reads all its config from here
     environment:
       # ONLY computed values that compose assembles from parts
       DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
@@ -359,13 +357,14 @@ services:
 
 **When to use what:**
 
-| Use case | Where |
-|----------|-------|
-| App config (API keys, feature flags, timeouts) | `env_file: .env` — app reads directly |
-| Computed connection strings (DATABASE_URL) | `environment:` — compose assembles from parts |
-| Infrastructure image config (POSTGRES_DB) | `environment:` on that service |
+| Use case                                       | Where                                         |
+| ---------------------------------------------- | --------------------------------------------- |
+| App config (API keys, feature flags, timeouts) | `env_file: .env` — app reads directly         |
+| Computed connection strings (DATABASE_URL)     | `environment:` — compose assembles from parts |
+| Infrastructure image config (POSTGRES_DB)      | `environment:` on that service                |
 
 **Anti-pattern — do NOT do this:**
+
 ```yaml
 # WRONG: duplicating every .env variable in compose
 environment:
@@ -393,6 +392,7 @@ OPENAI_API_KEY=
 ```
 
 **Rules:**
+
 - `.env` in `.gitignore` — never commit real secrets
 - `.env.example` committed with safe placeholder values
 - Use `${VAR:?error message}` for required values — Compose fails with a clear error if missing
@@ -408,7 +408,7 @@ deploy:
     limits:
       cpus: "1.0"
       memory: 512M
-      pids: 100            # Prevent fork bombs
+      pids: 100 # Prevent fork bombs
     reservations:
       cpus: "0.25"
       memory: 128M
@@ -473,20 +473,20 @@ docker compose -f compose.yml -f compose.production.yml up -d
 
 ### What Changes Between Dev and Prod
 
-| Aspect | Development | Production |
-|--------|-------------|------------|
-| Build target | `development` | `production` |
-| Source code | Bind mount (hot reload) | Baked into image |
-| Debug ports | Exposed (9229, 5005, etc.) | Not exposed |
-| Env vars | `NODE_ENV=development` | `NODE_ENV=production` |
-| Log level | `debug` | `warn` or `error` |
-| Dev tools | mailpit | Not included |
-| DB port | Exposed for local tools | Not exposed |
-| Security | Relaxed | Hardened (read_only, cap_drop, etc.) |
-| Restart | Not set | `unless-stopped` |
-| Resources | Not limited | CPU/memory limits set |
-| Volumes | Bind mounts | Named volumes |
-| Images | Built locally | Pulled from registry |
+| Aspect       | Development                | Production                           |
+| ------------ | -------------------------- | ------------------------------------ |
+| Build target | `development`              | `production`                         |
+| Source code  | Bind mount (hot reload)    | Baked into image                     |
+| Debug ports  | Exposed (9229, 5005, etc.) | Not exposed                          |
+| Env vars     | `NODE_ENV=development`     | `NODE_ENV=production`                |
+| Log level    | `debug`                    | `warn` or `error`                    |
+| Dev tools    | mailpit                    | Not included                         |
+| DB port      | Exposed for local tools    | Not exposed                          |
+| Security     | Relaxed                    | Hardened (read_only, cap_drop, etc.) |
+| Restart      | Not set                    | `unless-stopped`                     |
+| Resources    | Not limited                | CPU/memory limits set                |
+| Volumes      | Bind mounts                | Named volumes                        |
+| Images       | Built locally              | Pulled from registry                 |
 
 ### Dockerfile Stage Targeting
 
@@ -514,28 +514,28 @@ services:
 
 ### Resource Recommendations
 
-| Service | CPU Limit | Memory Limit | Memory Reservation |
-|---------|-----------|--------------|-------------------|
-| PostgreSQL | 2.0 | 1G | 256M |
-| MySQL | 2.0 | 1G | 256M |
-| Redis | 0.5 | 512M | 64M |
-| RabbitMQ | 1.0 | 512M | 128M |
-| Elasticsearch | 2.0 | 2G | 1G |
-| MinIO | 1.0 | 512M | 128M |
-| Angie/Nginx | 0.5 | 256M | 64M |
-| Traefik | 0.5 | 256M | 64M |
-| Mailpit | 0.25 | 128M | 32M |
+| Service       | CPU Limit | Memory Limit | Memory Reservation |
+| ------------- | --------- | ------------ | ------------------ |
+| PostgreSQL    | 2.0       | 1G           | 256M               |
+| MySQL         | 2.0       | 1G           | 256M               |
+| Redis         | 0.5       | 512M         | 64M                |
+| RabbitMQ      | 1.0       | 512M         | 128M               |
+| Elasticsearch | 2.0       | 2G           | 1G                 |
+| MinIO         | 1.0       | 512M         | 128M               |
+| Angie/Nginx   | 0.5       | 256M         | 64M                |
+| Traefik       | 0.5       | 256M         | 64M                |
+| Mailpit       | 0.25      | 128M         | 32M                |
 
 ### Default Ports
 
-| Service | Main Port | Admin/UI Port |
-|---------|-----------|---------------|
-| PostgreSQL | 5432 | — |
-| MySQL | 3306 | — |
-| Redis | 6379 | — |
-| RabbitMQ | 5672 | 15672 |
-| Elasticsearch | 9200 | 9300 |
-| MinIO | 9000 | 9001 |
-| Mailpit | 1025 (SMTP) | 8025 (Web) |
-| Angie/Nginx | 80, 443 | — |
-| Traefik | 80, 443 | 8080 |
+| Service       | Main Port   | Admin/UI Port |
+| ------------- | ----------- | ------------- |
+| PostgreSQL    | 5432        | —             |
+| MySQL         | 3306        | —             |
+| Redis         | 6379        | —             |
+| RabbitMQ      | 5672        | 15672         |
+| Elasticsearch | 9200        | 9300          |
+| MinIO         | 9000        | 9001          |
+| Mailpit       | 1025 (SMTP) | 8025 (Web)    |
+| Angie/Nginx   | 80, 443     | —             |
+| Traefik       | 80, 443     | 8080          |

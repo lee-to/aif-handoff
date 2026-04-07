@@ -44,6 +44,8 @@ describe("chat sessions data layer", () => {
       expect(session!.projectId).toBe("proj-1");
       expect(session!.title).toBe("New Chat");
       expect(session!.agentSessionId).toBeNull();
+      expect(session!.runtimeProfileId).toBeNull();
+      expect(session!.runtimeSessionId).toBeNull();
     });
 
     it("creates a session with custom title", () => {
@@ -175,6 +177,8 @@ describe("chat sessions data layer", () => {
         projectId: "proj-1",
         title: "Test",
         agentSessionId: null,
+        runtimeProfileId: null,
+        runtimeSessionId: null,
         source: "web",
         createdAt: session!.createdAt,
         updatedAt: session!.updatedAt,

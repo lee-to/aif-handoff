@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, like, lte, min, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, like, lte, min, or, sql } from "drizzle-orm";
 import {
   generatePlanPath,
   getProjectConfig,
@@ -9,8 +9,13 @@ import {
   projects,
   taskComments,
   tasks,
+  runtimeProfiles,
   chatSessions,
   chatMessages,
+  type CreateRuntimeProfileInput,
+  type EffectiveRuntimeProfileSelection,
+  type RuntimeProfile,
+  type UpdateRuntimeProfileInput,
   type Task,
   type TaskStatus,
   type ChatSession,
@@ -26,6 +31,7 @@ const log = createLogger("data");
 export type TaskRow = typeof tasks.$inferSelect;
 export type CommentRow = typeof taskComments.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
+export type RuntimeProfileRow = typeof runtimeProfiles.$inferSelect;
 
 export type CoordinatorStage = "planner" | "plan-checker" | "implementer" | "reviewer";
 
@@ -64,16 +70,20 @@ export type TaskFieldsUpdate = {
   maxReviewIterations?: number;
   paused?: boolean;
   lastHeartbeatAt?: string | null;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
   position?: number;
 };
 
 
 export function toTaskResponse(task: TaskRow): Task {
-  const { attachments, tags, ...rest } = task;
+  const { attachments, tags, runtimeOptionsJson, ...rest } = task;
   return {
     ...rest,
     attachments: parseAttachments(attachments),
     tags: parseTags(tags),
+    runtimeOptions: parseRuntimeObject(runtimeOptionsJson),
   };
 }
 
@@ -85,6 +95,39 @@ function parseTags(raw: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+function parseRuntimeObject(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseRuntimeHeaders(raw: string | null | undefined): Record<string, string> {
+  const parsed = parseRuntimeObject(raw);
+  if (!parsed) return {};
+
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === "string") {
+      headers[key] = value;
+    }
+  }
+  return headers;
+}
+
+function toJsonPayload(value: Record<string, unknown> | null | undefined): string {
+  return JSON.stringify(value ?? {});
+}
+
+function toHeadersJsonPayload(value: Record<string, string> | null | undefined): string {
+  return JSON.stringify(value ?? {});
 }
 
 export function toCommentResponse(comment: CommentRow) {
@@ -119,6 +162,7 @@ export function listTasks(projectId?: string): TaskRow[] {
 export type TaskSummaryRow = Pick<TaskRow,
   | "id" | "projectId" | "title" | "status" | "priority" | "position"
   | "autoMode" | "isFix" | "paused" | "roadmapAlias" | "tags"
+  | "runtimeProfileId" | "modelOverride"
   | "blockedReason" | "blockedFromStatus" | "retryCount"
   | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations"
   | "tokenTotal" | "costUsd" | "lastSyncedAt" | "createdAt" | "updatedAt"
@@ -136,6 +180,8 @@ const SUMMARY_COLUMNS = {
   paused: tasks.paused,
   roadmapAlias: tasks.roadmapAlias,
   tags: tasks.tags,
+  runtimeProfileId: tasks.runtimeProfileId,
+  modelOverride: tasks.modelOverride,
   blockedReason: tasks.blockedReason,
   blockedFromStatus: tasks.blockedFromStatus,
   retryCount: tasks.retryCount,
@@ -258,6 +304,9 @@ export function createTask(input: {
   useSubagents?: boolean;
   maxReviewIterations?: number;
   paused?: boolean;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
   roadmapAlias?: string;
   tags?: string[];
 }): TaskRow | undefined {
@@ -300,6 +349,10 @@ export function createTask(input: {
       useSubagents: input.useSubagents,
       maxReviewIterations: input.maxReviewIterations,
       paused: input.paused,
+      runtimeProfileId: input.runtimeProfileId ?? null,
+      modelOverride: input.modelOverride ?? null,
+      runtimeOptionsJson:
+        input.runtimeOptions === undefined ? null : JSON.stringify(input.runtimeOptions),
       roadmapAlias: input.roadmapAlias ?? null,
       tags: JSON.stringify(input.tags ?? []),
       reworkRequested: false,
@@ -322,13 +375,26 @@ export function createTask(input: {
 }
 
 export function updateTask(id: string, fields: TaskFieldsUpdate): TaskRow | undefined {
-  const { attachments, tags, ...rest } = fields;
+  const { attachments, tags, runtimeOptions, ...rest } = fields;
   const patch: TaskFieldsPatch = { ...rest, updatedAt: new Date().toISOString() };
   if (attachments !== undefined) {
     patch.attachments = JSON.stringify(attachments);
   }
   if (tags !== undefined) {
     patch.tags = JSON.stringify(tags);
+  }
+  if (runtimeOptions !== undefined) {
+    patch.runtimeOptionsJson = runtimeOptions === null ? null : JSON.stringify(runtimeOptions);
+  }
+  if (fields.runtimeProfileId !== undefined || fields.modelOverride !== undefined) {
+    log.debug(
+      {
+        taskId: id,
+        runtimeProfileId: fields.runtimeProfileId ?? null,
+        modelOverride: fields.modelOverride ?? null,
+      },
+      "Updated task runtime metadata",
+    );
   }
   getDb().update(tasks).set(patch).where(eq(tasks.id, id)).run();
   return findTaskById(id);
@@ -417,9 +483,19 @@ export function createProject(input: {
   implementerMaxBudgetUsd?: number | null;
   reviewSidecarMaxBudgetUsd?: number | null;
   parallelEnabled?: boolean;
+  defaultTaskRuntimeProfileId?: string | null;
+  defaultChatRuntimeProfileId?: string | null;
 }): ProjectRow | undefined {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  log.debug(
+    {
+      projectId: id,
+      defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
+      defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
+    },
+    "Creating project runtime defaults",
+  );
   getDb()
     .insert(projects)
     .values({
@@ -431,6 +507,8 @@ export function createProject(input: {
       implementerMaxBudgetUsd: input.implementerMaxBudgetUsd ?? null,
       reviewSidecarMaxBudgetUsd: input.reviewSidecarMaxBudgetUsd ?? null,
       parallelEnabled: input.parallelEnabled ?? false,
+      defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
+      defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -448,8 +526,22 @@ export function updateProject(
     implementerMaxBudgetUsd?: number | null;
     reviewSidecarMaxBudgetUsd?: number | null;
     parallelEnabled?: boolean;
+    defaultTaskRuntimeProfileId?: string | null;
+    defaultPlanRuntimeProfileId?: string | null;
+    defaultReviewRuntimeProfileId?: string | null;
+    defaultChatRuntimeProfileId?: string | null;
   },
 ): ProjectRow | undefined {
+  log.debug(
+    {
+      projectId: id,
+      defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
+      defaultPlanRuntimeProfileId: input.defaultPlanRuntimeProfileId ?? null,
+      defaultReviewRuntimeProfileId: input.defaultReviewRuntimeProfileId ?? null,
+      defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
+    },
+    "Updating project runtime defaults",
+  );
   getDb()
     .update(projects)
     .set({
@@ -460,6 +552,10 @@ export function updateProject(
       implementerMaxBudgetUsd: input.implementerMaxBudgetUsd ?? null,
       reviewSidecarMaxBudgetUsd: input.reviewSidecarMaxBudgetUsd ?? null,
       parallelEnabled: input.parallelEnabled ?? false,
+      defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
+      defaultPlanRuntimeProfileId: input.defaultPlanRuntimeProfileId ?? null,
+      defaultReviewRuntimeProfileId: input.defaultReviewRuntimeProfileId ?? null,
+      defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(projects.id, id))
@@ -759,6 +855,293 @@ export function findTasksByRoadmapAlias(projectId: string, alias: string): TaskR
     .all();
 }
 
+// ── Runtime Profiles ──────────────────────────────────────────
+
+export function toRuntimeProfileResponse(row: RuntimeProfileRow): RuntimeProfile {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    name: row.name,
+    runtimeId: row.runtimeId,
+    providerId: row.providerId,
+    transport: row.transport,
+    baseUrl: row.baseUrl,
+    apiKeyEnvVar: row.apiKeyEnvVar,
+    defaultModel: row.defaultModel,
+    headers: parseRuntimeHeaders(row.headersJson),
+    options: parseRuntimeObject(row.optionsJson) ?? {},
+    enabled: row.enabled,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function findRuntimeProfileById(id: string): RuntimeProfileRow | undefined {
+  return getDb().select().from(runtimeProfiles).where(eq(runtimeProfiles.id, id)).get();
+}
+
+export function listRuntimeProfiles(input: {
+  projectId?: string;
+  includeGlobal?: boolean;
+  enabledOnly?: boolean;
+} = {}): RuntimeProfileRow[] {
+  const conditions = [];
+  if (input.projectId) {
+    if (input.includeGlobal) {
+      conditions.push(or(eq(runtimeProfiles.projectId, input.projectId), isNull(runtimeProfiles.projectId)));
+    } else {
+      conditions.push(eq(runtimeProfiles.projectId, input.projectId));
+    }
+  }
+  if (input.enabledOnly) {
+    conditions.push(eq(runtimeProfiles.enabled, true));
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  log.debug(
+    {
+      projectId: input.projectId ?? null,
+      includeGlobal: input.includeGlobal ?? false,
+      enabledOnly: input.enabledOnly ?? false,
+    },
+    "Listing runtime profiles",
+  );
+  return getDb()
+    .select()
+    .from(runtimeProfiles)
+    .where(where)
+    .orderBy(asc(runtimeProfiles.createdAt))
+    .all();
+}
+
+export function createRuntimeProfile(input: CreateRuntimeProfileInput): RuntimeProfileRow | undefined {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  log.debug(
+    {
+      runtimeProfileId: id,
+      projectId: input.projectId ?? null,
+      runtimeId: input.runtimeId,
+      providerId: input.providerId,
+      enabled: input.enabled ?? true,
+    },
+    "Creating runtime profile",
+  );
+  getDb()
+    .insert(runtimeProfiles)
+    .values({
+      id,
+      projectId: input.projectId ?? null,
+      name: input.name,
+      runtimeId: input.runtimeId,
+      providerId: input.providerId,
+      transport: input.transport ?? null,
+      baseUrl: input.baseUrl ?? null,
+      apiKeyEnvVar: input.apiKeyEnvVar ?? null,
+      defaultModel: input.defaultModel ?? null,
+      headersJson: toHeadersJsonPayload(input.headers),
+      optionsJson: toJsonPayload(input.options),
+      enabled: input.enabled ?? true,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+  return findRuntimeProfileById(id);
+}
+
+export function updateRuntimeProfile(
+  id: string,
+  input: UpdateRuntimeProfileInput,
+): RuntimeProfileRow | undefined {
+  const patch: Partial<RuntimeProfileRow> = {
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (input.projectId !== undefined) patch.projectId = input.projectId;
+  if (input.name !== undefined) patch.name = input.name;
+  if (input.runtimeId !== undefined) patch.runtimeId = input.runtimeId;
+  if (input.providerId !== undefined) patch.providerId = input.providerId;
+  if (input.transport !== undefined) patch.transport = input.transport;
+  if (input.baseUrl !== undefined) patch.baseUrl = input.baseUrl;
+  if (input.apiKeyEnvVar !== undefined) patch.apiKeyEnvVar = input.apiKeyEnvVar;
+  if (input.defaultModel !== undefined) patch.defaultModel = input.defaultModel;
+  if (input.headers !== undefined) patch.headersJson = toHeadersJsonPayload(input.headers);
+  if (input.options !== undefined) patch.optionsJson = toJsonPayload(input.options);
+  if (input.enabled !== undefined) patch.enabled = input.enabled;
+
+  log.debug(
+    {
+      runtimeProfileId: id,
+      runtimeId: input.runtimeId ?? null,
+      providerId: input.providerId ?? null,
+      enabled: input.enabled ?? null,
+    },
+    "Updating runtime profile",
+  );
+  getDb().update(runtimeProfiles).set(patch).where(eq(runtimeProfiles.id, id)).run();
+  return findRuntimeProfileById(id);
+}
+
+export function deleteRuntimeProfile(id: string): void {
+  log.debug({ runtimeProfileId: id }, "Deleting runtime profile");
+  getDb().delete(runtimeProfiles).where(eq(runtimeProfiles.id, id)).run();
+}
+
+export function updateProjectRuntimeDefaults(
+  projectId: string,
+  input: {
+    defaultTaskRuntimeProfileId?: string | null;
+    defaultPlanRuntimeProfileId?: string | null;
+    defaultReviewRuntimeProfileId?: string | null;
+    defaultChatRuntimeProfileId?: string | null;
+  },
+): ProjectRow | undefined {
+  log.debug({ projectId, ...input }, "Updating project runtime default profiles");
+  const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if (input.defaultTaskRuntimeProfileId !== undefined) patch.defaultTaskRuntimeProfileId = input.defaultTaskRuntimeProfileId;
+  if (input.defaultPlanRuntimeProfileId !== undefined) patch.defaultPlanRuntimeProfileId = input.defaultPlanRuntimeProfileId;
+  if (input.defaultReviewRuntimeProfileId !== undefined) patch.defaultReviewRuntimeProfileId = input.defaultReviewRuntimeProfileId;
+  if (input.defaultChatRuntimeProfileId !== undefined) patch.defaultChatRuntimeProfileId = input.defaultChatRuntimeProfileId;
+  getDb().update(projects).set(patch).where(eq(projects.id, projectId)).run();
+  return findProjectById(projectId);
+}
+
+export function updateTaskRuntimeOverride(
+  taskId: string,
+  input: {
+    runtimeProfileId?: string | null;
+    modelOverride?: string | null;
+    runtimeOptions?: Record<string, unknown> | null;
+  },
+): TaskRow | undefined {
+  const patch: Partial<TaskRow> = {
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (input.runtimeProfileId !== undefined) patch.runtimeProfileId = input.runtimeProfileId;
+  if (input.modelOverride !== undefined) patch.modelOverride = input.modelOverride;
+  if (input.runtimeOptions !== undefined) {
+    patch.runtimeOptionsJson =
+      input.runtimeOptions === null ? null : JSON.stringify(input.runtimeOptions);
+  }
+
+  log.debug(
+    {
+      taskId,
+      runtimeProfileId: input.runtimeProfileId ?? null,
+      modelOverride: input.modelOverride ?? null,
+      hasRuntimeOptions: input.runtimeOptions !== undefined,
+    },
+    "Updating task runtime override",
+  );
+  getDb().update(tasks).set(patch).where(eq(tasks.id, taskId)).run();
+  return findTaskById(taskId);
+}
+
+export function updateChatSessionRuntime(
+  sessionId: string,
+  input: {
+    runtimeProfileId?: string | null;
+    runtimeSessionId?: string | null;
+  },
+): ChatSessionRow | undefined {
+  log.debug(
+    {
+      sessionId,
+      runtimeProfileId: input.runtimeProfileId ?? null,
+      hasRuntimeSessionId: input.runtimeSessionId !== undefined,
+    },
+    "Updating chat session runtime metadata",
+  );
+  getDb()
+    .update(chatSessions)
+    .set({
+      ...(input.runtimeProfileId !== undefined ? { runtimeProfileId: input.runtimeProfileId } : {}),
+      ...(input.runtimeSessionId !== undefined ? { runtimeSessionId: input.runtimeSessionId } : {}),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(chatSessions.id, sessionId))
+    .run();
+  return findChatSessionById(sessionId);
+}
+
+export function resolveEffectiveRuntimeProfile(input: {
+  taskId?: string;
+  projectId?: string;
+  mode?: "task" | "plan" | "review" | "chat";
+  systemDefaultRuntimeProfileId?: string | null;
+}): EffectiveRuntimeProfileSelection {
+  const mode = input.mode ?? "task";
+  const task = input.taskId ? findTaskById(input.taskId) : undefined;
+  const projectId = input.projectId ?? task?.projectId;
+  const project = projectId ? findProjectById(projectId) : undefined;
+
+  // Task-level override applies to all stages: if set, the entire task
+  // pipeline (plan, implement, review, chat) runs on the specified runtime.
+  const taskRuntimeProfileId = task?.runtimeProfileId ?? null;
+
+  let projectRuntimeProfileId: string | null = null;
+  if (mode === "chat") {
+    projectRuntimeProfileId = project?.defaultChatRuntimeProfileId ?? null;
+  } else if (mode === "plan") {
+    projectRuntimeProfileId = project?.defaultPlanRuntimeProfileId ?? project?.defaultTaskRuntimeProfileId ?? null;
+  } else if (mode === "review") {
+    projectRuntimeProfileId = project?.defaultReviewRuntimeProfileId ?? project?.defaultTaskRuntimeProfileId ?? null;
+  } else {
+    projectRuntimeProfileId = project?.defaultTaskRuntimeProfileId ?? null;
+  }
+  const systemRuntimeProfileId = input.systemDefaultRuntimeProfileId ?? null;
+
+  const candidates: Array<{
+    source: EffectiveRuntimeProfileSelection["source"];
+    profileId: string | null;
+  }> = [
+    { source: "task_override", profileId: taskRuntimeProfileId },
+    { source: "project_default", profileId: projectRuntimeProfileId },
+    { source: "system_default", profileId: systemRuntimeProfileId },
+  ];
+
+  const unavailableIds: string[] = [];
+
+  for (const candidate of candidates) {
+    if (!candidate.profileId) continue;
+    const profile = findRuntimeProfileById(candidate.profileId);
+    if (!profile || !profile.enabled) {
+      unavailableIds.push(candidate.profileId);
+      continue;
+    }
+
+    if (candidate.source !== "task_override") {
+      log.info(
+        {
+          source: candidate.source,
+          taskRuntimeProfileId,
+          projectRuntimeProfileId,
+          systemRuntimeProfileId,
+          unavailableCount: unavailableIds.length,
+        },
+        "Effective runtime profile fell back from higher-priority source",
+      );
+    }
+
+    return {
+      source: candidate.source,
+      profile: toRuntimeProfileResponse(profile),
+      taskRuntimeProfileId,
+      projectRuntimeProfileId,
+      systemRuntimeProfileId,
+    };
+  }
+
+  return {
+    source: "none",
+    profile: null,
+    taskRuntimeProfileId,
+    projectRuntimeProfileId,
+    systemRuntimeProfileId,
+  };
+}
+
 // ── Chat Sessions ──────────────────────────────────────────────
 
 export function toChatSessionResponse(row: ChatSessionRow): ChatSession {
@@ -767,6 +1150,8 @@ export function toChatSessionResponse(row: ChatSessionRow): ChatSession {
     projectId: row.projectId,
     title: row.title,
     agentSessionId: row.agentSessionId,
+    runtimeProfileId: row.runtimeProfileId,
+    runtimeSessionId: row.runtimeSessionId ?? row.agentSessionId,
     source: "web",
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -795,16 +1180,26 @@ export function toChatMessageResponse(row: ChatMessageRow): ChatSessionMessage {
 export function createChatSession(input: {
   projectId: string;
   title?: string;
+  runtimeProfileId?: string | null;
+  runtimeSessionId?: string | null;
 }): ChatSessionRow | undefined {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  log.debug("createChatSession projectId=%s title=%s", input.projectId, input.title ?? "New Chat");
+  log.debug(
+    {
+      projectId: input.projectId,
+      runtimeProfileId: input.runtimeProfileId ?? null,
+    },
+    "Creating chat session",
+  );
   getDb()
     .insert(chatSessions)
     .values({
       id,
       projectId: input.projectId,
       title: input.title ?? "New Chat",
+      runtimeProfileId: input.runtimeProfileId ?? null,
+      runtimeSessionId: input.runtimeSessionId ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -829,12 +1224,26 @@ export function listChatSessions(projectId: string, limit = 20): ChatSessionRow[
 
 export function updateChatSession(
   id: string,
-  fields: { title?: string; agentSessionId?: string | null },
+  fields: {
+    title?: string;
+    agentSessionId?: string | null;
+    runtimeProfileId?: string | null;
+    runtimeSessionId?: string | null;
+  },
 ): ChatSessionRow | undefined {
-  log.debug("updateChatSession id=%s fields=%o", id, fields);
+  log.debug(
+    {
+      sessionId: id,
+      runtimeProfileId: fields.runtimeProfileId ?? null,
+      hasRuntimeSessionId: fields.runtimeSessionId !== undefined,
+    },
+    "Updating chat session runtime metadata",
+  );
   const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
   if (fields.title !== undefined) patch.title = fields.title;
   if (fields.agentSessionId !== undefined) patch.agentSessionId = fields.agentSessionId;
+  if (fields.runtimeProfileId !== undefined) patch.runtimeProfileId = fields.runtimeProfileId;
+  if (fields.runtimeSessionId !== undefined) patch.runtimeSessionId = fields.runtimeSessionId;
   getDb().update(chatSessions).set(patch).where(eq(chatSessions.id, id)).run();
   return findChatSessionById(id);
 }

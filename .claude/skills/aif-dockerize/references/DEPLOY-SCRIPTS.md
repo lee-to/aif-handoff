@@ -15,14 +15,14 @@ Read skills/dockerize/templates/backup.sh
 
 ## Script Purposes
 
-| Script | Purpose | Customization |
-|--------|---------|---------------|
-| `deploy/scripts/deploy.sh` | Initial production deployment | Pre-flight checks, build, start, health verify |
-| `deploy/scripts/update.sh` | Zero-downtime rolling update | Pre-backup, pull, build, recreate app, health check |
-| `deploy/scripts/logs.sh` | Log aggregation utility | Service names from compose |
-| `deploy/scripts/health-check.sh` | Full health diagnostics | App port, health endpoints |
-| `deploy/scripts/rollback.sh` | Version rollback | Git-based version detection |
-| `deploy/scripts/backup.sh` | Database backup with retention | DB_USER, DB_NAME from .env |
+| Script                           | Purpose                        | Customization                                       |
+| -------------------------------- | ------------------------------ | --------------------------------------------------- |
+| `deploy/scripts/deploy.sh`       | Initial production deployment  | Pre-flight checks, build, start, health verify      |
+| `deploy/scripts/update.sh`       | Zero-downtime rolling update   | Pre-backup, pull, build, recreate app, health check |
+| `deploy/scripts/logs.sh`         | Log aggregation utility        | Service names from compose                          |
+| `deploy/scripts/health-check.sh` | Full health diagnostics        | App port, health endpoints                          |
+| `deploy/scripts/rollback.sh`     | Version rollback               | Git-based version detection                         |
+| `deploy/scripts/backup.sh`       | Database backup with retention | DB_USER, DB_NAME from .env                          |
 
 ## Customization Points for All Scripts
 
@@ -35,6 +35,7 @@ Read skills/dockerize/templates/backup.sh
 ## Script Requirements
 
 **All scripts must:**
+
 - Use `set -euo pipefail`
 - Have colored logging (`log_info`, `log_success`, `log_error`)
 - Calculate `PROJECT_ROOT` relative to script location
@@ -56,5 +57,6 @@ Bash: chmod +x deploy/scripts/*.sh
 ## Skip Condition
 
 If `MODE = "audit"` and deploy scripts already exist:
+
 - Check existing scripts against templates for missing functionality
 - Suggest improvements but don't overwrite

@@ -1,33 +1,17 @@
 import { spawn } from "node:child_process";
+import type { RuntimeDiagnoseErrorInput } from "../../types.js";
 
-export interface ClaudeStderrCollector {
-  onStderr: (chunk: string) => void;
-  getTail: () => string;
+function messageFromUnknown(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
-export function createClaudeStderrCollector(maxLines = 20): ClaudeStderrCollector {
-  const lines: string[] = [];
-
-  return {
-    onStderr: (chunk: string) => {
-      for (const rawLine of chunk.split("\n")) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        lines.push(line);
-        if (lines.length > maxLines) lines.shift();
-      }
-    },
-    getTail: () => lines.join(" | "),
-  };
-}
-
-export function explainClaudeFailure(err: unknown, stderrTail: string): string {
-  const baseMessage = err instanceof Error ? err.message : String(err);
+function explainFailure(err: unknown, stderrTail: string): string {
+  const baseMessage = messageFromUnknown(err);
   const stderr = stderrTail.trim();
   const combinedLower = `${baseMessage} ${stderr}`.toLowerCase();
 
   if (combinedLower.includes("not logged in") || combinedLower.includes("/login")) {
-    return `Claude not logged in. Run claude /login. ${stderr || baseMessage}`;
+    return `Runtime not logged in. Run claude /login. ${stderr || baseMessage}`;
   }
 
   if (
@@ -38,15 +22,15 @@ export function explainClaudeFailure(err: unknown, stderrTail: string): string {
     combinedLower.includes("quota") ||
     combinedLower.includes("credits")
   ) {
-    return `Claude usage limit reached. ${stderr || baseMessage}`;
+    return `Runtime usage limit reached. ${stderr || baseMessage}`;
   }
 
   if (combinedLower.includes("stream closed") || combinedLower.includes("error in hook callback")) {
-    return `Claude stream interrupted during execution. ${stderr || baseMessage}`;
+    return `Runtime stream interrupted during execution. ${stderr || baseMessage}`;
   }
 
   if (stderr) {
-    return `${baseMessage}. Claude stderr: ${stderr}`;
+    return `${baseMessage}. Runtime stderr: ${stderr}`;
   }
 
   if (baseMessage.toLowerCase().includes("exited with code 1")) {
@@ -62,11 +46,8 @@ function trimForLog(text: string, maxLen = 1200): string {
   return `${normalized.slice(0, maxLen)}...`;
 }
 
-export async function probeClaudeCliFailure(
-  projectRoot: string,
-  claudePath?: string,
-): Promise<string> {
-  const cmd = claudePath || "claude";
+async function probeCliHealth(projectRoot: string, cliPath: string): Promise<string> {
+  const cmd = cliPath || "claude";
   const args = ["-p", "Reply with OK only", "--output-format", "text"];
 
   return await new Promise((resolve) => {
@@ -79,21 +60,21 @@ export async function probeClaudeCliFailure(
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
 
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
     child.on("error", (err) => {
-      resolve(`Failed to execute Claude CLI: ${err.message}`);
+      resolve(`Failed to execute CLI: ${err.message}`);
     });
 
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
-      resolve("Timed out while probing Claude CLI");
+      resolve("Timed out while probing CLI");
     }, 15000);
 
     child.on("close", (code) => {
@@ -104,7 +85,18 @@ export async function probeClaudeCliFailure(
       }
 
       const merged = [stderr, stdout].filter(Boolean).join("\n");
-      resolve(trimForLog(merged || `Claude CLI exited with code ${code}`));
+      resolve(trimForLog(merged || `CLI exited with code ${code}`));
     });
   });
+}
+
+export async function diagnoseClaudeError(
+  input: RuntimeDiagnoseErrorInput,
+  cliPath?: string,
+): Promise<string> {
+  let detail = input.stderrTail?.trim() ?? "";
+  if (!detail && input.projectRoot) {
+    detail = await probeCliHealth(input.projectRoot, cliPath ?? "claude");
+  }
+  return explainFailure(input.error, detail);
 }

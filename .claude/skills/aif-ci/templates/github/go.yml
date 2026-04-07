@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: '${GO_VERSION}'
+  GO_VERSION: "${GO_VERSION}"
 
 jobs:
   lint:

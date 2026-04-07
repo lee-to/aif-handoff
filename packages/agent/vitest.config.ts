@@ -2,6 +2,11 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    server: {
+      deps: {
+        inline: ["@aif/runtime", "@anthropic-ai/claude-agent-sdk"],
+      },
+    },
     exclude: ["dist/**", "**/node_modules/**", "**/.git/**"],
     coverage: {
       provider: "v8",

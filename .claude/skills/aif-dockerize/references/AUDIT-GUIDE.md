@@ -18,6 +18,7 @@ Read each section from `references/SECURITY-CHECKLIST.md` → "Dockerfile Securi
 Read each section from `references/SECURITY-CHECKLIST.md` → "Compose Security" and check:
 
 **For each service:**
+
 - `read_only: true`?
 - `security_opt: [no-new-privileges:true]`?
 - `cap_drop: [ALL]`?
@@ -29,11 +30,13 @@ Read each section from `references/SECURITY-CHECKLIST.md` → "Compose Security"
 - Restart policy set?
 
 **Network security:**
+
 - Backend network `internal: true`?
 - No `network_mode: host`?
 - No Docker socket mounted?
 
 **Secrets:**
+
 - Sensitive values via `.env` (not hardcoded in compose)?
 - `.env` in `.gitignore`?
 - `.env.example` exists with placeholder values?
@@ -41,6 +44,7 @@ Read each section from `references/SECURITY-CHECKLIST.md` → "Compose Security"
 ## Gap Analysis
 
 Compare existing compose against `PROJECT_PROFILE`:
+
 - Services detected in code but missing from compose?
 - .env variables referenced but no matching service?
 - Dev override file exists?
@@ -94,6 +98,7 @@ Options:
 ```
 
 **If fixing:**
+
 - For Dockerfile issues → edit existing Dockerfile
 - For missing compose.production.yml → generate it (Step 4.4)
 - For missing services → add to existing compose

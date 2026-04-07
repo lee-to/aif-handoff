@@ -1,14 +1,14 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { logger, getEnv, modelOption, getProjectConfig } from "@aif/shared";
+import { logger, getEnv, getProjectConfig } from "@aif/shared";
 import {
   createTask,
   findProjectById,
   findTasksByRoadmapAlias,
   incrementTaskTokenUsage,
 } from "@aif/data";
+import { resolveApiLightModel, runApiRuntimeOneShot } from "./runtime.js";
 
 const log = logger("roadmap-generation");
 
@@ -101,40 +101,22 @@ export async function generateRoadmapFile(
   });
 
   let rawResult = "";
-  let failedSubtype: string | null = null;
   try {
-    for await (const message of query({
+    const { result } = await runApiRuntimeOneShot({
+      projectId,
+      projectRoot: project.rootPath,
       prompt,
-      options: {
-        cwd: project.rootPath,
-        env: { ...process.env, HANDOFF_MODE: "1" },
-        settings: { attribution: { commit: "", pr: "" } },
-        settingSources: ["project"],
-        ...modelOption("sonnet"),
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          append:
-            "Do not use tools or subagents. Reply directly with the ROADMAP.md content in markdown format. No JSON, no code fences around the entire output.",
-        },
-      },
-    })) {
-      if (message.type !== "result") continue;
-      if (message.subtype !== "success") {
-        failedSubtype = message.subtype;
-        break;
-      }
-      rawResult = message.result.trim();
-    }
+      workflowKind: "roadmap-generate",
+      systemPromptAppend:
+        "Do not use tools or subagents. Reply directly with the ROADMAP.md content in markdown format. No JSON, no code fences around the entire output.",
+    });
+    rawResult = (result.outputText ?? "").trim();
   } catch (err) {
     log.error({ err, projectId }, "Agent SDK roadmap generation error");
     throw new RoadmapGenerationError(
       "AGENT_UNAVAILABLE",
       `Agent SDK unavailable: ${err instanceof Error ? err.message : String(err)}`,
     );
-  }
-  if (failedSubtype) {
-    throw new RoadmapGenerationError("AGENT_FAILED", `Agent SDK query failed: ${failedSubtype}`);
   }
 
   if (!rawResult) {
@@ -235,46 +217,35 @@ export async function generateRoadmapTasks(
   const prompt = buildExtractionPrompt(roadmapContent, roadmapAlias);
 
   let rawResult = "";
-  let failedSubtype: string | null = null;
   try {
-    for await (const message of query({
+    const lightModel = await resolveApiLightModel(projectId, trackingTaskId);
+    const { result } = await runApiRuntimeOneShot({
+      projectId,
+      projectRoot: project.rootPath,
+      taskId: trackingTaskId ?? null,
       prompt,
-      options: {
-        cwd: project.rootPath,
-        env: { ...process.env, HANDOFF_MODE: "1" },
-        settings: { attribution: { commit: "", pr: "" } },
-        settingSources: ["project"],
-        ...modelOption("haiku"),
-        systemPrompt: {
-          type: "preset",
-          preset: "claude_code",
-          append:
-            "Do not use tools or subagents. Reply directly with JSON only. No markdown fences.",
-        },
-      },
-    })) {
-      if (message.type !== "result") continue;
-      if (trackingTaskId) {
-        incrementTaskTokenUsage(trackingTaskId, {
-          ...message.usage,
-          total_cost_usd: message.total_cost_usd,
-        });
-      }
-      if (message.subtype !== "success") {
-        failedSubtype = message.subtype;
-        break;
-      }
-      rawResult = message.result.trim();
+      workflowKind: "roadmap-extract",
+      modelOverride: lightModel,
+      systemPromptAppend:
+        "Do not use tools or subagents. Reply directly with JSON only. No markdown fences.",
+    });
+
+    if (trackingTaskId && result.usage) {
+      incrementTaskTokenUsage(trackingTaskId, {
+        input_tokens: result.usage.inputTokens,
+        output_tokens: result.usage.outputTokens,
+        total_tokens: result.usage.totalTokens,
+        total_cost_usd: result.usage.costUsd,
+      });
     }
+
+    rawResult = (result.outputText ?? "").trim();
   } catch (err) {
     log.error({ err, projectId, roadmapAlias }, "Agent SDK query error");
     throw new RoadmapGenerationError(
       "AGENT_UNAVAILABLE",
       `Agent SDK unavailable: ${err instanceof Error ? err.message : String(err)}`,
     );
-  }
-  if (failedSubtype) {
-    throw new RoadmapGenerationError("AGENT_FAILED", `Agent SDK query failed: ${failedSubtype}`);
   }
 
   log.debug({ rawResultLength: rawResult.length }, "Raw agent output received");

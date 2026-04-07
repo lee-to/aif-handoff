@@ -23,8 +23,8 @@ describe("ChatBubble", () => {
   });
 
   it("does not apply pulse-glow animation", () => {
-    const { container } = render(<ChatBubble isOpen={false} onToggle={() => {}} />);
-    const button = container.querySelector("button");
-    expect(button?.className).not.toContain("animate-pulse-glow");
+    render(<ChatBubble isOpen={false} onToggle={() => {}} />);
+    const button = screen.getByRole("button", { name: "Open chat" });
+    expect(button.className).not.toContain("animate-pulse-glow");
   });
 });

@@ -2,7 +2,7 @@
 
 Use for specific workflows: deploy, commit, review, etc.
 
-```yaml
+````yaml
 ---
 name: {{SKILL_NAME}}
 description: {{DESCRIPTION}}
@@ -30,9 +30,10 @@ Description of preparation.
 
 ```bash
 command
-```
+````
 
 ### Step 2: Execution
+
 Description of execution.
 
 ```bash
@@ -40,6 +41,7 @@ command
 ```
 
 ### Step 3: Verification
+
 Description of verification.
 
 ```bash
@@ -49,11 +51,13 @@ command
 ## Error Handling
 
 ### If X fails
+
 1. Check Y
 2. Verify Z
 3. Fallback to W
 
 ### If A fails
+
 1. Check B
 2. Verify C
 
@@ -64,4 +68,7 @@ If something goes wrong:
 ```bash
 rollback command
 ```
+
+```
+
 ```

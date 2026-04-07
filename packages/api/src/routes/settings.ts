@@ -1,42 +1,20 @@
 import { Hono } from "hono";
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
 import { findProjectById } from "@aif/data";
 import { logger, findMonorepoRoot, getEnv, clearProjectConfigCache } from "@aif/shared";
+import { getApiRuntimeRegistry } from "../services/runtime.js";
 
 const log = logger("api:settings");
 
-const CLAUDE_CONFIG_PATH = join(homedir(), ".claude.json");
 const MCP_SERVER_NAME = "handoff";
-
-/** Handoff monorepo root — where packages/mcp lives */
 const MONOREPO_ROOT = findMonorepoRoot(import.meta.dirname);
-
-interface ClaudeConfig {
-  mcpServers?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-async function readClaudeConfig(): Promise<ClaudeConfig> {
-  try {
-    const raw = await readFile(CLAUDE_CONFIG_PATH, "utf-8");
-    return JSON.parse(raw) as ClaudeConfig;
-  } catch {
-    return {};
-  }
-}
-
-async function writeClaudeConfig(config: ClaudeConfig): Promise<void> {
-  await writeFile(CLAUDE_CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
-}
 
 function buildMcpServerEntry() {
   const env = getEnv();
   return {
-    type: "stdio",
     command: "npx",
     args: ["tsx", join(MONOREPO_ROOT, "packages/mcp/src/index.ts")],
     cwd: MONOREPO_ROOT,
@@ -48,7 +26,6 @@ function buildMcpServerEntry() {
   };
 }
 
-/** Resolve project config.yaml path from projectId query param */
 function resolveConfigPath(projectId: string | undefined): string | null {
   if (!projectId) return null;
   const project = findProjectById(projectId);
@@ -58,61 +35,87 @@ function resolveConfigPath(projectId: string | undefined): string | null {
 
 export const settingsRoutes = new Hono();
 
-/** Check if handoff MCP server is configured globally */
+/** Get MCP server status across all registered runtimes */
 settingsRoutes.get("/mcp", async (c) => {
-  const config = await readClaudeConfig();
-  const servers = config.mcpServers ?? {};
-  const installed = MCP_SERVER_NAME in servers;
+  const registry = await getApiRuntimeRegistry();
+  const runtimes = registry.listRuntimes();
+  const statuses: Array<{ runtimeId: string; installed: boolean; config?: unknown }> = [];
 
-  log.info({ installed }, "MCP status checked");
+  for (const descriptor of runtimes) {
+    const adapter = registry.tryResolveRuntime(descriptor.id);
+    if (!adapter?.getMcpStatus) continue;
+    try {
+      const status = await adapter.getMcpStatus({ serverName: MCP_SERVER_NAME });
+      statuses.push({
+        runtimeId: descriptor.id,
+        installed: status.installed,
+        config: status.config,
+      });
+    } catch (err) {
+      log.warn({ runtimeId: descriptor.id, err }, "Failed to check MCP status");
+      statuses.push({ runtimeId: descriptor.id, installed: false });
+    }
+  }
 
+  const anyInstalled = statuses.some((s) => s.installed);
   return c.json({
-    installed,
+    installed: anyInstalled,
     serverName: MCP_SERVER_NAME,
-    config: installed ? servers[MCP_SERVER_NAME] : null,
+    runtimes: statuses,
   });
 });
 
-/** Install handoff MCP server to global Claude config */
+/** Install MCP server into all registered runtimes that support it */
 settingsRoutes.post("/mcp/install", async (c) => {
-  try {
-    const config = await readClaudeConfig();
-    if (!config.mcpServers) {
-      config.mcpServers = {};
+  const entry = buildMcpServerEntry();
+  const registry = await getApiRuntimeRegistry();
+  const runtimes = registry.listRuntimes();
+  const results: Array<{ runtimeId: string; success: boolean; error?: string }> = [];
+
+  for (const descriptor of runtimes) {
+    const adapter = registry.tryResolveRuntime(descriptor.id);
+    if (!adapter?.installMcpServer) continue;
+    try {
+      await adapter.installMcpServer({
+        serverName: MCP_SERVER_NAME,
+        command: entry.command,
+        args: entry.args,
+        cwd: entry.cwd,
+        env: entry.env,
+      });
+      log.info({ runtimeId: descriptor.id }, "MCP server installed");
+      results.push({ runtimeId: descriptor.id, success: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error({ runtimeId: descriptor.id, err }, "Failed to install MCP server");
+      results.push({ runtimeId: descriptor.id, success: false, error: message });
     }
-
-    config.mcpServers[MCP_SERVER_NAME] = buildMcpServerEntry();
-    await writeClaudeConfig(config);
-
-    log.info({ monorepoRoot: MONOREPO_ROOT }, "MCP server installed to global Claude config");
-
-    return c.json({ success: true, serverName: MCP_SERVER_NAME });
-  } catch (error) {
-    log.error(
-      { error: error instanceof Error ? error.message : String(error) },
-      "Failed to install MCP",
-    );
-    return c.json({ error: "Failed to install MCP server" }, 500);
   }
+
+  return c.json({
+    success: results.every((r) => r.success),
+    serverName: MCP_SERVER_NAME,
+    runtimes: results,
+  });
 });
 
-/** Remove handoff MCP server from global Claude config */
+/** Remove MCP server from all registered runtimes */
 settingsRoutes.delete("/mcp", async (c) => {
-  try {
-    const config = await readClaudeConfig();
-    if (config.mcpServers && MCP_SERVER_NAME in config.mcpServers) {
-      delete config.mcpServers[MCP_SERVER_NAME];
-      await writeClaudeConfig(config);
-      log.info("MCP server removed from global Claude config");
+  const registry = await getApiRuntimeRegistry();
+  const runtimes = registry.listRuntimes();
+
+  for (const descriptor of runtimes) {
+    const adapter = registry.tryResolveRuntime(descriptor.id);
+    if (!adapter?.uninstallMcpServer) continue;
+    try {
+      await adapter.uninstallMcpServer({ serverName: MCP_SERVER_NAME });
+      log.info({ runtimeId: descriptor.id }, "MCP server removed");
+    } catch (err) {
+      log.error({ runtimeId: descriptor.id, err }, "Failed to remove MCP server");
     }
-    return c.json({ success: true });
-  } catch (error) {
-    log.error(
-      { error: error instanceof Error ? error.message : String(error) },
-      "Failed to remove MCP",
-    );
-    return c.json({ error: "Failed to remove MCP server" }, 500);
   }
+
+  return c.json({ success: true });
 });
 
 /** Check if .ai-factory/config.yaml exists for a project */
@@ -164,7 +167,6 @@ settingsRoutes.put("/config", async (c) => {
       defaultStringType: "PLAIN",
     });
     await writeFile(configPath, yaml, "utf-8");
-    // Invalidate cached config so subsequent reads pick up the new values
     const project = findProjectById(projectId!);
     if (project) clearProjectConfigCache(project.rootPath);
     log.info({ projectId }, "config.yaml updated");

@@ -63,6 +63,7 @@ If the tool requires installation, include a note:
 ```
 
 Installation hints:
+
 - **Task**: `go install github.com/go-task/task/v3/cmd/task@latest` or `brew install go-task`
 - **Just**: `cargo install just` or `brew install just`
 - **Mage**: `go install github.com/magefile/mage@latest` or `brew install mage`

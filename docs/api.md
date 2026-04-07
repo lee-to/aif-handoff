@@ -446,7 +446,7 @@ POST /tasks/:id/comments
 
 ## AI Chat
 
-Interactive AI chat powered by Claude Agent SDK. Messages are sent via REST, responses stream back through WebSocket as tokens.
+Interactive AI chat powered by the runtime adapter system. Messages are sent via REST, responses stream back through WebSocket as tokens. The runtime used depends on the project's active runtime profile.
 
 ### Send Message
 
@@ -494,7 +494,7 @@ Chat responses stream via WebSocket events to the `clientId` specified in the re
 
 ### Multi-turn Conversations
 
-To continue a conversation, pass the `conversationId` returned from the first message in subsequent requests. The server tracks Claude Agent SDK session IDs internally and uses `resume` to maintain context.
+To continue a conversation, pass the `conversationId` returned from the first message in subsequent requests. The server tracks runtime session IDs internally and uses `resume` to maintain context (for runtimes that support it).
 
 Calling `clearMessages` on the client (or omitting `conversationId`) starts a fresh conversation.
 

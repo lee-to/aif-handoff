@@ -4,6 +4,7 @@ import { logger } from "@aif/shared";
 import { findTaskById, toTaskResponse } from "@aif/data";
 import type { ToolContext } from "./index.js";
 import { rateLimitError, toMcpError } from "../middleware/errorHandler.js";
+import { buildEffectiveTaskRuntimeMetadata } from "./runtimeTaskMetadata.js";
 
 const log = logger("mcp:tool:get-task");
 
@@ -45,6 +46,10 @@ const TASK_FIELDS = [
   "paused",
   "lastHeartbeatAt",
   "lastSyncedAt",
+  "runtimeProfileId",
+  "modelOverride",
+  "runtimeOptions",
+  "effectiveRuntime",
   "sessionId",
   "createdAt",
   "updatedAt",
@@ -86,7 +91,10 @@ export function register(server: McpServer, context: ToolContext): void {
           };
         }
 
-        const full = toTaskResponse(row) as unknown as Record<string, unknown>;
+        const full = {
+          ...toTaskResponse(row),
+          effectiveRuntime: buildEffectiveTaskRuntimeMetadata(row.id, row.projectId),
+        } as unknown as Record<string, unknown>;
 
         let result: Record<string, unknown>;
         if (args.fields && args.fields.length > 0) {

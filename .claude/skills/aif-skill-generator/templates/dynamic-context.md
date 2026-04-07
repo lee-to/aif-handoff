@@ -60,6 +60,7 @@ Detailed analysis.
 The syntax is: exclamation mark + backtick + command + backtick
 
 ### GitHub Examples
+
 ```
 gh pr view
 gh pr diff
@@ -70,6 +71,7 @@ gh repo view
 ```
 
 ### Git Examples
+
 ```
 git status --short
 git log --oneline -10
@@ -79,6 +81,7 @@ git remote -v
 ```
 
 ### System Examples
+
 ```
 node --version
 python --version

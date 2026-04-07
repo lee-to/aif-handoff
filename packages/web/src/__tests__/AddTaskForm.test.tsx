@@ -24,6 +24,11 @@ vi.mock("@/hooks/useSettings", () => ({
   useProjectDefaults: () => ({ data: mockDefaultsData.data }),
 }));
 
+vi.mock("@/hooks/useRuntimeProfiles", () => ({
+  useRuntimeProfiles: () => ({ data: [] }),
+  useRuntimes: () => ({ data: [] }),
+}));
+
 vi.mock("@/hooks/useTasks", () => ({
   useCreateTask: () => ({
     mutate: mutateCreateTask,
@@ -225,6 +230,30 @@ describe("AddTaskForm", () => {
     // Form should still be open after error
     expect(screen.getByPlaceholderText("Task title")).toBeDefined();
     consoleSpy.mockRestore();
+  });
+
+  it("opens runtime override panel and submits with defaults", () => {
+    render(<AddTaskForm projectId="p-1" />);
+
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.click(screen.getByRole("button", { name: "Runtime override" }));
+
+    // Panel is open — select and model inputs are visible
+    expect(screen.getByText("Runtime profile")).toBeDefined();
+    expect(screen.getByPlaceholderText("runtime default")).toBeDefined();
+
+    fireEvent.change(screen.getByPlaceholderText("Task title"), {
+      target: { value: "Task with runtime" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(mutateCreateTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeProfileId: null,
+        modelOverride: null,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("submits planner settings from advanced options", () => {

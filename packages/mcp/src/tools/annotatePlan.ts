@@ -13,7 +13,11 @@ export function register(server: McpServer, context: ToolContext): void {
     {
       taskId: z.string().uuid().describe("Task ID to annotate"),
       planContent: z.string().max(100_000).describe("Plan content in markdown (max 100KB)"),
-      sectionHeading: z.string().max(200).optional().describe("Section heading to insert annotation after"),
+      sectionHeading: z
+        .string()
+        .max(200)
+        .optional()
+        .describe("Section heading to insert annotation after"),
     },
     async (args) => {
       try {
@@ -22,12 +26,20 @@ export function register(server: McpServer, context: ToolContext): void {
         }
 
         log.debug(
-          { taskId: args.taskId, planSize: args.planContent.length, sectionHeading: args.sectionHeading },
+          {
+            taskId: args.taskId,
+            planSize: args.planContent.length,
+            sectionHeading: args.sectionHeading,
+          },
           "handoff_annotate_plan called",
         );
 
         // Insert or update the annotation
-        const annotatedPlan = insertPlanAnnotation(args.planContent, args.taskId, args.sectionHeading);
+        const annotatedPlan = insertPlanAnnotation(
+          args.planContent,
+          args.taskId,
+          args.sectionHeading,
+        );
 
         // Parse the resulting annotations for metadata
         const annotations = parsePlanAnnotations(annotatedPlan);
@@ -42,13 +54,15 @@ export function register(server: McpServer, context: ToolContext): void {
         );
 
         return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              annotatedPlan,
-              annotations,
-            }),
-          }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                annotatedPlan,
+                annotations,
+              }),
+            },
+          ],
         };
       } catch (error) {
         throw toMcpError(error);

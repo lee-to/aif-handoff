@@ -6,7 +6,12 @@ function getStatusLabel(status: TaskStatus) {
   return STATUS_CONFIG[status].label;
 }
 
-export function showTaskMovedNotification(taskId: string, taskTitle: string, from: TaskStatus, to: TaskStatus) {
+export function showTaskMovedNotification(
+  taskId: string,
+  taskTitle: string,
+  from: TaskStatus,
+  to: TaskStatus,
+) {
   if (typeof window === "undefined" || typeof Notification === "undefined") return;
   if (Notification.permission !== "granted") return;
 
@@ -21,7 +26,9 @@ export function showTaskMovedNotification(taskId: string, taskTitle: string, fro
 
 export async function playStatusChangeBeep() {
   if (typeof window === "undefined") return;
-  const AudioCtx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const AudioCtx =
+    window.AudioContext ||
+    (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioCtx) return;
 
   if (!audioContext) audioContext = new AudioCtx();

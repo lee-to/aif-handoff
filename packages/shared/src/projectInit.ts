@@ -1,47 +1,26 @@
-import { existsSync, mkdirSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
 import { logger } from "./logger.js";
-import { findMonorepoRootFromUrl } from "./monorepoRoot.js";
 
 const log = logger("project-init");
 
-const MONOREPO_ROOT = findMonorepoRootFromUrl(import.meta.url);
-
 /**
- * Initialize a project directory with .claude/ (agents + skills), .ai-factory/, and git repo.
- * Safe to call multiple times — skips steps that are already done.
+ * Initialize the base project directory structure: .ai-factory/ and git repo.
+ * Runtime-specific directories (.claude/, .codex/) are handled by adapter.initProject().
+ *
+ * This is the low-level primitive — callers should use the runtime-aware
+ * `initProject()` from `@aif/runtime` which also invokes adapter init hooks.
  */
-export function initProjectDirectory(projectRoot: string): void {
+export function initBaseProjectDirectory(projectRoot: string): void {
   mkdirSync(projectRoot, { recursive: true });
 
-  const targetClaude = resolve(projectRoot, ".claude");
   const targetAiFactory = resolve(projectRoot, ".ai-factory");
-
   if (!existsSync(targetAiFactory)) {
     mkdirSync(targetAiFactory, { recursive: true });
     log.info({ projectRoot }, "Created .ai-factory directory");
   }
 
-  // Copy .claude/agents/
-  const sourceAgents = resolve(MONOREPO_ROOT, ".claude/agents");
-  const targetAgents = resolve(targetClaude, "agents");
-  if (existsSync(sourceAgents) && !existsSync(targetAgents)) {
-    mkdirSync(targetClaude, { recursive: true });
-    cpSync(sourceAgents, targetAgents, { recursive: true });
-    log.info({ projectRoot }, "Copied .claude/agents/ to project");
-  }
-
-  // Copy .claude/skills/
-  const sourceSkills = resolve(MONOREPO_ROOT, ".claude/skills");
-  const targetSkills = resolve(targetClaude, "skills");
-  if (existsSync(sourceSkills) && !existsSync(targetSkills)) {
-    mkdirSync(targetClaude, { recursive: true });
-    cpSync(sourceSkills, targetSkills, { recursive: true });
-    log.info({ projectRoot }, "Copied .claude/skills/ to project");
-  }
-
-  // Initialize git repo
   const gitDir = resolve(projectRoot, ".git");
   if (!existsSync(gitDir)) {
     try {
@@ -56,4 +35,18 @@ export function initProjectDirectory(projectRoot: string): void {
       log.warn({ projectRoot, err }, "git init failed");
     }
   }
+}
+
+/**
+ * @deprecated Use `initBaseProjectDirectory` + adapter init hooks instead.
+ * Kept for backwards compat during migration.
+ */
+export type RuntimeInitHook = (projectRoot: string, monorepoRoot: string) => void;
+
+/** @deprecated Use runtime-aware init from `@aif/runtime` bootstrap. */
+export function initProjectDirectory(
+  projectRoot: string,
+  _runtimeHooks: RuntimeInitHook[] = [],
+): void {
+  initBaseProjectDirectory(projectRoot);
 }

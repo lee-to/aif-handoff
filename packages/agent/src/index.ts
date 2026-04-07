@@ -1,14 +1,15 @@
 import cron from "node-cron";
 import { listProjects } from "@aif/data";
 import { getEnv, logger } from "@aif/shared";
-import { pollAndProcess } from "./coordinator.js";
+import { bootstrapRuntimeRegistry } from "@aif/runtime";
+import { pollAndProcess, setRuntimeRegistry } from "./coordinator.js";
 import { flushAllActivityQueues } from "./hooks.js";
 import { connectWakeChannel, closeWakeChannel, waitForApiReady } from "./wakeChannel.js";
 import { abortAllActiveStages } from "./stageAbort.js";
 
 const log = logger("agent");
 
-// Validate env (ANTHROPIC_API_KEY is optional — Agent SDK uses ~/.claude/ auth)
+// Validate env
 const env = getEnv();
 
 // Ensure DB is ready
@@ -19,6 +20,14 @@ const intervalSeconds = Math.max(Math.floor(intervalMs / 1000), 10);
 
 // Convert to cron expression (every N seconds)
 const cronExpr = `*/${intervalSeconds} * * * * *`;
+
+// Pre-load runtime registry so project init includes all adapters
+bootstrapRuntimeRegistry({ runtimeModules: env.AIF_RUNTIME_MODULES })
+  .then((registry) => {
+    setRuntimeRegistry(registry);
+    log.info("Runtime registry loaded for project initialization");
+  })
+  .catch((err) => log.warn({ err }, "Failed to pre-load runtime registry"));
 
 log.info({ intervalMs, intervalSeconds, cronExpr }, "Agent coordinator starting");
 

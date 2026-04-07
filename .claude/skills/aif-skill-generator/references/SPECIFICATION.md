@@ -25,35 +25,37 @@ description: A description of what this skill does and when to use it.
 
 ### All Frontmatter Fields
 
-| Field | Required | Constraints |
-|-------|----------|-------------|
-| `name` | Yes | Max 64 chars, lowercase, hyphens only, no consecutive hyphens |
-| `description` | Yes | Max 1024 chars, non-empty |
-| `license` | No | License name or file reference |
-| `compatibility` | No | Max 500 chars, environment requirements |
-| `metadata` | No | Key-value pairs for custom data |
-| `allowed-tools` | No | Space-delimited tool list |
+| Field           | Required | Constraints                                                   |
+| --------------- | -------- | ------------------------------------------------------------- |
+| `name`          | Yes      | Max 64 chars, lowercase, hyphens only, no consecutive hyphens |
+| `description`   | Yes      | Max 1024 chars, non-empty                                     |
+| `license`       | No       | License name or file reference                                |
+| `compatibility` | No       | Max 500 chars, environment requirements                       |
+| `metadata`      | No       | Key-value pairs for custom data                               |
+| `allowed-tools` | No       | Space-delimited tool list                                     |
 
 ### Agent Extensions
 
-| Field | Description |
-|-------|-------------|
-| `argument-hint` | Shown in autocomplete: `[issue-number]` |
-| `disable-model-invocation` | `true` = only user can invoke |
-| `user-invocable` | `false` = only model can invoke |
-| `context` | `fork` = run in subagent |
-| `agent` | Subagent type: Explore, Plan, general-purpose |
-| `model` | Model override: sonnet, opus, haiku |
-| `hooks` | Lifecycle hooks configuration |
+| Field                      | Description                                   |
+| -------------------------- | --------------------------------------------- |
+| `argument-hint`            | Shown in autocomplete: `[issue-number]`       |
+| `disable-model-invocation` | `true` = only user can invoke                 |
+| `user-invocable`           | `false` = only model can invoke               |
+| `context`                  | `fork` = run in subagent                      |
+| `agent`                    | Subagent type: Explore, Plan, general-purpose |
+| `model`                    | Model override: sonnet, opus, haiku           |
+| `hooks`                    | Lifecycle hooks configuration                 |
 
 ## Name Field Rules
 
 Valid:
+
 - `pdf-processing`
 - `data-analysis`
 - `code-review`
 
 Invalid:
+
 - `PDF-Processing` (uppercase)
 - `-pdf` (starts with hyphen)
 - `pdf--processing` (consecutive hyphens)
@@ -62,11 +64,13 @@ Invalid:
 ## Description Best Practices
 
 Good:
+
 ```yaml
 description: Extracts text and tables from PDF files, fills PDF forms, and merges multiple PDFs. Use when working with PDF documents or when the user mentions PDFs, forms, or document extraction.
 ```
 
 Bad:
+
 ```yaml
 description: Helps with PDFs.
 ```
@@ -86,17 +90,18 @@ allowed-tools: Read Write Bash(git *) Bash(python scripts/*.py)
 
 ## String Substitutions
 
-| Variable | Description |
-|----------|-------------|
-| `$ARGUMENTS` | All arguments passed to skill |
-| `$ARGUMENTS[N]` | Argument by index (0-based) |
-| `$N` | Shorthand for $ARGUMENTS[N] |
-| `${CLAUDE_SESSION_ID}` | Current session ID |
+| Variable                          | Description                    |
+| --------------------------------- | ------------------------------ |
+| `$ARGUMENTS`                      | All arguments passed to skill  |
+| `$ARGUMENTS[N]`                   | Argument by index (0-based)    |
+| `$N`                              | Shorthand for $ARGUMENTS[N]    |
+| `${CLAUDE_SESSION_ID}`            | Current session ID             |
 | exclamation+backtick+cmd+backtick | Shell command output injection |
 
 ## Progressive Disclosure
 
 Token budgets:
+
 1. **Metadata** (~100 tokens): name + description loaded at startup
 2. **Instructions** (<5000 tokens): Full SKILL.md when activated
 3. **Resources** (as needed): Supporting files on demand

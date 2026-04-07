@@ -37,7 +37,7 @@ services:
 
   db:
     <<: *default-security
-    read_only: false                     # Postgres needs writable filesystem
+    read_only: false # Postgres needs writable filesystem
     cap_add:
       - DAC_READ_SEARCH
       - FOWNER
@@ -72,4 +72,4 @@ services:
 
 networks:
   backend:
-    internal: true                       # No internet access for DB/Redis
+    internal: true # No internet access for DB/Redis

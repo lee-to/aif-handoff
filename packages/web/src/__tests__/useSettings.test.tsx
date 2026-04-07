@@ -50,10 +50,9 @@ describe("useAgentReadiness", () => {
   it("fetches agent readiness via React Query", async () => {
     mockGetAgentReadiness.mockResolvedValue({
       ready: true,
-      hasApiKey: true,
-      hasClaudeAuth: false,
-      authSource: "api_key",
-      detectedPath: null,
+      runtimeCount: 1,
+      enabledRuntimeProfileCount: 0,
+      runtimes: [],
       message: "Ready",
       checkedAt: "2026-04-03T00:00:00Z",
     });

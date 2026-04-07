@@ -139,7 +139,7 @@ function handleRegularTransition(input: EventHandlerInput): EventHandlerResult {
     return { ok: false, status: 409, error: transition.error };
   }
 
-  if (input.event === "approve_done" && input.deletePlanFile) {
+  if ((input.event === "approve_done" || input.event === "start_ai") && input.deletePlanFile) {
     const project = findProjectById(task.projectId);
     if (!project) {
       return { ok: false, status: 404, error: "Project not found for task" };

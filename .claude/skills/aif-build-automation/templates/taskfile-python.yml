@@ -2,14 +2,14 @@
 # Usage: task [target]
 # Install: https://taskfile.dev/installation/
 
-version: '3'
+version: "3"
 
 output: prefixed
 
-dotenv: ['.env', '.env.local']
+dotenv: [".env", ".env.local"]
 
 vars:
-  PROJECT: '{{.ROOT_DIR | base}}'
+  PROJECT: "{{.ROOT_DIR | base}}"
   PYTHON: python3
   SRC_DIR: src
   VERSION:
@@ -33,8 +33,8 @@ vars:
 
   # Docker
   DOCKER_REGISTRY: ghcr.io
-  DOCKER_IMAGE: '{{.DOCKER_REGISTRY}}/{{.PROJECT}}'
-  DOCKER_TAG: '{{.VERSION}}'
+  DOCKER_IMAGE: "{{.DOCKER_REGISTRY}}/{{.PROJECT}}"
+  DOCKER_TAG: "{{.VERSION}}"
 
 tasks:
   # --- Development ---
@@ -54,67 +54,67 @@ tasks:
     desc: Start development server
     deps: [install]
     cmds:
-      - '{{.PKG_RUN}} {{.PYTHON}} -m uvicorn main:app --reload --host 0.0.0.0 --port 8000'
+      - "{{.PKG_RUN}} {{.PYTHON}} -m uvicorn main:app --reload --host 0.0.0.0 --port 8000"
 
   run:
     desc: Run the application
     cmds:
-      - '{{.PKG_RUN}} {{.PYTHON}} -m {{.PROJECT}}'
+      - "{{.PKG_RUN}} {{.PYTHON}} -m {{.PROJECT}}"
 
   shell:
     desc: Open interactive Python shell
     cmds:
-      - '{{.PKG_RUN}} {{.PYTHON}}'
+      - "{{.PKG_RUN}} {{.PYTHON}}"
 
   # --- Testing ---
 
   test:
     desc: Run tests
     cmds:
-      - '{{.PKG_RUN}} pytest'
+      - "{{.PKG_RUN}} pytest"
 
   test:watch:
     desc: Run tests in watch mode
     cmds:
-      - '{{.PKG_RUN}} pytest-watch'
+      - "{{.PKG_RUN}} pytest-watch"
 
   test:cover:
     desc: Run tests with coverage
     cmds:
-      - '{{.PKG_RUN}} pytest --cov={{.SRC_DIR}} --cov-report=html --cov-report=term-missing'
+      - "{{.PKG_RUN}} pytest --cov={{.SRC_DIR}} --cov-report=html --cov-report=term-missing"
       - echo "Coverage report{{":"}} htmlcov/index.html"
 
   test:integration:
     desc: Run integration tests
     cmds:
-      - '{{.PKG_RUN}} pytest tests/integration/ -v'
+      - "{{.PKG_RUN}} pytest tests/integration/ -v"
 
   # --- Code Quality ---
 
   lint:
     desc: Run linters
     cmds:
-      - '{{.PKG_RUN}} ruff check {{.SRC_DIR}} tests/'
+      - "{{.PKG_RUN}} ruff check {{.SRC_DIR}} tests/"
 
   lint:fix:
     desc: Run linters with auto-fix
     cmds:
-      - '{{.PKG_RUN}} ruff check --fix {{.SRC_DIR}} tests/'
+      - "{{.PKG_RUN}} ruff check --fix {{.SRC_DIR}} tests/"
 
   fmt:
     desc: Format code
     cmds:
-      - '{{.PKG_RUN}} ruff format {{.SRC_DIR}} tests/'
+      - "{{.PKG_RUN}} ruff format {{.SRC_DIR}} tests/"
 
   fmt:check:
     desc: Check code formatting
     cmds:
-      - '{{.PKG_RUN}} ruff format --check {{.SRC_DIR}} tests/'
+      - "{{.PKG_RUN}} ruff format --check {{.SRC_DIR}} tests/"
 
   typecheck:
     desc: Run type checker
     cmds:
-      - '{{.PKG_RUN}} mypy {{.SRC_DIR}}'
+      - "{{.PKG_RUN}} mypy {{.SRC_DIR}}"
 
   check:
     desc: Run all checks
@@ -144,12 +144,12 @@ tasks:
   db:migrate:
     desc: Run database migrations
     cmds:
-      - '{{.PKG_RUN}} alembic upgrade head'
+      - "{{.PKG_RUN}} alembic upgrade head"
 
   db:rollback:
     desc: Rollback last migration
     cmds:
-      - '{{.PKG_RUN}} alembic downgrade -1'
+      - "{{.PKG_RUN}} alembic downgrade -1"
 
   db:migration:
     desc: Create new migration

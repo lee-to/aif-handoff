@@ -37,9 +37,10 @@ vi.mock("../services/attachmentStorage.js", async (importOriginal) => {
   };
 });
 
-const mockQuery = vi.fn();
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  query: (args: unknown) => mockQuery(args),
+const mockRunApiRuntimeOneShot = vi.fn();
+vi.mock("../services/runtime.js", () => ({
+  runApiRuntimeOneShot: (...args: unknown[]) => mockRunApiRuntimeOneShot(...args),
+  resolveApiLightModel: async () => "claude-haiku-3-5",
 }));
 
 // Import after mocks
@@ -74,9 +75,12 @@ describe("tasks API", () => {
   beforeEach(() => {
     testDb.current = createTestDb();
     app = createApp();
-    mockQuery.mockReset();
-    mockQuery.mockImplementation(async function* () {
-      yield { type: "result", subtype: "success", result: "## Updated plan\n- Fast fix applied" };
+    mockRunApiRuntimeOneShot.mockReset();
+    mockRunApiRuntimeOneShot.mockResolvedValue({
+      result: {
+        outputText: "## Updated plan\n- Fast fix applied",
+      },
+      context: {},
     });
   });
 
@@ -789,14 +793,13 @@ describe("tasks API", () => {
         })
         .run();
 
-      mockQuery.mockReset();
-      mockQuery
-        .mockImplementationOnce(async function* () {
-          yield { type: "result", subtype: "error", result: "first attempt failed" };
+      mockRunApiRuntimeOneShot.mockReset();
+      mockRunApiRuntimeOneShot
+        .mockResolvedValueOnce({
+          result: { outputText: "bad" },
+          context: {},
         })
-        .mockImplementationOnce(async function* () {
-          yield { type: "result", subtype: "error", result: "second attempt failed" };
-        });
+        .mockRejectedValueOnce(new Error("second attempt failed"));
 
       const res = await app.request("/tasks/ev-fast-fix-err/events", {
         method: "POST",
@@ -1137,7 +1140,7 @@ describe("tasks API", () => {
         })
         .run();
 
-      mockQuery.mockClear();
+      mockRunApiRuntimeOneShot.mockClear();
 
       const res = await app.request("/tasks/ev-commit-1/events", {
         method: "POST",
@@ -1150,8 +1153,9 @@ describe("tasks API", () => {
       expect(body.status).toBe("verified");
       // query is fire-and-forget via dynamic import — wait for it to resolve
       await new Promise((r) => setTimeout(r, 200));
-      expect(mockQuery).toHaveBeenCalled();
-      const callArgs = mockQuery.mock.calls[mockQuery.mock.calls.length - 1][0];
+      expect(mockRunApiRuntimeOneShot).toHaveBeenCalled();
+      const callArgs =
+        mockRunApiRuntimeOneShot.mock.calls[mockRunApiRuntimeOneShot.mock.calls.length - 1][0];
       expect(callArgs.prompt).toBe("/aif-commit");
     });
 
@@ -1167,7 +1171,7 @@ describe("tasks API", () => {
         })
         .run();
 
-      mockQuery.mockClear();
+      mockRunApiRuntimeOneShot.mockClear();
 
       const res = await app.request("/tasks/ev-commit-2/events", {
         method: "POST",
@@ -1177,7 +1181,7 @@ describe("tasks API", () => {
 
       expect(res.status).toBe(200);
       await new Promise((r) => setTimeout(r, 200));
-      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
     });
 
     it("should send done task to implementing with rework flag on request_changes", async () => {
@@ -1315,7 +1319,7 @@ describe("tasks API", () => {
       const body = await res.json();
       expect(body.status).toBe("plan_ready");
       expect(body.plan).toBe("## Updated plan\n- Fast fix applied");
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockRunApiRuntimeOneShot).toHaveBeenCalledTimes(1);
     });
 
     it("should reject fast_fix when task has no plan", async () => {
@@ -1422,7 +1426,7 @@ describe("tasks API", () => {
       });
 
       expect(res.status).toBe(409);
-      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
     });
   });
 

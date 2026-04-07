@@ -32,7 +32,11 @@ services:
         max-size: "20m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3009/health').then(r=>{if(!r.ok)throw r.status}).catch(()=>process.exit(1))\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://localhost:3009/health'').then(r=>{if(!r.ok)throw r.status}).catch(()=>process.exit(1))"',
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -49,7 +53,12 @@ services:
       - DOMAIN=${DOMAIN:-localhost}
     volumes:
       - ssl-certs:/etc/angie/ssl
-    entrypoint: ["/bin/sh", "-c", "mkdir -p /run/angie && sed -i 's/worker_processes.*/worker_processes 2;/' /etc/angie/angie.conf && envsubst '$$DOMAIN' < /etc/angie/http.d/production.conf.template > /etc/angie/http.d/default.conf && exec angie -g 'daemon off;'"]
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "mkdir -p /run/angie && sed -i 's/worker_processes.*/worker_processes 2;/' /etc/angie/angie.conf && envsubst '$$DOMAIN' < /etc/angie/http.d/production.conf.template > /etc/angie/http.d/default.conf && exec angie -g 'daemon off;'",
+      ]
     depends_on:
       api:
         condition: service_healthy
@@ -144,7 +153,11 @@ services:
         max-size: "20m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3100/health').then(r=>{if(!r.ok)throw r.status}).catch(()=>process.exit(1))\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://localhost:3100/health'').then(r=>{if(!r.ok)throw r.status}).catch(()=>process.exit(1))"',
+        ]
       interval: 30s
       timeout: 5s
       retries: 3

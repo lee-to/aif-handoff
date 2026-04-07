@@ -59,13 +59,7 @@ describe("ProjectSelector", () => {
       };
     });
 
-    render(
-      <ProjectSelector
-        selectedId="p-1"
-        onSelect={() => {}}
-        onDeselect={() => {}}
-      />
-    );
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
 
     fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
     fireEvent.click(screen.getByTitle("Edit"));
@@ -82,13 +76,7 @@ describe("ProjectSelector", () => {
       isLoading: false,
     });
 
-    render(
-      <ProjectSelector
-        selectedId="p-1"
-        onSelect={() => {}}
-        onDeselect={() => {}}
-      />
-    );
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
 
     fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
     fireEvent.click(screen.getByText("New project"));

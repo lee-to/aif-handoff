@@ -14,18 +14,25 @@
 
 ```typescript
 function processOrder(order: Order): Result {
-  console.log('[processOrder] START', { orderId: order.id, items: order.items.length });
+  console.log("[processOrder] START", { orderId: order.id, items: order.items.length });
 
   try {
     const validated = validateOrder(order);
-    console.log('[processOrder] Validation passed', { validated });
+    console.log("[processOrder] Validation passed", { validated });
 
     const result = submitToPayment(validated);
-    console.log('[processOrder] Payment result', { success: result.success, transactionId: result.id });
+    console.log("[processOrder] Payment result", {
+      success: result.success,
+      transactionId: result.id,
+    });
 
     return result;
   } catch (error) {
-    console.error('[processOrder] ERROR', { orderId: order.id, error: error.message, stack: error.stack });
+    console.error("[processOrder] ERROR", {
+      orderId: order.id,
+      error: error.message,
+      stack: error.stack,
+    });
     throw error;
   }
 }
@@ -42,12 +49,12 @@ function processOrder(order: Order): Result {
 
 ```typescript
 // Good: Configurable logging
-const LOG_LEVEL = process.env.LOG_LEVEL || 'debug';
+const LOG_LEVEL = process.env.LOG_LEVEL || "debug";
 const logger = createLogger({ level: LOG_LEVEL });
 
 // Good: Can be disabled
 if (process.env.DEBUG) {
-  console.log('[debug]', data);
+  console.log("[debug]", data);
 }
 
 // Bad: Hardcoded verbose logs that can't be turned off

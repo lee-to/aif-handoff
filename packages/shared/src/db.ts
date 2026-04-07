@@ -49,6 +49,10 @@ function ensureTables(sqlite: Database.Database): void {
       implementer_max_budget_usd REAL,
       review_sidecar_max_budget_usd REAL,
       parallel_enabled INTEGER NOT NULL DEFAULT 0,
+      default_task_runtime_profile_id TEXT,
+      default_plan_runtime_profile_id TEXT,
+      default_review_runtime_profile_id TEXT,
+      default_chat_runtime_profile_id TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
@@ -91,6 +95,9 @@ function ensureTables(sqlite: Database.Database): void {
       paused INTEGER NOT NULL DEFAULT 0,
       last_heartbeat_at TEXT,
       last_synced_at TEXT,
+      runtime_profile_id TEXT,
+      model_override TEXT,
+      runtime_options_json TEXT,
       session_id TEXT,
       locked_by TEXT,
       locked_until TEXT,
@@ -109,11 +116,31 @@ function ensureTables(sqlite: Database.Database): void {
     )
   `);
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS runtime_profiles (
+      id TEXT PRIMARY KEY,
+      project_id TEXT,
+      name TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      transport TEXT,
+      base_url TEXT,
+      api_key_env_var TEXT,
+      default_model TEXT,
+      headers_json TEXT NOT NULL DEFAULT '{}',
+      options_json TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Chat',
       agent_session_id TEXT,
+      runtime_profile_id TEXT,
+      runtime_session_id TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
@@ -130,6 +157,8 @@ function ensureTables(sqlite: Database.Database): void {
   `);
 
   runMigrations(sqlite);
+  ensureTriggers(sqlite);
+  runRuntimeBackfills(sqlite);
   ensureIndexes(sqlite);
 }
 
@@ -142,6 +171,8 @@ interface Migration {
   version: number;
   description: string;
   sql: string;
+  /** Trigger DDL statements that contain internal semicolons and must be executed whole. */
+  triggers?: string[];
 }
 
 const MIGRATIONS: Migration[] = [
@@ -191,7 +222,78 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN locked_until TEXT;
     `,
   },
+  {
+    version: 6,
+    description: "Add runtime profile persistence and runtime-neutral session columns",
+    sql: `
+      CREATE TABLE IF NOT EXISTS runtime_profiles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        name TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        transport TEXT,
+        base_url TEXT,
+        api_key_env_var TEXT,
+        default_model TEXT,
+        headers_json TEXT NOT NULL DEFAULT '{}',
+        options_json TEXT NOT NULL DEFAULT '{}',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      ALTER TABLE projects ADD COLUMN default_task_runtime_profile_id TEXT;
+      ALTER TABLE projects ADD COLUMN default_chat_runtime_profile_id TEXT;
+      ALTER TABLE tasks ADD COLUMN runtime_profile_id TEXT;
+      ALTER TABLE tasks ADD COLUMN model_override TEXT;
+      ALTER TABLE tasks ADD COLUMN runtime_options_json TEXT;
+      ALTER TABLE chat_sessions ADD COLUMN runtime_profile_id TEXT;
+      ALTER TABLE chat_sessions ADD COLUMN runtime_session_id TEXT;
+    `,
+  },
+  {
+    version: 7,
+    description: "Add cascade cleanup triggers for runtime_profiles deletion",
+    sql: "",
+    triggers: [
+      `CREATE TRIGGER IF NOT EXISTS trg_runtime_profiles_delete
+       AFTER DELETE ON runtime_profiles
+       FOR EACH ROW
+       BEGIN
+         UPDATE tasks SET runtime_profile_id = NULL WHERE runtime_profile_id = OLD.id;
+         UPDATE projects SET default_task_runtime_profile_id = NULL WHERE default_task_runtime_profile_id = OLD.id;
+         UPDATE projects SET default_chat_runtime_profile_id = NULL WHERE default_chat_runtime_profile_id = OLD.id;
+         UPDATE chat_sessions SET runtime_profile_id = NULL WHERE runtime_profile_id = OLD.id;
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_projects_delete_profiles
+       AFTER DELETE ON projects
+       FOR EACH ROW
+       BEGIN
+         DELETE FROM runtime_profiles WHERE project_id = OLD.id;
+       END`,
+    ],
+  },
+  {
+    version: 8,
+    description: "Add per-stage runtime profile columns to projects",
+    sql: `
+      ALTER TABLE projects ADD COLUMN default_plan_runtime_profile_id TEXT;
+      ALTER TABLE projects ADD COLUMN default_review_runtime_profile_id TEXT;
+    `,
+  },
 ];
+
+function splitSqlStatements(sqlText: string): string[] {
+  return sqlText
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0);
+}
+
+function isIgnorableMigrationError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return message.includes("duplicate column name") || message.includes("already exists");
+}
 
 function runMigrations(sqlite: Database.Database): void {
   const currentVersion = (sqlite.pragma("user_version", { simple: true }) as number) ?? 0;
@@ -211,14 +313,29 @@ function runMigrations(sqlite: Database.Database): void {
 
   const runAll = sqlite.transaction(() => {
     for (const migration of pending) {
-      try {
-        sqlite.exec(migration.sql);
-      } catch (err) {
-        // Column may already exist from legacy ensureColumn calls — skip gracefully
-        const msg = String(err);
-        if (msg.includes("duplicate column name")) {
-          log.debug({ version: migration.version }, "Column already exists, skipping");
-        } else {
+      const statements = splitSqlStatements(migration.sql);
+      for (const statement of statements) {
+        try {
+          sqlite.exec(statement);
+        } catch (err) {
+          if (isIgnorableMigrationError(err)) {
+            log.debug(
+              { version: migration.version, statement },
+              "Migration statement already applied, skipping",
+            );
+            continue;
+          }
+          throw err;
+        }
+      }
+      for (const trigger of migration.triggers ?? []) {
+        try {
+          sqlite.exec(trigger);
+        } catch (err) {
+          if (isIgnorableMigrationError(err)) {
+            log.debug({ version: migration.version }, "Trigger already exists, skipping");
+            continue;
+          }
           throw err;
         }
       }
@@ -233,6 +350,94 @@ function runMigrations(sqlite: Database.Database): void {
 
   runAll();
   log.info({ newVersion: pending[pending.length - 1].version }, "Migrations complete");
+}
+
+function hasColumn(sqlite: Database.Database, tableName: string, columnName: string): boolean {
+  const rows = sqlite.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === columnName);
+}
+
+function runRuntimeBackfills(sqlite: Database.Database): void {
+  if (hasColumn(sqlite, "chat_sessions", "runtime_session_id")) {
+    const sessionBackfill = sqlite
+      .prepare(
+        `
+        UPDATE chat_sessions
+        SET runtime_session_id = agent_session_id
+        WHERE runtime_session_id IS NULL
+          AND agent_session_id IS NOT NULL
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: sessionBackfill.changes },
+      "Backfilled runtime_session_id from legacy agent_session_id",
+    );
+  }
+
+  if (hasColumn(sqlite, "runtime_profiles", "headers_json")) {
+    const headersBackfill = sqlite
+      .prepare(
+        `
+        UPDATE runtime_profiles
+        SET headers_json = '{}'
+        WHERE headers_json IS NULL OR trim(headers_json) = ''
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: headersBackfill.changes },
+      "Backfilled runtime profile headers_json defaults",
+    );
+  }
+
+  if (hasColumn(sqlite, "runtime_profiles", "options_json")) {
+    const optionsBackfill = sqlite
+      .prepare(
+        `
+        UPDATE runtime_profiles
+        SET options_json = '{}'
+        WHERE options_json IS NULL OR trim(options_json) = ''
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: optionsBackfill.changes },
+      "Backfilled runtime profile options_json defaults",
+    );
+  }
+
+  if (hasColumn(sqlite, "runtime_profiles", "enabled")) {
+    const enabledBackfill = sqlite
+      .prepare(
+        `
+        UPDATE runtime_profiles
+        SET enabled = 1
+        WHERE enabled IS NULL
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: enabledBackfill.changes },
+      "Backfilled runtime profile enabled defaults",
+    );
+  }
+}
+
+/** Idempotent trigger bootstrap — ensures cascade cleanup triggers exist on every startup. */
+function ensureTriggers(sqlite: Database.Database): void {
+  const allTriggers = MIGRATIONS.flatMap((m) => m.triggers ?? []);
+  for (const trigger of allTriggers) {
+    try {
+      sqlite.exec(trigger);
+    } catch (err) {
+      if (isIgnorableMigrationError(err)) continue;
+      log.error({ err }, "Trigger bootstrap failed");
+    }
+  }
+  if (allTriggers.length > 0) {
+    log.debug({ triggerCount: allTriggers.length }, "Trigger bootstrap complete");
+  }
 }
 
 /** Idempotent index bootstrap for high-frequency query patterns. */
@@ -252,6 +457,14 @@ function ensureIndexes(sqlite: Database.Database): void {
     "CREATE INDEX IF NOT EXISTS idx_task_comments_task_id ON task_comments(task_id)",
     // Task locking: find unlocked or stale-locked tasks
     "CREATE INDEX IF NOT EXISTS idx_tasks_locked ON tasks(locked_by, locked_until)",
+    // Runtime profile selection by project scope
+    "CREATE INDEX IF NOT EXISTS idx_runtime_profiles_project_id ON runtime_profiles(project_id)",
+    // Runtime profile selection by runtime/provider
+    "CREATE INDEX IF NOT EXISTS idx_runtime_profiles_runtime ON runtime_profiles(runtime_id, provider_id)",
+    // Runtime profile lookups for tasks
+    "CREATE INDEX IF NOT EXISTS idx_tasks_runtime_profile_id ON tasks(runtime_profile_id)",
+    // Runtime profile lookups for chat sessions
+    "CREATE INDEX IF NOT EXISTS idx_chat_sessions_runtime_profile_id ON chat_sessions(runtime_profile_id)",
   ];
 
   for (const ddl of indexDefs) {

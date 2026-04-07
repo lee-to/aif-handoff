@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { initProjectDirectory, validateProjectRootPath, logger } from "@aif/shared";
+import { initProject } from "@aif/runtime";
+import { validateProjectRootPath, logger } from "@aif/shared";
+import { getApiRuntimeRegistry } from "../services/runtime.js";
 import {
   createProject as createProjectRecord,
   deleteProject as deleteProjectRecord,
@@ -20,6 +22,8 @@ export function createProject(input: {
   implementerMaxBudgetUsd?: number | null;
   reviewSidecarMaxBudgetUsd?: number | null;
   parallelEnabled?: boolean;
+  defaultTaskRuntimeProfileId?: string | null;
+  defaultChatRuntimeProfileId?: string | null;
 }): { project: ProjectRow | undefined; pathError?: string } {
   const pathError = validateProjectRootPath(input.rootPath);
   if (pathError) return { project: undefined, pathError };
@@ -27,7 +31,16 @@ export function createProject(input: {
   const project = createProjectRecord(input);
 
   try {
-    initProjectDirectory(input.rootPath);
+    getApiRuntimeRegistry()
+      .then((registry) => {
+        initProject({ projectRoot: input.rootPath, registry });
+      })
+      .catch((err) => {
+        log.warn(
+          { rootPath: input.rootPath, err },
+          "Runtime registry unavailable, project init skipped",
+        );
+      });
   } catch (err) {
     log.warn(
       { projectId: project?.id, rootPath: input.rootPath, err },
@@ -48,6 +61,10 @@ export function updateProject(
     implementerMaxBudgetUsd?: number | null;
     reviewSidecarMaxBudgetUsd?: number | null;
     parallelEnabled?: boolean;
+    defaultTaskRuntimeProfileId?: string | null;
+    defaultPlanRuntimeProfileId?: string | null;
+    defaultReviewRuntimeProfileId?: string | null;
+    defaultChatRuntimeProfileId?: string | null;
   },
 ): { project: ProjectRow | undefined; pathError?: string } {
   const pathError = validateProjectRootPath(input.rootPath);

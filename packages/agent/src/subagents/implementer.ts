@@ -1,4 +1,3 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -7,16 +6,15 @@ import {
   getLatestReworkComment,
   persistTaskPlanForTask,
   setTaskFields,
-  incrementTaskTokenUsage,
   type TaskRow,
 } from "@aif/data";
 import {
   logger,
   formatAttachmentsForPrompt,
   looksLikeFullPlanUpdate,
-  modelOption,
   getProjectConfig,
 } from "@aif/shared";
+import { createRuntimeWorkflowSpec } from "@aif/runtime";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery } from "../subagentQuery.js";
 import { computePendingPlanLayers, computePlanLayers } from "../planLayers.js";
@@ -95,7 +93,6 @@ async function runChecklistSyncQuery(input: {
   planText: string;
   implementationResult: string;
 }): Promise<string> {
-  let resultText = "";
   const prompt = `You are finalizing task checklist state in a markdown implementation plan.
 
 TASK TITLE:
@@ -120,36 +117,30 @@ Requirements:
 5) Output markdown only.
 6) Do not use tools or subagents.`;
 
-  for await (const message of query({
+  const workflowSpec = createRuntimeWorkflowSpec({
+    workflowKind: "implementer_checklist_sync",
     prompt,
-    options: {
-      cwd: input.projectRoot,
-      env: { ...process.env, HANDOFF_MODE: "1", HANDOFF_TASK_ID: input.task.id },
-      settings: { attribution: { commit: "", pr: "" } },
-      settingSources: ["project"],
-      ...modelOption("haiku"),
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: "Do not use tools or subagents. Reply directly with markdown only.",
-      },
+    requiredCapabilities: [],
+    sessionReusePolicy: "never",
+    systemPromptAppend: "Do not use tools or subagents. Reply directly with markdown only.",
+    metadata: {
+      checklistSync: true,
     },
-  })) {
-    if (message.type !== "result") continue;
-    incrementTaskTokenUsage(input.task.id, {
-      ...message.usage,
-      total_cost_usd: message.total_cost_usd,
-    });
-    if (message.subtype !== "success") {
-      throw new Error(`Checklist sync failed: ${message.subtype}`);
-    }
-    resultText = message.result.trim();
-  }
+  });
 
-  if (!resultText) {
+  const { resultText } = await executeSubagentQuery({
+    taskId: input.task.id,
+    projectRoot: input.projectRoot,
+    agentName: "implement-checklist-sync",
+    prompt,
+    workflowSpec,
+    workflowKind: "implementer_checklist_sync",
+  });
+  const normalizedResult = resultText.trim();
+  if (!normalizedResult) {
     throw new Error("Checklist sync did not return plan markdown");
   }
-  return resultText;
+  return normalizedResult;
 }
 
 export async function runImplementer(taskId: string, projectRoot: string): Promise<void> {
@@ -204,11 +195,13 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   }
 
   log.info({ taskId, title: task.title, useSubagents }, "Starting implementation stage");
+  const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}
+All files must be created and modified inside this directory. Do NOT create files outside of it.`;
+  const implementSlashCommand = `/aif-implement ${planSection}`;
 
-  const prompt = `${useSubagents ? "Implement the task using the provided plan." : `/aif-implement ${planSection}`}
+  const prompt = `${useSubagents ? "Implement the task using the provided plan." : implementSlashCommand}
 
-IMPORTANT: Your working directory is ${projectRoot}
-All files must be created and modified inside this directory. Do NOT create files outside of it.
+${scopeConstraint}
 
 Title: ${task.title}
 Description: ${task.description}
@@ -231,6 +224,20 @@ Execution rules:
 - Keep plan checklist state accurate while implementing.
 - Run tests/lint/verification relevant to the changes.
 - IMPORTANT: The plan file is ${effectivePlanPath}. Always read from and annotate this exact file — do not create plan files at other paths.`;
+  const workflowSpec = createRuntimeWorkflowSpec({
+    workflowKind: "implementer",
+    prompt,
+    requiredCapabilities: useSubagents ? ["supportsAgentDefinitions"] : [],
+    agentDefinitionName: useSubagents ? AGENT_NAME : undefined,
+    fallbackSlashCommand: implementSlashCommand,
+    fallbackStrategy: useSubagents ? "slash_command" : "none",
+    sessionReusePolicy: "resume_if_available",
+    systemPromptAppend: scopeConstraint,
+    metadata: {
+      reworkRequested: task.reworkRequested,
+      skipReview: task.skipReview ?? false,
+    },
+  });
 
   const { resultText } = await executeSubagentQuery({
     taskId,
@@ -240,6 +247,9 @@ Execution rules:
     maxBudgetUsd: implementerBudget,
     agent: useSubagents ? AGENT_NAME : undefined,
     skipReview: task.skipReview ?? false,
+    workflowSpec,
+    workflowKind: "implementer",
+    fallbackSlashCommand: implementSlashCommand,
   });
 
   let finalResultText = resultText;

@@ -5,6 +5,7 @@
 Use `env_file: .env` on `app` service. Do NOT list every app variable in `environment:`.
 
 Only use `environment:` for:
+
 1. **Computed values** that compose assembles from parts: `DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}`
 2. **Infrastructure image config** on their own services: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` on `db` service
 

@@ -34,7 +34,8 @@ export interface PlanAnnotation {
 // ── Plan Annotation Utilities ───────────────────────────────
 
 /** Regex to match plan annotations: <!-- handoff:task:<uuid> --> */
-const ANNOTATION_REGEX = /<!--\s*handoff:task:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*-->/gi;
+const ANNOTATION_REGEX =
+  /<!--\s*handoff:task:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*-->/gi;
 
 /**
  * Parse all handoff task annotations from plan markdown.
@@ -96,7 +97,10 @@ export function insertPlanAnnotation(
 
     if (headingIndex !== -1) {
       lines.splice(headingIndex + 1, 0, annotation);
-      log.debug({ taskId, line: headingIndex + 2, sectionHeading }, "Inserted annotation after heading");
+      log.debug(
+        { taskId, line: headingIndex + 2, sectionHeading },
+        "Inserted annotation after heading",
+      );
     } else {
       // Heading not found, insert at top
       lines.unshift(annotation);

@@ -1,6 +1,5 @@
 import { appendTaskActivityLog } from "@aif/data";
-import { logger, findMonorepoRootFromUrl, getEnv, findClaudePath } from "@aif/shared";
-import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import { logger, findMonorepoRootFromUrl, getEnv } from "@aif/shared";
 import { notifyTaskBroadcast } from "./notifier.js";
 
 const log = logger("agent-hooks");
@@ -8,22 +7,24 @@ const log = logger("agent-hooks");
 const PROJECT_ROOT = findMonorepoRootFromUrl(import.meta.url);
 
 /**
- * Returns the monorepo root so agents work with the correct cwd
- * and can find .claude/agents/ definitions.
+ * Returns the monorepo root so agents work with the correct cwd.
  */
 export function getProjectRoot(): string {
   return PROJECT_ROOT;
 }
 
-const CLAUDE_PATH = findClaudePath();
-
-/** Returns the resolved path to the claude binary, if found. */
-export function getClaudePath(): string | undefined {
-  return CLAUDE_PATH;
-}
-
 /** Log categories for activity entries. */
 export type ActivityCategory = "Tool" | "Agent" | "Subagent";
+
+/**
+ * Runtime-neutral callback signature for hook-style events.
+ * Keeps @aif/agent decoupled from SDK-specific type imports.
+ */
+export type RuntimeHookCallback = (
+  input: unknown,
+  toolUseId: string | undefined,
+  options: unknown,
+) => Promise<Record<string, unknown>> | Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
 // Batched activity-log queue
@@ -257,7 +258,7 @@ function buildHookLogContext(data: Record<string, unknown>): Record<string, unkn
 /**
  * Creates a PostToolUse hook callback that logs tool activity.
  */
-export function createActivityLogger(taskId: string): HookCallback {
+export function createActivityLogger(taskId: string): RuntimeHookCallback {
   return async (input, _toolUseId, _options) => {
     if (!isRecord(input)) return {};
     const data = input as Record<string, unknown>;
@@ -275,7 +276,7 @@ export function createActivityLogger(taskId: string): HookCallback {
 /**
  * Creates a SubagentStart hook callback that logs subagent spawns.
  */
-export function createSubagentLogger(taskId: string): HookCallback {
+export function createSubagentLogger(taskId: string): RuntimeHookCallback {
   return async (input, _toolUseId, _options) => {
     if (!isRecord(input)) return {};
     const data = input as Record<string, unknown>;

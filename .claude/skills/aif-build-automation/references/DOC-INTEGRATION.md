@@ -9,15 +9,15 @@ Build a `QUICK_REFERENCE` block — a compact markdown table or code block listi
 ```markdown
 ## Quick Commands
 
-| Command | Description |
-|---------|-------------|
-| `make dev` | Start development server |
-| `make test` | Run tests |
-| `make lint` | Run linters |
-| `make build` | Build for production |
-| `make docker-dev` | Start dev environment in Docker |
-| `make docker-prod-build` | Build production Docker image |
-| `make clean` | Remove build artifacts |
+| Command                  | Description                     |
+| ------------------------ | ------------------------------- |
+| `make dev`               | Start development server        |
+| `make test`              | Run tests                       |
+| `make lint`              | Run linters                     |
+| `make build`             | Build for production            |
+| `make docker-dev`        | Start dev environment in Docker |
+| `make docker-prod-build` | Build production Docker image   |
+| `make clean`             | Remove build artifacts          |
 ```
 
 Adapt the command prefix (`make` / `task` / `just` / `mage`) to match `TARGET_TOOL`.
@@ -26,11 +26,12 @@ Adapt the command prefix (`make` / `task` / `just` / `mage`) to match `TARGET_TO
 
 Scan for markdown files that already contain command/usage sections:
 
-```
+````
 Grep in *.md: "## Commands\b|## Quick Start\b|## Usage\b|## Development\b|## Getting Started\b|## How to Run\b|```sh|```bash"
-```
+````
 
 For each matching file:
+
 - Read the file and find the relevant section
 - Check if it already lists commands for the generated tool — if so, update the command list to match the new/enhanced build file
 - If the section exists but doesn't mention our build tool, **append** the quick reference block after the existing commands
@@ -45,6 +46,7 @@ Glob: README.md, README.rst, readme.md
 ```
 
 If a README exists:
+
 - Check if it has a commands/usage/development section (same grep patterns as 7.1)
 - If yes → update/append the quick reference there
 - If no → add a `## Quick Commands` section before the last section (typically "License" or "Contributing"), or at the end if no such section exists
@@ -57,6 +59,7 @@ Glob: AGENTS.md, agents.md, CLAUDE.md, claude.md, .github/copilot-instructions.m
 ```
 
 **If an agent instruction file exists** (AGENTS.md, CLAUDE.md, etc.):
+
 - Read it and check if it already has a build/commands section
 - If no build section → append a section with quick commands that AI agents should use:
 
@@ -66,6 +69,7 @@ Glob: AGENTS.md, agents.md, CLAUDE.md, claude.md, .github/copilot-instructions.m
 This project uses [Makefile|Taskfile|justfile|Magefile] for build automation.
 
 Common commands:
+
 - `make test` — always run tests before committing
 - `make lint` — run linters, fix issues before pushing
 - `make build` — verify the project builds cleanly
@@ -87,6 +91,7 @@ Options:
 ```
 
 If the user chooses to create it, generate a minimal `AGENTS.md` with:
+
 - Project name and brief description (from `PROJECT_PROFILE` or `.ai-factory/DESCRIPTION.md`)
 - Build commands section (as above)
 - Key project conventions (language, test framework, linter — so AI agents run the right commands)

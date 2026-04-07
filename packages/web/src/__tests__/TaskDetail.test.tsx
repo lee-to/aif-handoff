@@ -384,6 +384,7 @@ describe("TaskDetail", () => {
     expect(mutateTaskEvent).toHaveBeenCalledWith({
       id: "detail-backlog",
       event: "start_ai",
+      deletePlanFile: true,
     });
     expect(onClose).toHaveBeenCalled();
   });

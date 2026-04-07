@@ -17,6 +17,16 @@ let mockIsStreaming = false;
 let mockExplore = false;
 let mockChatErrorCode: string | null = null;
 let mockActiveSessionId: string | null = null;
+let mockEffectiveChatRuntime: {
+  source: string;
+  profile: {
+    name: string;
+    runtimeId: string;
+    providerId: string;
+    defaultModel: string | null;
+  } | null;
+  resolved?: { runtimeId: string; providerId: string; model: string | null };
+} | null = null;
 
 vi.mock("@/hooks/useChat", () => ({
   useChat: () => ({
@@ -51,6 +61,12 @@ vi.mock("@/hooks/useTasks", () => ({
   useCreateTask: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock("@/hooks/useRuntimeProfiles", () => ({
+  useEffectiveChatRuntime: () => ({
+    data: mockEffectiveChatRuntime,
+  }),
+}));
+
 const { ChatPanel } = await import("@/components/chat/ChatPanel");
 
 const mockOnClose = vi.fn();
@@ -62,10 +78,37 @@ describe("ChatPanel", () => {
     mockExplore = false;
     mockChatErrorCode = null;
     mockActiveSessionId = null;
+    mockEffectiveChatRuntime = null;
     mockSendMessage.mockClear();
     mockClearMessages.mockClear();
     mockSetExplore.mockClear();
     mockOnClose.mockClear();
+  });
+
+  it("shows active chat runtime profile and model", () => {
+    mockEffectiveChatRuntime = {
+      source: "project_default",
+      profile: {
+        name: "GLM Claude",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        defaultModel: "glm-5",
+      },
+      resolved: {
+        runtimeId: "claude",
+        providerId: "anthropic",
+        model: "glm-5",
+      },
+    };
+
+    render(<ChatPanel isOpen={true} projectId="p-1" taskId={null} onClose={mockOnClose} />);
+
+    expect(screen.getByText("Profile:")).toBeDefined();
+    expect(screen.getByText("GLM Claude")).toBeDefined();
+    expect(screen.getByText("Runtime:")).toBeDefined();
+    expect(screen.getByText("claude/anthropic")).toBeDefined();
+    expect(screen.getByText("Model:")).toBeDefined();
+    expect(screen.getByText("glm-5")).toBeDefined();
   });
 
   it("shows empty state when no messages", () => {
@@ -146,7 +189,7 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Usage Limit Reached")).toBeDefined();
     expect(
       screen.getByText(
-        "Claude usage limit is currently exhausted. Wait for reset time and send again.",
+        "Runtime usage limit is currently exhausted. Wait for reset time and send again.",
       ),
     ).toBeDefined();
   });
@@ -177,11 +220,10 @@ describe("ChatPanel", () => {
   });
 
   it("is hidden when isOpen is false", () => {
-    const { container } = render(
-      <ChatPanel isOpen={false} projectId="p-1" taskId={null} onClose={mockOnClose} />,
-    );
-    const panel = container.firstChild as HTMLElement;
-    expect(panel.className).toContain("-translate-x-full");
+    render(<ChatPanel isOpen={false} projectId="p-1" taskId={null} onClose={mockOnClose} />);
+    // Portal renders to document.body
+    const panel = document.body.querySelector("[class*='-translate-x-full']");
+    expect(panel).not.toBeNull();
   });
 
   it("renders a single attachment badge on a user message", () => {
@@ -274,13 +316,10 @@ describe("ChatPanel", () => {
 
   it("does not render attachment section when message has no attachments", () => {
     mockMessages = [{ role: "user", content: "Plain message" }];
-    const { container } = render(
-      <ChatPanel isOpen={true} projectId="p-1" taskId={null} onClose={mockOnClose} />,
-    );
-    // No paperclip icons in message bubbles (only in input area)
-    const messageBubbles = container.querySelectorAll(".bg-blue-600\\/15");
+    render(<ChatPanel isOpen={true} projectId="p-1" taskId={null} onClose={mockOnClose} />);
+    // Portal renders to document.body — query there
+    const messageBubbles = document.body.querySelectorAll(".bg-blue-600\\/15");
     expect(messageBubbles.length).toBe(1);
-    // The message bubble should not contain any nested flex-wrap div for attachments
     expect(messageBubbles[0].querySelector(".flex-wrap")).toBeNull();
   });
 });

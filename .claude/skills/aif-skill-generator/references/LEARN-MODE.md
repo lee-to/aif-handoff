@@ -7,6 +7,7 @@ Learn Mode activates automatically when the user passes one or more URLs as argu
 Scan `$ARGUMENTS` for patterns matching `https?://[^\s]+`. Any argument containing a URL triggers Learn Mode.
 
 **Examples of invocation:**
+
 ```
 /aif-skill-generator https://docs.example.com/api-reference
 /aif-skill-generator https://react.dev/learn https://react.dev/reference
@@ -23,6 +24,7 @@ When a non-URL argument is also present (like `my-skill-name`), use it as the sk
 For EACH URL provided:
 
 1. **Fetch the page** using `WebFetch` with a targeted prompt:
+
    ```
    WebFetch(url, "Extract ALL key information from this page:
    - Main topic and purpose
@@ -63,27 +65,33 @@ Combine all gathered material into a structured knowledge base:
 ## Knowledge Base: <Topic>
 
 ### Core Concepts
+
 - Concept 1: explanation
 - Concept 2: explanation
 
 ### API / Interface
+
 - Method/function signatures
 - Parameters and types
 - Return values
 
 ### Patterns & Examples
+
 - Pattern 1: code example + when to use
 - Pattern 2: code example + when to use
 
 ### Configuration
+
 - Option 1: description, default, valid values
 - Option 2: description, default, valid values
 
 ### Best Practices
+
 1. Practice with reasoning
 2. Practice with reasoning
 
 ### Common Pitfalls
+
 1. Pitfall: what goes wrong and how to avoid
 2. Pitfall: what goes wrong and how to avoid
 ```
@@ -107,6 +115,7 @@ Ask the user 2-3 targeted questions using `AskUserQuestion`:
 Using the synthesized knowledge, generate a complete skill package:
 
 1. **Create directory structure**:
+
    ```
    skill-name/
    ├── SKILL.md              # Main skill with instructions derived from sources
@@ -158,35 +167,43 @@ Using the synthesized knowledge, generate a complete skill package:
 
 When multiple URLs are provided:
 
-| Scenario | Strategy |
-|----------|----------|
-| Same domain, different pages | Treat as one comprehensive source, merge into single knowledge base |
-| Different domains, same topic | Cross-reference, pick best practices from each, note differences |
-| Different topics | Ask user how they relate, potentially suggest multiple skills or a combined skill |
-| Mix of docs + blog posts | Prioritize official docs for accuracy, use blog posts for practical tips |
+| Scenario                      | Strategy                                                                          |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| Same domain, different pages  | Treat as one comprehensive source, merge into single knowledge base               |
+| Different domains, same topic | Cross-reference, pick best practices from each, note differences                  |
+| Different topics              | Ask user how they relate, potentially suggest multiple skills or a combined skill |
+| Mix of docs + blog posts      | Prioritize official docs for accuracy, use blog posts for practical tips          |
 
 ## Examples
 
 ### Example 1: Single Documentation URL
+
 ```
 /aif-skill-generator https://tailwindcss.com/docs
 ```
+
 Result: A skill that helps write Tailwind CSS classes with a reference guide of utilities, responsive patterns, and best practices.
 
 ### Example 2: Multiple Related URLs
+
 ```
 /aif-skill-generator https://react.dev/learn/thinking-in-react https://react.dev/reference/react/hooks
 ```
+
 Result: A React development skill with component design patterns and hooks reference.
 
 ### Example 3: URL + Name
+
 ```
 /aif-skill-generator fastapi-helper https://fastapi.tiangolo.com/tutorial/
 ```
+
 Result: A skill named `fastapi-helper` with FastAPI patterns, endpoint templates, and validation examples.
 
 ### Example 4: Mixed Sources
+
 ```
 /aif-skill-generator https://docs.docker.com/compose/ https://blog.example.com/docker-compose-tips
 ```
+
 Result: A Docker Compose skill combining official reference with practical tips from the blog.

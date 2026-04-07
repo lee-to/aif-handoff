@@ -3,7 +3,8 @@ import type { WsEventType } from "@aif/shared";
 
 const log = logger("mcp:notifier");
 
-type BroadcastType = Extract<WsEventType,
+type BroadcastType = Extract<
+  WsEventType,
   | "task:created"
   | "task:updated"
   | "sync:task_created"
@@ -32,10 +33,7 @@ export async function broadcastTaskEvent(
     });
 
     if (!res.ok) {
-      log.warn(
-        { taskId, type, status: res.status },
-        "Broadcast request returned non-OK status",
-      );
+      log.warn({ taskId, type, status: res.status }, "Broadcast request returned non-OK status");
       return;
     }
 

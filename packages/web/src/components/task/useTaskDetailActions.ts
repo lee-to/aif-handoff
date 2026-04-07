@@ -204,9 +204,9 @@ export function useTaskDetailActions(task: Task | undefined, onClose: () => void
   const [startAiPlanPath, setStartAiPlanPath] = useState<string | null>(null);
   const [isCheckingStartAiPlanFile, setIsCheckingStartAiPlanFile] = useState(false);
 
-  const triggerStartAi = () => {
+  const triggerStartAi = (options?: { deletePlanFile?: boolean }) => {
     if (!task) return;
-    taskEvent.mutate({ id: task.id, event: "start_ai" });
+    taskEvent.mutate({ id: task.id, event: "start_ai", deletePlanFile: options?.deletePlanFile });
     onClose();
   };
 

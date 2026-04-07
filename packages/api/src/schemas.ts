@@ -18,6 +18,10 @@ export const createProjectSchema = z.object({
   implementerMaxBudgetUsd: z.number().positive().optional(),
   reviewSidecarMaxBudgetUsd: z.number().positive().optional(),
   parallelEnabled: z.boolean().optional(),
+  defaultTaskRuntimeProfileId: z.string().min(1).nullable().optional(),
+  defaultPlanRuntimeProfileId: z.string().min(1).nullable().optional(),
+  defaultReviewRuntimeProfileId: z.string().min(1).nullable().optional(),
+  defaultChatRuntimeProfileId: z.string().min(1).nullable().optional(),
 });
 
 export const createTaskSchema = z.object({
@@ -41,6 +45,9 @@ export const createTaskSchema = z.object({
     .max(50)
     .default(getEnv().AGENT_MAX_REVIEW_ITERATIONS),
   paused: z.boolean().default(false),
+  runtimeProfileId: z.string().min(1).nullable().optional(),
+  modelOverride: z.string().max(200).nullable().optional(),
+  runtimeOptions: z.record(z.string(), z.unknown()).nullable().optional(),
   roadmapAlias: z.string().max(200).optional(),
   tags: z.array(z.string().max(100)).max(50).default([]),
 });
@@ -72,6 +79,9 @@ export const updateTaskSchema = z.object({
   reworkRequested: z.boolean().optional(),
   paused: z.boolean().optional(),
   lastHeartbeatAt: z.string().nullable().optional(),
+  runtimeProfileId: z.string().min(1).nullable().optional(),
+  modelOverride: z.string().max(200).nullable().optional(),
+  runtimeOptions: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export const taskEventSchema = z.object({
@@ -105,10 +115,14 @@ export const roadmapGenerateSchema = z.object({
 export const createChatSessionSchema = z.object({
   projectId: z.string().min(1, "Project ID is required"),
   title: z.string().max(200).optional(),
+  runtimeProfileId: z.string().min(1).nullable().optional(),
+  runtimeSessionId: z.string().min(1).nullable().optional(),
 });
 
 export const updateChatSessionSchema = z.object({
   title: z.string().min(1).max(200).optional(),
+  runtimeProfileId: z.string().min(1).nullable().optional(),
+  runtimeSessionId: z.string().min(1).nullable().optional(),
 });
 
 export const chatAttachmentSchema = z.object({
@@ -126,5 +140,61 @@ export const chatRequestSchema = z.object({
   sessionId: z.string().optional(),
   explore: z.boolean().default(false),
   taskId: z.string().optional(),
+  runtimeProfileId: z.string().min(1).nullable().optional(),
   attachments: z.array(chatAttachmentSchema).max(5).optional(),
+});
+
+const runtimeHeadersSchema = z.record(z.string(), z.string());
+const runtimeOptionsSchema = z.record(z.string(), z.unknown());
+const runtimeEnvVarSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(
+    /^[A-Za-z0-9_.-]+$/,
+    "apiKeyEnvVar must contain only letters, numbers, dot, underscore, or hyphen",
+  )
+  .nullable()
+  .optional();
+
+export const createRuntimeProfileSchema = z.object({
+  projectId: z.string().min(1).nullable().optional(),
+  name: z.string().min(1).max(200),
+  runtimeId: z.string().min(1).max(100),
+  providerId: z.string().min(1).max(100),
+  transport: z.string().max(100).nullable().optional(),
+  baseUrl: z.string().max(1000).nullable().optional(),
+  apiKeyEnvVar: runtimeEnvVarSchema,
+  defaultModel: z.string().max(200).nullable().optional(),
+  headers: runtimeHeadersSchema.optional(),
+  options: runtimeOptionsSchema.optional(),
+  enabled: z.boolean().optional(),
+});
+
+export const updateRuntimeProfileSchema = createRuntimeProfileSchema
+  .partial()
+  .refine((payload) => Object.keys(payload).length > 0, {
+    message: "At least one field is required",
+  });
+
+export const runtimeProfileValidationSchema = z.object({
+  projectId: z.string().min(1).optional(),
+  profileId: z.string().min(1).optional(),
+  profile: createRuntimeProfileSchema.optional(),
+  modelOverride: z.string().max(200).nullable().optional(),
+  runtimeOptions: runtimeOptionsSchema.nullable().optional(),
+  // Temporary credential for validation only. Never persisted.
+  apiKey: z.string().min(1).optional(),
+  forceRefresh: z.boolean().optional(),
+});
+
+export const runtimeProfileModelsSchema = z.object({
+  projectId: z.string().min(1).optional(),
+  profileId: z.string().min(1).optional(),
+  profile: createRuntimeProfileSchema.optional(),
+  modelOverride: z.string().max(200).nullable().optional(),
+  runtimeOptions: runtimeOptionsSchema.nullable().optional(),
+  apiKey: z.string().min(1).optional(),
+  forceRefresh: z.boolean().optional(),
 });

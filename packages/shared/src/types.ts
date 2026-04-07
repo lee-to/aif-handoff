@@ -20,6 +20,10 @@ export interface Project {
   implementerMaxBudgetUsd: number | null;
   reviewSidecarMaxBudgetUsd: number | null;
   parallelEnabled: boolean;
+  defaultTaskRuntimeProfileId?: string | null;
+  defaultPlanRuntimeProfileId?: string | null;
+  defaultReviewRuntimeProfileId?: string | null;
+  defaultChatRuntimeProfileId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -32,6 +36,10 @@ export interface CreateProjectInput {
   implementerMaxBudgetUsd?: number;
   reviewSidecarMaxBudgetUsd?: number;
   parallelEnabled?: boolean;
+  defaultTaskRuntimeProfileId?: string | null;
+  defaultPlanRuntimeProfileId?: string | null;
+  defaultReviewRuntimeProfileId?: string | null;
+  defaultChatRuntimeProfileId?: string | null;
 }
 
 export interface TaskCommentAttachment {
@@ -81,6 +89,9 @@ export interface Task {
   paused: boolean;
   lastHeartbeatAt: string | null;
   lastSyncedAt: string | null;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
   sessionId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -117,6 +128,9 @@ export interface CreateTaskInput {
   useSubagents?: boolean;
   maxReviewIterations?: number;
   paused?: boolean;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
   roadmapAlias?: string;
   tags?: string[];
 }
@@ -154,6 +168,9 @@ export interface UpdateTaskInput {
   maxReviewIterations?: number;
   paused?: boolean;
   lastHeartbeatAt?: string | null;
+  runtimeProfileId?: string | null;
+  modelOverride?: string | null;
+  runtimeOptions?: Record<string, unknown> | null;
 }
 
 export const TASK_EVENTS = [
@@ -232,6 +249,95 @@ export interface WsEvent {
     | ChatSession;
 }
 
+export const RuntimeTransport = {
+  /** Agent SDK — in-process query */
+  SDK: "sdk",
+  /** CLI subprocess — spawn a binary and parse stdout */
+  CLI: "cli",
+  /** HTTP API — POST to a remote runtime endpoint */
+  API: "api",
+} as const;
+
+export type RuntimeTransport = (typeof RuntimeTransport)[keyof typeof RuntimeTransport];
+
+/** All known transport values for validation and UI selects. */
+export const RUNTIME_TRANSPORTS: readonly RuntimeTransport[] = Object.values(RuntimeTransport);
+
+export function isRuntimeTransport(value: unknown): value is RuntimeTransport {
+  return typeof value === "string" && RUNTIME_TRANSPORTS.includes(value as RuntimeTransport);
+}
+
+/** Runtime descriptor returned by GET /runtime-profiles/runtimes */
+export interface RuntimeDescriptor {
+  id: string;
+  providerId: string;
+  displayName: string;
+  description?: string | null;
+  capabilities: Record<string, boolean>;
+  defaultApiKeyEnvVar?: string | null;
+  defaultModelPlaceholder?: string | null;
+  supportedTransports?: string[];
+}
+
+export interface RuntimeProfile {
+  id: string;
+  projectId: string | null;
+  name: string;
+  runtimeId: string;
+  providerId: string;
+  transport: string | null;
+  baseUrl: string | null;
+  apiKeyEnvVar: string | null;
+  defaultModel: string | null;
+  headers: Record<string, string>;
+  options: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRuntimeProfileInput {
+  projectId?: string | null;
+  name: string;
+  runtimeId: string;
+  providerId: string;
+  transport?: string | null;
+  baseUrl?: string | null;
+  apiKeyEnvVar?: string | null;
+  defaultModel?: string | null;
+  headers?: Record<string, string>;
+  options?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export interface UpdateRuntimeProfileInput {
+  projectId?: string | null;
+  name?: string;
+  runtimeId?: string;
+  providerId?: string;
+  transport?: string | null;
+  baseUrl?: string | null;
+  apiKeyEnvVar?: string | null;
+  defaultModel?: string | null;
+  headers?: Record<string, string>;
+  options?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export type EffectiveRuntimeProfileSource =
+  | "task_override"
+  | "project_default"
+  | "system_default"
+  | "none";
+
+export interface EffectiveRuntimeProfileSelection {
+  source: EffectiveRuntimeProfileSource;
+  profile: RuntimeProfile | null;
+  taskRuntimeProfileId: string | null;
+  projectRuntimeProfileId: string | null;
+  systemRuntimeProfileId: string | null;
+}
+
 // ── Chat session types ──────────────────────────────────────
 
 export type ChatSessionSource = "web" | "cli" | "agent";
@@ -241,6 +347,8 @@ export interface ChatSession {
   projectId: string;
   title: string;
   agentSessionId: string | null;
+  runtimeProfileId?: string | null;
+  runtimeSessionId?: string | null;
   source: ChatSessionSource;
   createdAt: string;
   updatedAt: string;
@@ -249,10 +357,15 @@ export interface ChatSession {
 export interface CreateChatSessionInput {
   projectId: string;
   title?: string;
+  runtimeProfileId?: string | null;
+  runtimeSessionId?: string | null;
 }
 
 export interface UpdateChatSessionInput {
   title?: string;
+  agentSessionId?: string | null;
+  runtimeProfileId?: string | null;
+  runtimeSessionId?: string | null;
 }
 
 export interface ChatMessageAttachment {

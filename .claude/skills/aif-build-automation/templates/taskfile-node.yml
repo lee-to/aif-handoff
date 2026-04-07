@@ -2,11 +2,11 @@
 # Usage: task [target]
 # Install: https://taskfile.dev/installation/
 
-version: '3'
+version: "3"
 
 output: prefixed
 
-dotenv: ['.env', '.env.local']
+dotenv: [".env", ".env.local"]
 
 vars:
   PROJECT:
@@ -32,8 +32,8 @@ vars:
 
   # Docker
   DOCKER_REGISTRY: ghcr.io
-  DOCKER_IMAGE: '{{.DOCKER_REGISTRY}}/{{.PROJECT}}'
-  DOCKER_TAG: '{{.VERSION}}'
+  DOCKER_IMAGE: "{{.DOCKER_REGISTRY}}/{{.PROJECT}}"
+  DOCKER_TAG: "{{.VERSION}}"
 
 tasks:
   # --- Development ---
@@ -47,13 +47,13 @@ tasks:
       - package-lock.json
       - bun.lockb
     cmds:
-      - '{{.PM}} install'
+      - "{{.PM}} install"
 
   dev:
     desc: Start development server
     deps: [install]
     cmds:
-      - '{{.PM}} run dev'
+      - "{{.PM}} run dev"
 
   build:
     desc: Build for production
@@ -61,19 +61,19 @@ tasks:
     env:
       NODE_ENV: production
     cmds:
-      - '{{.PM}} run build'
+      - "{{.PM}} run build"
 
   start:
     desc: Start production server
     env:
       NODE_ENV: production
     cmds:
-      - '{{.PM}} run start'
+      - "{{.PM}} run start"
 
   generate:
     desc: Run code generation
     cmds:
-      - '{{.PM}} run generate'
+      - "{{.PM}} run generate"
 
   # --- Testing ---
 
@@ -81,49 +81,49 @@ tasks:
     desc: Run tests
     deps: [install]
     cmds:
-      - '{{.PM}} run test'
+      - "{{.PM}} run test"
 
   test:watch:
     desc: Run tests in watch mode
     cmds:
-      - '{{.PM}} run test -- --watch'
+      - "{{.PM}} run test -- --watch"
 
   test:cover:
     desc: Run tests with coverage
     cmds:
-      - '{{.PM}} run test -- --coverage'
+      - "{{.PM}} run test -- --coverage"
 
   test:e2e:
     desc: Run end-to-end tests
     cmds:
-      - '{{.PM}} run test:e2e'
+      - "{{.PM}} run test:e2e"
 
   # --- Code Quality ---
 
   lint:
     desc: Run linter
     cmds:
-      - '{{.PM}} run lint'
+      - "{{.PM}} run lint"
 
   lint:fix:
     desc: Run linter with auto-fix
     cmds:
-      - '{{.PM}} run lint -- --fix'
+      - "{{.PM}} run lint -- --fix"
 
   fmt:
     desc: Format code with Prettier
     cmds:
-      - '{{.PMX}} prettier --write .'
+      - "{{.PMX}} prettier --write ."
 
   fmt:check:
     desc: Check code formatting
     cmds:
-      - '{{.PMX}} prettier --check .'
+      - "{{.PMX}} prettier --check ."
 
   typecheck:
     desc: Run TypeScript type checking
     cmds:
-      - '{{.PMX}} tsc --noEmit'
+      - "{{.PMX}} tsc --noEmit"
 
   check:
     desc: Run all checks
@@ -158,17 +158,17 @@ tasks:
   db:migrate:
     desc: Run database migrations
     cmds:
-      - '{{.PM}} run db:migrate'
+      - "{{.PM}} run db:migrate"
 
   db:seed:
     desc: Seed the database
     cmds:
-      - '{{.PM}} run db:seed'
+      - "{{.PM}} run db:seed"
 
   db:reset:
     desc: Reset database
     cmds:
-      - '{{.PM}} run db:reset'
+      - "{{.PM}} run db:reset"
 
   # --- CI ---
 

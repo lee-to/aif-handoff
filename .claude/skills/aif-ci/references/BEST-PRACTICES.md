@@ -17,17 +17,18 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:                    # Allow manual triggers
+  workflow_dispatch: # Allow manual triggers
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true             # Cancel redundant runs
+  cancel-in-progress: true # Cancel redundant runs
 
 permissions:
-  contents: read                       # Least privilege
+  contents: read # Least privilege
 ```
 
 **Key rules:**
+
 - **One workflow per concern** — `lint.yml`, `tests.yml`, `build.yml`, `security.yml`. Each gets its own triggers, permissions, concurrency group, and PR status check
 - Keep single `ci.yml` only for trivially small projects (1-2 jobs)
 - Always set explicit `permissions` — never rely on defaults
@@ -39,15 +40,15 @@ permissions:
 
 **Prefer built-in cache in setup actions:**
 
-| Language | Setup Action | Cache Option |
-|----------|-------------|--------------|
-| PHP | `shivammathur/setup-php@v2` | `tools:` installs from cache |
-| Node.js | `actions/setup-node@v4` | `cache: npm\|pnpm\|yarn` |
-| Python | `actions/setup-python@v5` | `cache: pip` |
-| Python (uv) | `astral-sh/setup-uv@v5` | `enable-cache: true` |
-| Go | `actions/setup-go@v5` | Auto-caches modules + build |
-| Rust | `Swatinem/rust-cache@v2` | Caches target/ + registry |
-| Java | `actions/setup-java@v4` | `cache: maven\|gradle` |
+| Language    | Setup Action                | Cache Option                 |
+| ----------- | --------------------------- | ---------------------------- |
+| PHP         | `shivammathur/setup-php@v2` | `tools:` installs from cache |
+| Node.js     | `actions/setup-node@v4`     | `cache: npm\|pnpm\|yarn`     |
+| Python      | `actions/setup-python@v5`   | `cache: pip`                 |
+| Python (uv) | `astral-sh/setup-uv@v5`     | `enable-cache: true`         |
+| Go          | `actions/setup-go@v5`       | Auto-caches modules + build  |
+| Rust        | `Swatinem/rust-cache@v2`    | Caches target/ + registry    |
+| Java        | `actions/setup-java@v4`     | `cache: maven\|gradle`       |
 
 **When using explicit `actions/cache@v4`:**
 
@@ -61,6 +62,7 @@ permissions:
 ```
 
 Rules:
+
 - Cache limit: 10 GB per repository, entries expire after 7 days
 - Include `runner.os` in key for cross-platform workflows
 - Use `hashFiles()` with lock files for cache invalidation
@@ -71,12 +73,13 @@ Rules:
 
 ```yaml
 strategy:
-  fail-fast: false          # Don't cancel siblings on first failure
+  fail-fast: false # Don't cancel siblings on first failure
   matrix:
-    php-version: ['8.2', '8.3', '8.4']
+    php-version: ["8.2", "8.3", "8.4"]
 ```
 
 Rules:
+
 - `fail-fast: false` — always set to avoid hiding failures on other versions
 - Only use matrix on the `tests` job, not on lint/SA jobs (waste of resources)
 - Quote version strings to avoid YAML parsing issues (`'8.10'` not `8.10`)
@@ -101,6 +104,7 @@ Rules:
 ```
 
 Rules:
+
 - Use `retention-days` to limit storage costs
 - Name artifacts descriptively, especially in matrix builds
 - Use `if: always()` on test artifact uploads to capture failures
@@ -109,13 +113,14 @@ Rules:
 
 ```yaml
 jobs:
-  lint:       # Runs immediately
-  test:       # Runs immediately (parallel)
+  lint: # Runs immediately
+  test: # Runs immediately (parallel)
   build:
-    needs: [lint, test]   # Waits for both
+    needs: [lint, test] # Waits for both
 ```
 
 Rules:
+
 - Jobs without `needs` run in parallel by default
 - Use `needs` only when there's a real dependency (tests must pass before deploy)
 - Don't chain lint -> test -> build sequentially — lint and test can run in parallel
@@ -148,6 +153,7 @@ default:
 ```
 
 **Key rules:**
+
 - Define `workflow.rules` to prevent duplicate pipelines (MR + push to same branch)
 - Set `interruptible: true` for auto-cancel on new pushes
 - Add `retry` for infrastructure failures (not code failures)
@@ -164,7 +170,7 @@ default:
       paths:
         - vendor/
         - $COMPOSER_HOME/cache/
-      policy: pull-push    # Only on install job
+      policy: pull-push # Only on install job
 
 lint:
   extends: .cache-composer
@@ -174,10 +180,11 @@ lint:
           - composer.lock
       paths:
         - vendor/
-      policy: pull         # Read-only on all other jobs
+      policy: pull # Read-only on all other jobs
 ```
 
 Rules:
+
 - `policy: pull-push` only on the job that installs dependencies
 - `policy: pull` on all downstream jobs (lint, test, build)
 - Use `key: files:` for automatic lock-file-based invalidation
@@ -197,12 +204,12 @@ cache:
 
 ### 2.3 Artifacts vs Cache
 
-| Use case | Mechanism |
-|----------|-----------|
-| Speed up dependency install across pipelines | Cache |
+| Use case                                                | Mechanism                       |
+| ------------------------------------------------------- | ------------------------------- |
+| Speed up dependency install across pipelines            | Cache                           |
 | Pass `vendor/`/`node_modules/` to jobs in same pipeline | Artifacts (`expire_in: 1 hour`) |
-| Pass test results/coverage between jobs | Artifacts |
-| Pass build output to deploy stage | Artifacts |
+| Pass test results/coverage between jobs                 | Artifacts                       |
+| Pass build output to deploy stage                       | Artifacts                       |
 
 ```yaml
 install:
@@ -212,7 +219,7 @@ install:
   artifacts:
     paths:
       - vendor/
-    expire_in: 1 hour       # Short TTL, only for this pipeline
+    expire_in: 1 hour # Short TTL, only for this pipeline
 ```
 
 ### 2.4 Report Integration
@@ -223,16 +230,17 @@ GitLab has built-in support for reports in MR widgets:
 test:
   artifacts:
     reports:
-      junit: report.xml              # Test results in MR
-      codequality: gl-code-quality.json   # Code quality diff in MR
+      junit: report.xml # Test results in MR
+      codequality: gl-code-quality.json # Code quality diff in MR
       coverage_report:
         coverage_format: cobertura
-        path: coverage.xml            # Line-by-line coverage in MR
+        path: coverage.xml # Line-by-line coverage in MR
 ```
 
 **Code quality report format** (Code Climate JSON):
 
 Tools that support GitLab format natively:
+
 - PHPStan: `--error-format=gitlab`
 - golangci-lint: `--out-format code-climate`
 - Ruff: `--output-format=gitlab`
@@ -287,6 +295,7 @@ phpstan:
 - For Pest: use `--ci` flag for CI-friendly output
 
 **PHP version matrix:**
+
 - Include all versions from `composer.json` `require.php` constraint
 - Example: `"php": ">=8.2"` -> test on `['8.2', '8.3', '8.4']`
 
@@ -295,6 +304,7 @@ phpstan:
 **Recommended tool combinations:**
 
 Modern (2025+):
+
 - **uv** for dependency management
 - **Ruff** for linting + formatting (replaces black, isort, flake8, pylint)
 - **mypy** for type checking
@@ -302,6 +312,7 @@ Modern (2025+):
 - **bandit** for security analysis
 
 Traditional:
+
 - **pip** for dependencies
 - **black** + **isort** + **flake8** for formatting/linting
 - **mypy** for type checking
@@ -387,18 +398,18 @@ Traditional:
 
 ### 4.1 Common Mistakes
 
-| Anti-Pattern | Why Bad | Fix |
-|-------------|---------|-----|
-| Everything in one workflow file | Can't have different triggers/permissions per concern | Split: `lint.yml`, `tests.yml`, `build.yml`, `security.yml` |
-| Single monolith job | Slow feedback, can't see which step failed | Separate into parallel jobs |
-| Sequential lint -> test -> build chain | Wastes time, lint doesn't depend on tests | Run lint and tests in parallel |
-| `fail-fast: true` on matrix | Hides failures on other versions | Set `fail-fast: false` |
-| Caching `node_modules` directly | Breaks on OS/Node version changes | Cache `~/.npm` instead |
-| No `concurrency` group | Wastes CI minutes on outdated commits | Add `cancel-in-progress: true` |
-| Hardcoded language versions | Drift between CI and project config | Read from project files |
-| `latest` tag on Docker images | Non-reproducible builds | Pin to specific version |
-| Running lint on all matrix versions | Wasted resources, lint is version-independent | Run lint only on latest |
-| No `permissions` set | Over-privileged token | Set `contents: read` minimum |
+| Anti-Pattern                           | Why Bad                                               | Fix                                                         |
+| -------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------- |
+| Everything in one workflow file        | Can't have different triggers/permissions per concern | Split: `lint.yml`, `tests.yml`, `build.yml`, `security.yml` |
+| Single monolith job                    | Slow feedback, can't see which step failed            | Separate into parallel jobs                                 |
+| Sequential lint -> test -> build chain | Wastes time, lint doesn't depend on tests             | Run lint and tests in parallel                              |
+| `fail-fast: true` on matrix            | Hides failures on other versions                      | Set `fail-fast: false`                                      |
+| Caching `node_modules` directly        | Breaks on OS/Node version changes                     | Cache `~/.npm` instead                                      |
+| No `concurrency` group                 | Wastes CI minutes on outdated commits                 | Add `cancel-in-progress: true`                              |
+| Hardcoded language versions            | Drift between CI and project config                   | Read from project files                                     |
+| `latest` tag on Docker images          | Non-reproducible builds                               | Pin to specific version                                     |
+| Running lint on all matrix versions    | Wasted resources, lint is version-independent         | Run lint only on latest                                     |
+| No `permissions` set                   | Over-privileged token                                 | Set `contents: read` minimum                                |
 
 ### 4.2 Over-Engineering Checklist
 
@@ -418,25 +429,25 @@ Before writing the pipeline, verify:
 
 ### GitHub Actions
 
-| Language | Setup Action | Cache Key File | Cache Path |
-|----------|-------------|----------------|------------|
-| PHP | `shivammathur/setup-php@v2` | `composer.lock` | `~/.composer/cache` |
-| Node.js | `actions/setup-node@v4` | `package-lock.json` | `~/.npm` |
-| Python (pip) | `actions/setup-python@v5` | `requirements*.txt` | `~/.cache/pip` |
-| Python (uv) | `astral-sh/setup-uv@v5` | `uv.lock` | `~/.cache/uv` |
-| Go | `actions/setup-go@v5` | `go.sum` | `~/go/pkg/mod` |
-| Rust | `Swatinem/rust-cache@v2` | `Cargo.lock` | `~/.cargo`, `target/` |
-| Java (Maven) | `actions/setup-java@v4` | `pom.xml` | `~/.m2/repository` |
-| Java (Gradle) | `actions/setup-java@v4` | `build.gradle*` | `~/.gradle/caches` |
+| Language      | Setup Action                | Cache Key File      | Cache Path            |
+| ------------- | --------------------------- | ------------------- | --------------------- |
+| PHP           | `shivammathur/setup-php@v2` | `composer.lock`     | `~/.composer/cache`   |
+| Node.js       | `actions/setup-node@v4`     | `package-lock.json` | `~/.npm`              |
+| Python (pip)  | `actions/setup-python@v5`   | `requirements*.txt` | `~/.cache/pip`        |
+| Python (uv)   | `astral-sh/setup-uv@v5`     | `uv.lock`           | `~/.cache/uv`         |
+| Go            | `actions/setup-go@v5`       | `go.sum`            | `~/go/pkg/mod`        |
+| Rust          | `Swatinem/rust-cache@v2`    | `Cargo.lock`        | `~/.cargo`, `target/` |
+| Java (Maven)  | `actions/setup-java@v4`     | `pom.xml`           | `~/.m2/repository`    |
+| Java (Gradle) | `actions/setup-java@v4`     | `build.gradle*`     | `~/.gradle/caches`    |
 
 ### GitLab CI
 
-| Language | Image | Cache Key File | Cache Path |
-|----------|-------|----------------|------------|
-| PHP | `php:<ver>-cli` | `composer.lock` | `vendor/`, `.composer/cache/` |
-| Node.js | `node:<ver>-slim` | `package-lock.json` | `node_modules/`, `.npm/` |
-| Python | `python:<ver>-slim` | `uv.lock` / `requirements.txt` | `.venv/`, `.uv-cache/` |
-| Go | `golang:<ver>` | `go.sum` | `.go/pkg/mod/` |
-| Rust | `rust:<ver>-slim` | `Cargo.lock` | `.cargo/`, `target/` |
-| Java (Maven) | `maven:<ver>-eclipse-temurin-<jdk>` | `pom.xml` | `.m2/repository/` |
-| Java (Gradle) | `gradle:<ver>-jdk<ver>` | `build.gradle*` | `.gradle/caches/` |
+| Language      | Image                               | Cache Key File                 | Cache Path                    |
+| ------------- | ----------------------------------- | ------------------------------ | ----------------------------- |
+| PHP           | `php:<ver>-cli`                     | `composer.lock`                | `vendor/`, `.composer/cache/` |
+| Node.js       | `node:<ver>-slim`                   | `package-lock.json`            | `node_modules/`, `.npm/`      |
+| Python        | `python:<ver>-slim`                 | `uv.lock` / `requirements.txt` | `.venv/`, `.uv-cache/`        |
+| Go            | `golang:<ver>`                      | `go.sum`                       | `.go/pkg/mod/`                |
+| Rust          | `rust:<ver>-slim`                   | `Cargo.lock`                   | `.cargo/`, `target/`          |
+| Java (Maven)  | `maven:<ver>-eclipse-temurin-<jdk>` | `pom.xml`                      | `.m2/repository/`             |
+| Java (Gradle) | `gradle:<ver>-jdk<ver>`             | `build.gradle*`                | `.gradle/caches/`             |

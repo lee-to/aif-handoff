@@ -12,6 +12,11 @@ import { ConfigEditor } from "@/components/settings/ConfigEditor";
 import { api } from "@/lib/api";
 import type { AifConfig } from "@/lib/api";
 
+interface McpRuntimeStatus {
+  runtimeId: string;
+  installed: boolean;
+}
+
 interface GlobalSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -20,6 +25,7 @@ interface GlobalSettingsDialogProps {
 
 export function GlobalSettingsDialog({ open, onOpenChange, projectId }: GlobalSettingsDialogProps) {
   const [mcpInstalled, setMcpInstalled] = useState<boolean | null>(null);
+  const [mcpRuntimes, setMcpRuntimes] = useState<McpRuntimeStatus[]>([]);
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [configExists, setConfigExists] = useState<boolean | null>(null);
@@ -30,9 +36,20 @@ export function GlobalSettingsDialog({ open, onOpenChange, projectId }: GlobalSe
     if (!open) return;
     setMcpError(null);
     setMcpInstalled(null);
+    setMcpRuntimes([]);
     setMcpLoading(false);
     api.getMcpStatus().then(
-      (res) => setMcpInstalled(res.installed),
+      (res) => {
+        setMcpInstalled(res.installed);
+        setMcpRuntimes(
+          (res.runtimes ?? []).map(
+            (r: { runtimeId: string; success?: boolean; installed?: boolean }) => ({
+              runtimeId: r.runtimeId,
+              installed: r.installed ?? r.success ?? false,
+            }),
+          ),
+        );
+      },
       () => setMcpInstalled(null),
     );
     setConfigData(null);
@@ -62,8 +79,16 @@ export function GlobalSettingsDialog({ open, onOpenChange, projectId }: GlobalSe
     setMcpLoading(true);
     setMcpError(null);
     try {
-      await api.installMcp();
-      setMcpInstalled(true);
+      const res = await api.installMcp();
+      setMcpInstalled(res.success);
+      setMcpRuntimes(
+        (res.runtimes ?? []).map(
+          (r: { runtimeId: string; success?: boolean; installed?: boolean }) => ({
+            runtimeId: r.runtimeId,
+            installed: r.installed ?? r.success ?? false,
+          }),
+        ),
+      );
     } catch (err) {
       setMcpError(err instanceof Error ? err.message : "Failed to install");
     } finally {
@@ -77,6 +102,7 @@ export function GlobalSettingsDialog({ open, onOpenChange, projectId }: GlobalSe
     try {
       await api.removeMcp();
       setMcpInstalled(false);
+      setMcpRuntimes((prev) => prev.map((r) => ({ ...r, installed: false })));
     } catch (err) {
       setMcpError(err instanceof Error ? err.message : "Failed to remove");
     } finally {
@@ -96,7 +122,7 @@ export function GlobalSettingsDialog({ open, onOpenChange, projectId }: GlobalSe
             <div className="flex-1 mr-3">
               <p className="text-sm font-medium">MCP Handoff Server</p>
               <p className="text-xs text-muted-foreground">
-                Enables Claude Code to read and sync tasks via MCP tools
+                Enables AI runtimes to read and sync tasks via MCP tools
               </p>
               {mcpInstalled === null && !mcpError && (
                 <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
@@ -104,13 +130,20 @@ export function GlobalSettingsDialog({ open, onOpenChange, projectId }: GlobalSe
                   Checking...
                 </p>
               )}
-              {mcpInstalled === true && (
-                <p className="text-xs text-green-400 mt-1 flex items-center gap-1">
-                  <Check className="h-3 w-3" />
-                  Installed in ~/.claude.json
-                </p>
+              {mcpRuntimes.length > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  {mcpRuntimes.map((rt) => (
+                    <p
+                      key={rt.runtimeId}
+                      className={`text-xs flex items-center gap-1 ${rt.installed ? "text-green-400" : "text-muted-foreground"}`}
+                    >
+                      {rt.installed ? <Check className="h-3 w-3" /> : <XIcon className="h-3 w-3" />}
+                      {rt.runtimeId}: {rt.installed ? "installed" : "not configured"}
+                    </p>
+                  ))}
+                </div>
               )}
-              {mcpInstalled === false && (
+              {mcpInstalled === false && mcpRuntimes.length === 0 && (
                 <p className="text-xs text-amber-400 mt-1 flex items-center gap-1">
                   <XIcon className="h-3 w-3" />
                   Not configured

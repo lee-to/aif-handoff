@@ -20,6 +20,7 @@ MAKEFLAGS += --no-builtin-rules
 ```
 
 **Why each line matters:**
+
 - `SHELL := bash` — Ensures bash features work (arrays, `[[`, `<()`)
 - `.ONESHELL` — Runs entire recipe in one shell invocation (variables persist across lines)
 - `.SHELLFLAGS` — Fails on errors (`-e`), undefined vars (`-u`), pipe failures (`-o pipefail`)
@@ -109,14 +110,14 @@ Or declare all at once at the top:
 ### Required Structure
 
 ```yaml
-version: '3'
+version: "3"
 
 output: prefixed
 
-dotenv: ['.env', '.env.local']
+dotenv: [".env", ".env.local"]
 
 vars:
-  PROJECT: '{{.ROOT_DIR | base}}'
+  PROJECT: "{{.ROOT_DIR | base}}"
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
 ```
@@ -235,6 +236,7 @@ set positional-arguments
 ```
 
 **Why each setting matters:**
+
 - `set shell` — Uses bash with strict mode (like Make preamble)
 - `set dotenv-load` — Automatically loads `.env` file
 - `set export` — Exports all variables as environment variables
@@ -525,21 +527,21 @@ routes      → php bin/console debug:router
 
 ### Testing Tools
 
-| Tool | Command | Detection |
-|------|---------|-----------|
-| PHPUnit | `./vendor/bin/phpunit` | `phpunit.xml` or `phpunit.xml.dist` |
-| Pest | `./vendor/bin/pest` | `pestphp/pest` in composer.json |
+| Tool     | Command                 | Detection                            |
+| -------- | ----------------------- | ------------------------------------ |
+| PHPUnit  | `./vendor/bin/phpunit`  | `phpunit.xml` or `phpunit.xml.dist`  |
+| Pest     | `./vendor/bin/pest`     | `pestphp/pest` in composer.json      |
 | Paratest | `./vendor/bin/paratest` | `brianium/paratest` in composer.json |
 
 ### Linting & Static Analysis
 
-| Tool | Command | Detection |
-|------|---------|-----------|
-| PHP-CS-Fixer | `./vendor/bin/php-cs-fixer fix` | `.php-cs-fixer.php` or `.php-cs-fixer.dist.php` |
-| PHP_CodeSniffer | `./vendor/bin/phpcs` / `phpcbf` | `phpcs.xml` or `phpcs.xml.dist` |
-| PHPStan | `./vendor/bin/phpstan analyse` | `phpstan.neon` or `phpstan.neon.dist` |
-| Psalm | `./vendor/bin/psalm` | `psalm.xml` or `psalm.xml.dist` |
-| Pint (Laravel) | `./vendor/bin/pint` | `laravel/pint` in composer.json |
+| Tool            | Command                         | Detection                                       |
+| --------------- | ------------------------------- | ----------------------------------------------- |
+| PHP-CS-Fixer    | `./vendor/bin/php-cs-fixer fix` | `.php-cs-fixer.php` or `.php-cs-fixer.dist.php` |
+| PHP_CodeSniffer | `./vendor/bin/phpcs` / `phpcbf` | `phpcs.xml` or `phpcs.xml.dist`                 |
+| PHPStan         | `./vendor/bin/phpstan analyse`  | `phpstan.neon` or `phpstan.neon.dist`           |
+| Psalm           | `./vendor/bin/psalm`            | `psalm.xml` or `psalm.xml.dist`                 |
+| Pint (Laravel)  | `./vendor/bin/pint`             | `laravel/pint` in composer.json                 |
 
 ### Anti-Patterns to Avoid
 
@@ -557,29 +559,29 @@ routes      → php bin/console debug:router
 
 Every build file should include these core targets:
 
-| Target | Purpose |
-|--------|---------|
-| `help` / `default` | Show available targets |
-| `build` | Compile / bundle the project |
-| `test` | Run test suite |
-| `lint` | Run linters and formatters |
-| `clean` | Remove build artifacts |
-| `dev` | Start development server/watcher |
-| `fmt` / `format` | Format source code |
+| Target             | Purpose                          |
+| ------------------ | -------------------------------- |
+| `help` / `default` | Show available targets           |
+| `build`            | Compile / bundle the project     |
+| `test`             | Run test suite                   |
+| `lint`             | Run linters and formatters       |
+| `clean`            | Remove build artifacts           |
+| `dev`              | Start development server/watcher |
+| `fmt` / `format`   | Format source code               |
 
 ### Optional Targets (include when relevant)
 
-| Target | When to Include |
-|--------|-----------------|
-| `docker:build` / `docker:push` | Dockerfile exists |
-| `db:migrate` / `db:seed` | Database migrations detected |
-| `deploy` | CI/CD or deploy scripts detected |
-| `generate` | Code generation tools detected |
-| `release` | Tag-based release workflow |
-| `install` / `setup` | First-time project setup |
-| `ci` | Aggregate target for CI pipelines |
-| `cache:clear` / `optimize` | PHP/Laravel framework detected |
-| `phpstan` / `typecheck` | Static analysis tool detected |
+| Target                         | When to Include                   |
+| ------------------------------ | --------------------------------- |
+| `docker:build` / `docker:push` | Dockerfile exists                 |
+| `db:migrate` / `db:seed`       | Database migrations detected      |
+| `deploy`                       | CI/CD or deploy scripts detected  |
+| `generate`                     | Code generation tools detected    |
+| `release`                      | Tag-based release workflow        |
+| `install` / `setup`            | First-time project setup          |
+| `ci`                           | Aggregate target for CI pipelines |
+| `cache:clear` / `optimize`     | PHP/Laravel framework detected    |
+| `phpstan` / `typecheck`        | Static analysis tool detected     |
 
 ### Variable Naming
 

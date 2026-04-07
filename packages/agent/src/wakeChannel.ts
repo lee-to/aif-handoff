@@ -48,7 +48,20 @@ export async function waitForApiReady(): Promise<boolean> {
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
       if (res.ok) {
-        log.info({ attempt }, "API readiness confirmed");
+        const payload = (await res.json().catch(() => null)) as {
+          ready?: boolean;
+          runtimeCount?: number;
+          enabledRuntimeProfileCount?: number;
+        } | null;
+        log.info(
+          {
+            attempt,
+            apiReady: payload?.ready ?? null,
+            runtimeCount: payload?.runtimeCount ?? null,
+            enabledRuntimeProfileCount: payload?.enabledRuntimeProfileCount ?? null,
+          },
+          "API runtime readiness endpoint responded",
+        );
         return true;
       }
       log.debug({ attempt, status: res.status }, "API not ready yet");

@@ -74,6 +74,20 @@ export function AgentTimeline({ activityLog }: AgentTimelineProps) {
                   parsed.message
                 )}
               </div>
+              {parsed.runtimeMeta && (
+                <div className="mt-1 flex gap-2 text-3xs text-muted-foreground font-mono">
+                  {parsed.runtimeMeta.runtimeId && (
+                    <span>runtime:{parsed.runtimeMeta.runtimeId}</span>
+                  )}
+                  {parsed.runtimeMeta.transport && (
+                    <span>transport:{parsed.runtimeMeta.transport}</span>
+                  )}
+                  {parsed.runtimeMeta.model && <span>model:{parsed.runtimeMeta.model}</span>}
+                  {parsed.runtimeMeta.profileId && (
+                    <span>profile:{parsed.runtimeMeta.profileId}</span>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}

@@ -15,6 +15,7 @@ Do not add explanations or commentary outside the specified format.
 ## PLAN
 
 **Input:**
+
 - task prompt
 - phase level (A or B)
 - active rules (from criteria)
@@ -28,6 +29,7 @@ Do not add explanations or commentary outside the specified format.
 ```
 
 **Constraints:**
+
 - 3-5 steps max
 - each step must target a specific active rule or group of rules
 - no speculative architecture changes
@@ -36,14 +38,17 @@ Do not add explanations or commentary outside the specified format.
 ## PRODUCE
 
 **Input:**
+
 - task prompt
 - plan (from PLAN phase)
 - previous artifact (if iteration > 1)
 
 **Output:**
+
 - markdown content only (this becomes `artifact.md`)
 
 **Constraints:**
+
 - implement current plan only
 - no meta commentary or explanation text
 - preserve unchanged parts from previous artifact when refining
@@ -56,6 +61,7 @@ Runs in parallel with PRODUCE via `Task` tool. Does not need the artifact — wo
 PREPARE materializes the `rule.check` instructions (human-readable) from each rule into concrete, machine-executable checks. The evaluator uses the prepared checks, not the raw `rule.check` strings.
 
 **Input:**
+
 - task prompt
 - plan (from PLAN phase)
 - active rules (from criteria) — each rule's `check` field describes what to verify
@@ -89,6 +95,7 @@ PREPARE materializes the `rule.check` instructions (human-readable) from each ru
 ```
 
 **Constraints:**
+
 - materialize each `rule.check` instruction into one or more concrete checks
 - generate checks from rules + task prompt only — do not require the artifact
 - each check must map to a `rule_id`
@@ -102,6 +109,7 @@ PREPARE materializes the `rule.check` instructions (human-readable) from each ru
 Uses artifact from PRODUCE and checks from PREPARE. Spawns parallel `Task` agents for independent check groups.
 
 **Input:**
+
 - artifact content (from `artifact.md` on disk)
 - prepared checks (from PREPARE phase)
 - active rules (with weights and severities)
@@ -113,10 +121,18 @@ Uses artifact from PRODUCE and checks from PREPARE. Spawns parallel `Task` agent
   "score": 0.72,
   "passed": false,
   "failed": [
-    { "id": "a.correctness.endpoints", "severity": "fail", "message": "Missing /courses/{id}/chapters" }
+    {
+      "id": "a.correctness.endpoints",
+      "severity": "fail",
+      "message": "Missing /courses/{id}/chapters"
+    }
   ],
   "warnings": [
-    { "id": "a.style.naming", "severity": "warn", "message": "Inconsistent camelCase in query params" }
+    {
+      "id": "a.style.naming",
+      "severity": "warn",
+      "message": "Inconsistent camelCase in query params"
+    }
   ],
   "rule_results": [
     { "id": "a.correctness.endpoints", "verdict": "fail", "details": "..." },
@@ -127,6 +143,7 @@ Uses artifact from PRODUCE and checks from PREPARE. Spawns parallel `Task` agent
 ```
 
 **Constraints:**
+
 - evaluate only against active rules
 - map every failure to a `rule_id`
 - no fix suggestions or solution proposals
@@ -138,6 +155,7 @@ Uses artifact from PRODUCE and checks from PREPARE. Spawns parallel `Task` agent
 ## CRITIQUE
 
 **Input:**
+
 - artifact content
 - evaluation result (failed and warning rules)
 
@@ -157,6 +175,7 @@ Uses artifact from PRODUCE and checks from PREPARE. Spawns parallel `Task` agent
 ```
 
 **Constraints:**
+
 - max 5 issues per critique
 - each issue must map to exactly one failed rule
 - `fix_instruction` must be specific and actionable
@@ -165,13 +184,16 @@ Uses artifact from PRODUCE and checks from PREPARE. Spawns parallel `Task` agent
 ## REFINE
 
 **Input:**
+
 - artifact content
 - critique issues
 
 **Output:**
+
 - improved markdown content only (replaces `artifact.md`)
 
 **Constraints:**
+
 - apply only the requested fixes from critique
 - preserve all unchanged parts
 - no explanation text

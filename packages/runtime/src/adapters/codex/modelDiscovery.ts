@@ -13,6 +13,7 @@ export interface CodexModelDiscoveryLogger {
 
 const IS_WINDOWS = process.platform === "win32";
 const moduleRequire = createRequire(import.meta.url);
+const CODEX_SDK_NPM_NAME = "@openai/codex-sdk";
 const CODEX_NPM_NAME = "@openai/codex";
 const PLATFORM_PACKAGE_BY_TARGET: Record<string, string> = {
   "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
@@ -317,6 +318,19 @@ export async function listCodexAppServerModels(
     input.projectRoot,
     buildDiscoveryEnv(input),
   );
+  logger?.debug?.(
+    {
+      runtimeId: input.runtimeId,
+      profileId: input.profileId ?? null,
+      transport: input.transport ?? RuntimeTransport.CLI,
+      executablePath,
+      hasConfiguredCliPath:
+        typeof asRecord(input.options).codexCliPath === "string" ||
+        typeof process.env.CODEX_CLI_PATH === "string",
+      projectRoot: input.projectRoot ?? null,
+    },
+    "DEBUG [runtime:codex] Starting Codex app-server model discovery",
+  );
 
   try {
     const client = await connectJsonRpcClient(listenUrl, launch, 5_000);
@@ -545,7 +559,9 @@ function findBundledCodexBinary(): string {
     throw new Error(`Unsupported Codex target triple: ${targetTriple}`);
   }
 
-  const codexPackageJsonPath = moduleRequire.resolve(`${CODEX_NPM_NAME}/package.json`);
+  const codexSdkPackageJsonPath = moduleRequire.resolve(`${CODEX_SDK_NPM_NAME}/package.json`);
+  const codexSdkRequire = createRequire(codexSdkPackageJsonPath);
+  const codexPackageJsonPath = codexSdkRequire.resolve(`${CODEX_NPM_NAME}/package.json`);
   const codexRequire = createRequire(codexPackageJsonPath);
   const platformPackageJsonPath = codexRequire.resolve(`${platformPackage}/package.json`);
   const vendorRoot = path.join(path.dirname(platformPackageJsonPath), "vendor");

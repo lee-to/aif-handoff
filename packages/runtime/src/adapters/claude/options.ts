@@ -180,10 +180,26 @@ function resolveEnvironment(
   const optionRecord = toRecord(input.options);
   const apiKeyEnvVar =
     typeof optionRecord?.apiKeyEnvVar === "string" ? optionRecord.apiKeyEnvVar : null;
+  const apiKey =
+    typeof optionRecord?.apiKey === "string" && optionRecord.apiKey.trim().length > 0
+      ? optionRecord.apiKey.trim()
+      : null;
   const baseUrl = typeof optionRecord?.baseUrl === "string" ? optionRecord.baseUrl : null;
+  const standardApiKeyEnvVar =
+    (input.providerId ?? "").toLowerCase() === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
 
-  if (apiKeyEnvVar && !base[apiKeyEnvVar] && process.env[apiKeyEnvVar]) {
+  if (apiKey) {
+    if (apiKeyEnvVar) {
+      base[apiKeyEnvVar] = apiKey;
+    }
+    if (!base[standardApiKeyEnvVar]) {
+      base[standardApiKeyEnvVar] = apiKey;
+    }
+  } else if (apiKeyEnvVar && !base[apiKeyEnvVar] && process.env[apiKeyEnvVar]) {
     base[apiKeyEnvVar] = process.env[apiKeyEnvVar]!;
+    if (!base[standardApiKeyEnvVar]) {
+      base[standardApiKeyEnvVar] = process.env[apiKeyEnvVar]!;
+    }
   }
   if (baseUrl) {
     if ((input.providerId ?? "").toLowerCase() === "anthropic") {

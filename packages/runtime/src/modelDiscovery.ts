@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { checkRuntimeCapabilities } from "./capabilities.js";
 import { createRuntimeMemoryCache, type RuntimeCache } from "./cache.js";
 import { RuntimeValidationError } from "./errors.js";
@@ -32,6 +33,46 @@ export interface RuntimeModelDiscoveryService {
   ): Promise<RuntimeConnectionValidationResult>;
 }
 
+function normalizeCacheValue(value: unknown): unknown {
+  if (value == null) return null;
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeCacheValue(entry));
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, normalizeCacheValue(entry)] as const);
+    return Object.fromEntries(entries);
+  }
+
+  return String(value);
+}
+
+function fingerprintResolvedInputs(resolved: ResolvedRuntimeProfile): string {
+  // Model discovery depends on transport/auth/config inputs beyond runtimeId/baseUrl.
+  // Keep a stable fingerprint here so profile edits do not incorrectly reuse stale cache entries.
+  const normalized = normalizeCacheValue({
+    apiKeyEnvVar: resolved.apiKeyEnvVar,
+    apiKeyHash: resolved.apiKey
+      ? createHash("sha256").update(resolved.apiKey).digest("hex").slice(0, 16)
+      : null,
+    headers: resolved.headers,
+    options: resolved.options,
+  });
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex").slice(0, 16);
+}
+
 function modelCacheKey(resolved: ResolvedRuntimeProfile): string {
   return [
     resolved.runtimeId,
@@ -40,6 +81,7 @@ function modelCacheKey(resolved: ResolvedRuntimeProfile): string {
     resolved.transport,
     resolved.baseUrl ?? "default",
     resolved.model ?? "none",
+    fingerprintResolvedInputs(resolved),
   ].join(":");
 }
 

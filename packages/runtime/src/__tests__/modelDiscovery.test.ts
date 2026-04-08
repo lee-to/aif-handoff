@@ -104,6 +104,50 @@ describe("runtime model discovery service", () => {
     expect(listModelsMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse cached model discovery results when auth-relevant inputs change", async () => {
+    const listModelsMock = vi
+      .fn<() => Promise<RuntimeModel[]>>()
+      .mockResolvedValueOnce([{ id: "model-auth-a" }])
+      .mockResolvedValueOnce([{ id: "model-auth-b" }]);
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "stub-runtime",
+        providerId: "stub-provider",
+        displayName: "Stub Runtime",
+        capabilities: {
+          supportsResume: true,
+          supportsSessionList: false,
+          supportsAgentDefinitions: false,
+          supportsStreaming: false,
+          supportsModelDiscovery: true,
+          supportsApprovals: false,
+          supportsCustomEndpoint: true,
+        },
+      },
+      run: async () => ({ outputText: "ok" }),
+      listModels: listModelsMock,
+      validateConnection: async () => ({ ok: true }),
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const service = createRuntimeModelDiscoveryService({ registry, cacheTtlMs: 10_000 });
+
+    const first = await service.listModels(
+      createResolvedProfile("stub-runtime", {
+        apiKeyEnvVar: "OPENAI_API_KEY",
+      }),
+    );
+    const second = await service.listModels(
+      createResolvedProfile("stub-runtime", {
+        apiKeyEnvVar: "ALT_OPENAI_API_KEY",
+      }),
+    );
+
+    expect(first).toEqual([{ id: "model-auth-a" }]);
+    expect(second).toEqual([{ id: "model-auth-b" }]);
+    expect(listModelsMock).toHaveBeenCalledTimes(2);
+  });
+
   it("throws RuntimeValidationError when model discovery is unsupported", async () => {
     const adapter: RuntimeAdapter = {
       descriptor: {
@@ -262,6 +306,49 @@ describe("runtime model discovery service", () => {
     expect(first).toEqual({ ok: true, message: "ok" });
     expect(second).toEqual({ ok: true, message: "ok" });
     expect(validateConnectionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse cached validation results when auth-relevant inputs change", async () => {
+    const validateConnectionMock = vi
+      .fn<(input: unknown) => Promise<RuntimeConnectionValidationResult>>()
+      .mockResolvedValueOnce({ ok: true, message: "openai-key" })
+      .mockResolvedValueOnce({ ok: true, message: "alt-key" });
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "stub-runtime",
+        providerId: "stub-provider",
+        displayName: "Stub Runtime",
+        capabilities: {
+          supportsResume: true,
+          supportsSessionList: false,
+          supportsAgentDefinitions: false,
+          supportsStreaming: false,
+          supportsModelDiscovery: true,
+          supportsApprovals: false,
+          supportsCustomEndpoint: true,
+        },
+      },
+      run: async () => ({ outputText: "ok" }),
+      validateConnection: validateConnectionMock,
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const service = createRuntimeModelDiscoveryService({ registry, cacheTtlMs: 10_000 });
+
+    const first = await service.validateConnection(
+      createResolvedProfile("stub-runtime", {
+        apiKeyEnvVar: "OPENAI_API_KEY",
+      }),
+    );
+    const second = await service.validateConnection(
+      createResolvedProfile("stub-runtime", {
+        apiKeyEnvVar: "ALT_OPENAI_API_KEY",
+      }),
+    );
+
+    expect(first).toEqual({ ok: true, message: "openai-key" });
+    expect(second).toEqual({ ok: true, message: "alt-key" });
+    expect(validateConnectionMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to base validation when adapter has no validateConnection", async () => {

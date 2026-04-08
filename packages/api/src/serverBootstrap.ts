@@ -1,11 +1,12 @@
 import { createAdaptorServer } from "@hono/node-server";
-import type { FetchCallback, ServerType } from "@hono/node-server";
+import type { ServerType } from "@hono/node-server";
 import type pino from "pino";
 
 type StartupLogger = Pick<pino.Logger, "debug" | "error" | "info">;
+type StartupFetch = Parameters<typeof createAdaptorServer>[0]["fetch"];
 
 interface StartServerOptions {
-  fetch: FetchCallback;
+  fetch: StartupFetch;
   port: number;
   hostname?: string;
   injectWebSocket?: (server: ServerType) => void;

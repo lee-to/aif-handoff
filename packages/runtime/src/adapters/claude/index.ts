@@ -184,6 +184,27 @@ async function listClaudeModels(
     ),
   });
   const queryOptions = buildClaudeQueryOptions(discoveryInput, execution);
+  const env = queryOptions.env;
+  const envRecord =
+    env && typeof env === "object" && !Array.isArray(env) ? (env as Record<string, unknown>) : {};
+  const configuredApiKeyEnvVar =
+    typeof discoveryInput.options?.apiKeyEnvVar === "string"
+      ? discoveryInput.options.apiKeyEnvVar
+      : null;
+  logger.debug?.(
+    {
+      runtimeId: input.runtimeId,
+      profileId: input.profileId ?? null,
+      transport: input.transport ?? RuntimeTransport.SDK,
+      apiKeyEnvVar: configuredApiKeyEnvVar,
+      hasConfiguredApiKey: configuredApiKeyEnvVar
+        ? Boolean(envRecord[configuredApiKeyEnvVar])
+        : false,
+      hasAnthropicApiKey: Boolean(envRecord.ANTHROPIC_API_KEY),
+      hasBaseUrl: typeof envRecord.ANTHROPIC_BASE_URL === "string",
+    },
+    "DEBUG [runtime:claude] Starting Claude model discovery",
+  );
   let session: ReturnType<typeof query> | null = null;
 
   try {

@@ -293,4 +293,64 @@ describe("RuntimeProfileForm", () => {
     });
     expect(screen.queryByDisplayValue("gpt-5.4")).toBeNull();
   });
+
+  it("preserves a manual model override when delayed discovery finishes", async () => {
+    const delayedLoad = createDeferredResult();
+    mockRuntimeModels.mutateAsync.mockImplementation(() => delayedLoad.promise);
+
+    render(
+      <RuntimeProfileForm
+        mode="create"
+        projectId="project-1"
+        runtimes={[
+          createRuntimeDescriptor({
+            id: "codex",
+            providerId: "openai",
+            displayName: "Codex",
+            defaultTransport: "cli",
+            defaultApiKeyEnvVar: "OPENAI_API_KEY",
+            defaultModelPlaceholder: "gpt-5.4",
+            supportedTransports: ["sdk", "cli", "api"],
+          }),
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockRuntimeModels.mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "project-1",
+          profile: expect.objectContaining({
+            runtimeId: "codex",
+            transport: "cli",
+          }),
+          forceRefresh: false,
+        }),
+      );
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("gpt-5.4"), {
+      target: { value: "gpt-5.4-custom" },
+    });
+
+    delayedLoad.resolve({
+      models: [
+        {
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          metadata: {
+            isDefault: true,
+            supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+          },
+        },
+      ],
+      profile: {},
+    });
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("gpt-5.4-custom")).toBeInTheDocument();
+    });
+    expect(screen.queryByDisplayValue("gpt-5.4")).toBeNull();
+  });
 });

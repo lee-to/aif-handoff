@@ -407,6 +407,32 @@ describe("Claude runtime adapter", () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards temporary API key input into Claude model discovery env", async () => {
+    queryMock.mockImplementation(() =>
+      discoverySession([
+        {
+          value: "claude-sonnet-4-6",
+          displayName: "Claude Sonnet 4.6",
+          description: "Balanced model",
+        },
+      ]),
+    );
+    const adapter = createClaudeRuntimeAdapter();
+
+    await adapter.listModels!({
+      runtimeId: "claude",
+      providerId: "anthropic",
+      profileId: "profile-1",
+      transport: "sdk",
+      apiKey: "sk-temp-discovery",
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+    });
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const call = queryMock.mock.calls[0][0];
+    expect(call.options.env.ANTHROPIC_API_KEY).toBe("sk-temp-discovery");
+  });
+
   it("falls back to default Claude models when dynamic discovery fails", async () => {
     queryMock.mockImplementation(() => {
       throw new Error("initialize failed");

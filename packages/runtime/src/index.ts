@@ -96,6 +96,7 @@ export {
 
 export {
   createRuntimeWorkflowSpec,
+  type RuntimeWorkflowExecutionMode,
   type RuntimeSessionReusePolicy,
   type RuntimeWorkflowFallbackStrategy,
   type RuntimeWorkflowKind,

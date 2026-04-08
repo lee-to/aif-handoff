@@ -13,6 +13,7 @@ export type RuntimeWorkflowKind =
 export type RuntimeWorkflowFallbackStrategy = "none" | "slash_command";
 
 export type RuntimeSessionReusePolicy = "resume_if_available" | "new_session" | "never";
+export type RuntimeWorkflowExecutionMode = "standard" | "isolated_skill_session";
 
 export interface RuntimeWorkflowPromptInput {
   prompt: string;
@@ -27,6 +28,7 @@ export interface RuntimeWorkflowSpec {
   agentDefinitionName?: string;
   fallbackStrategy: RuntimeWorkflowFallbackStrategy;
   sessionReusePolicy: RuntimeSessionReusePolicy;
+  executionMode: RuntimeWorkflowExecutionMode;
   metadata?: Record<string, unknown>;
 }
 
@@ -38,14 +40,29 @@ export interface RuntimeWorkflowSpecInput {
   fallbackSlashCommand?: string;
   fallbackStrategy?: RuntimeWorkflowFallbackStrategy;
   sessionReusePolicy?: RuntimeSessionReusePolicy;
+  executionMode?: RuntimeWorkflowExecutionMode;
   systemPromptAppend?: string;
   metadata?: Record<string, unknown>;
 }
 
 export function createRuntimeWorkflowSpec(input: RuntimeWorkflowSpecInput): RuntimeWorkflowSpec {
   const requiredCapabilities = [...new Set(input.requiredCapabilities ?? [])];
-  const fallbackStrategy =
+  const rawFallbackStrategy =
     input.fallbackStrategy ?? (input.fallbackSlashCommand ? "slash_command" : "none");
+  const requestedExecutionMode = input.executionMode ?? "standard";
+  if (requestedExecutionMode === "isolated_skill_session" && !input.fallbackSlashCommand) {
+    throw new Error(
+      `Workflow ${input.workflowKind} requested isolated_skill_session without fallbackSlashCommand`,
+    );
+  }
+  const executionMode =
+    requestedExecutionMode === "isolated_skill_session" && input.fallbackSlashCommand
+      ? "isolated_skill_session"
+      : "standard";
+  const fallbackStrategy =
+    executionMode === "isolated_skill_session" && rawFallbackStrategy === "none"
+      ? "slash_command"
+      : rawFallbackStrategy;
 
   return {
     workflowKind: input.workflowKind,
@@ -58,6 +75,7 @@ export function createRuntimeWorkflowSpec(input: RuntimeWorkflowSpecInput): Runt
     agentDefinitionName: input.agentDefinitionName,
     fallbackStrategy,
     sessionReusePolicy: input.sessionReusePolicy ?? "resume_if_available",
+    executionMode,
     metadata: input.metadata,
   };
 }

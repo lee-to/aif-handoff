@@ -87,6 +87,7 @@ const CLI_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  supportsIsolatedSubagentWorkflows: false,
 };
 
 const SDK_CAPABILITIES: RuntimeCapabilities = {
@@ -97,6 +98,7 @@ const SDK_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  supportsIsolatedSubagentWorkflows: true,
 };
 
 const API_CAPABILITIES: RuntimeCapabilities = {
@@ -107,6 +109,7 @@ const API_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  supportsIsolatedSubagentWorkflows: false,
 };
 
 function resolveTransport(input: {

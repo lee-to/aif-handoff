@@ -177,6 +177,7 @@ Always write the final plan to @${planPath}.`;
       agentDefinitionName: AGENT_NAME,
       fallbackSlashCommand: plannerSlashCommand,
       fallbackStrategy: "slash_command",
+      executionMode: "isolated_skill_session",
       sessionReusePolicy: "resume_if_available",
       systemPromptAppend: scopeConstraint,
       metadata: {

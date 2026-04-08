@@ -50,13 +50,13 @@ The API exposes effective selection endpoints:
 
 ## Supported Runtimes
 
-| Runtime      | Provider     | Transports    | Resume         | Sessions       | Agent Defs    | Light Model         | Status                    |
-| ------------ | ------------ | ------------- | -------------- | -------------- | ------------- | ------------------- | ------------------------- |
-| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI)  | Yes (SDK/CLI)  | Yes (SDK/CLI) | `claude-haiku-3-5`  | Built-in                  |
-| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK only) | Yes (SDK only) | No            | default             | Built-in                  |
-| `opencode`   | `opencode`   | API           | Yes            | Yes            | No            | null (configurable) | Built-in                  |
-| `openrouter` | `openrouter` | API           | No             | No             | No            | null (configurable) | Built-in                  |
-| Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Configurable        | Via `AIF_RUNTIME_MODULES` |
+| Runtime      | Provider     | Transports    | Resume         | Sessions       | Agent Defs    | Isolated Subagents | Light Model         | Status                    |
+| ------------ | ------------ | ------------- | -------------- | -------------- | ------------- | ------------------ | ------------------- | ------------------------- |
+| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI)  | Yes (SDK/CLI)  | Yes (SDK/CLI) | No                 | `claude-haiku-3-5`  | Built-in                  |
+| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK only) | Yes (SDK only) | No            | SDK only           | default             | Built-in                  |
+| `opencode`   | `opencode`   | API           | Yes            | Yes            | No            | No                 | null (configurable) | Built-in                  |
+| `openrouter` | `openrouter` | API           | No             | No             | No            | No                 | null (configurable) | Built-in                  |
+| Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Configurable       | Configurable        | Via `AIF_RUNTIME_MODULES` |
 
 Capabilities are **transport-aware**: the same adapter may expose different capabilities depending on the selected transport. For example, the Codex adapter supports resume/sessions via SDK transport but not via CLI. Use `resolveAdapterCapabilities(adapter, transport)` to get the effective set.
 
@@ -252,6 +252,7 @@ Runtime descriptors declare capability flags:
 - `supportsModelDiscovery`
 - `supportsApprovals`
 - `supportsCustomEndpoint`
+- `supportsIsolatedSubagentWorkflows`
 
 Additionally, `RuntimeExecutionIntent` supports `outputSchema` for structured JSON output (passed to adapters that support it, e.g. Codex SDK).
 
@@ -297,6 +298,7 @@ const adapter: RuntimeAdapter = {
       supportsModelDiscovery: true,
       supportsApprovals: false,
       supportsCustomEndpoint: true,
+      supportsIsolatedSubagentWorkflows: false,
     },
   },
   async run(input) {

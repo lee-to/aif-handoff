@@ -231,6 +231,7 @@ Execution rules:
     agentDefinitionName: useSubagents ? AGENT_NAME : undefined,
     fallbackSlashCommand: implementSlashCommand,
     fallbackStrategy: useSubagents ? "slash_command" : "none",
+    executionMode: useSubagents ? "isolated_skill_session" : "standard",
     sessionReusePolicy: "resume_if_available",
     systemPromptAppend: scopeConstraint,
     metadata: {

@@ -75,9 +75,17 @@ describe("Codex runtime adapter", () => {
     expect(adapter.descriptor.capabilities.supportsModelDiscovery).toBe(true);
     expect(adapter.descriptor.capabilities.supportsCustomEndpoint).toBe(true);
     expect(adapter.descriptor.capabilities.supportsAgentDefinitions).toBe(false);
+    expect(adapter.descriptor.capabilities.supportsIsolatedSubagentWorkflows).toBe(false);
     expect(adapter.descriptor.capabilities.supportsSessionList).toBe(false);
     expect(adapter.descriptor.skillCommandPrefix).toBe("$");
     expect(adapter.descriptor.supportsProjectInit).toBe(true);
+  });
+
+  it("enables isolated subagent workflows for SDK transport only", () => {
+    const adapter = createCodexRuntimeAdapter();
+    expect(adapter.getEffectiveCapabilities!("sdk").supportsIsolatedSubagentWorkflows).toBe(true);
+    expect(adapter.getEffectiveCapabilities!("cli").supportsIsolatedSubagentWorkflows).toBe(false);
+    expect(adapter.getEffectiveCapabilities!("api").supportsIsolatedSubagentWorkflows).toBe(false);
   });
 
   it("runs via CLI transport by default", async () => {

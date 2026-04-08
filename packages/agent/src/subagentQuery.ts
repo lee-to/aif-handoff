@@ -176,6 +176,7 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
   systemPromptAppend: string;
   agentDefinitionName?: string;
   canResume: boolean;
+  usedIsolatedSkillCommand: boolean;
 }> {
   const task = findTaskById(options.taskId);
   const effective = resolveEffectiveRuntimeProfile({
@@ -259,8 +260,19 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
     },
   });
 
-  const canResume =
+  const baseCanResume =
     workflow.sessionReusePolicy === "resume_if_available" && capabilities.supportsResume;
+  const canResume = promptPolicy.usedIsolatedSkillCommand ? false : baseCanResume;
+  if (baseCanResume && promptPolicy.usedIsolatedSkillCommand) {
+    log.debug(
+      {
+        taskId: options.taskId,
+        runtimeId: resolved.runtimeId,
+        workflowKind: workflow.workflowKind,
+      },
+      "Workflow requested isolated skill-command execution; forcing new session instead of resume",
+    );
+  }
 
   const profileLogContext = redactResolvedRuntimeProfile(resolved);
   log.info(
@@ -269,6 +281,7 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
       workflowKind: workflow.workflowKind,
       ...profileLogContext,
       usedFallbackSlashCommand: promptPolicy.usedFallbackSlashCommand,
+      usedIsolatedSkillCommand: promptPolicy.usedIsolatedSkillCommand,
       suppressModelFallback,
       canResume,
     },
@@ -305,6 +318,7 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
     systemPromptAppend: promptPolicy.systemPromptAppend,
     agentDefinitionName: promptPolicy.agentDefinitionName,
     canResume,
+    usedIsolatedSkillCommand: promptPolicy.usedIsolatedSkillCommand,
   };
 }
 
@@ -403,6 +417,7 @@ export async function executeSubagentQuery(
         model: context.model,
         systemPromptAppend: context.systemPromptAppend,
         maxBudgetUsd: options.maxBudgetUsd ?? null,
+        usedIsolatedSkillCommand: context.usedIsolatedSkillCommand,
       },
     });
 

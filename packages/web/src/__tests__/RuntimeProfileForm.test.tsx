@@ -88,6 +88,8 @@ describe("RuntimeProfileForm", () => {
       />,
     );
 
+    expect(screen.getByText("Leave empty to auto-fill from selected runtime")).toBeInTheDocument();
+
     await waitFor(() => {
       expect(mockRuntimeModels.mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({

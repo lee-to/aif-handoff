@@ -118,7 +118,7 @@ function discoverySession(
   };
 }
 
-function hangingDiscoverySession(returnSpy: ReturnType<typeof vi.fn>) {
+function hangingDiscoverySession(returnSpy: () => void) {
   return {
     async supportedModels() {
       await new Promise<never>(() => {
@@ -142,7 +142,7 @@ function hangingDiscoverySession(returnSpy: ReturnType<typeof vi.fn>) {
   };
 }
 
-function failingDiscoverySession(returnSpy: ReturnType<typeof vi.fn>, error: Error) {
+function failingDiscoverySession(returnSpy: () => void, error: Error) {
   return {
     async supportedModels() {
       throw error;

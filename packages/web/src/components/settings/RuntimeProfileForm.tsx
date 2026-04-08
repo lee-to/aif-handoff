@@ -338,6 +338,9 @@ export function RuntimeProfileForm({
             onChange={(e) => setName(e.target.value)}
             placeholder="Runtime profile name"
           />
+          <p className="text-[11px] text-muted-foreground">
+            Leave empty to auto-fill from selected runtime
+          </p>
         </div>
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted-foreground">Runtime</p>

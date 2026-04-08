@@ -13,6 +13,8 @@ interface StartServerOptions {
   logger: StartupLogger;
 }
 
+type StartupPhase = "before-ready" | "after-ready";
+
 function formatStartupErrorMessage(error: NodeJS.ErrnoException, port: number): string {
   if (error.code === "EADDRINUSE") {
     return `[FIX] Failed to start API server: port ${port} is already in use. Stop the existing process or set PORT to a different value.`;
@@ -29,18 +31,21 @@ export function startServer({
   logger,
 }: StartServerOptions): ServerType {
   const server = createAdaptorServer({ fetch, hostname });
-  let started = false;
+  let startupPhase: StartupPhase = "before-ready";
 
   server.on("error", (error: Error) => {
     const startupError = error as NodeJS.ErrnoException;
 
-    if (!started) {
-      logger.error({ error, hostname, port }, formatStartupErrorMessage(startupError, port));
+    if (startupPhase === "before-ready") {
+      logger.error(
+        { error, hostname, port, startupPhase },
+        formatStartupErrorMessage(startupError, port),
+      );
       process.exitCode = 1;
       return;
     }
 
-    logger.error({ error, hostname, port }, "[FIX] API server error.");
+    logger.error({ error, hostname, port, startupPhase }, "[FIX] API server error.");
   });
 
   if (injectWebSocket) {
@@ -49,7 +54,7 @@ export function startServer({
   }
 
   server.listen(port, hostname, () => {
-    started = true;
+    startupPhase = "after-ready";
     logger.info({ hostname, port }, "API server started");
   });
 

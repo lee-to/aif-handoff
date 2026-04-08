@@ -39,7 +39,7 @@ function getApiBaseUrl(): string {
 /** Probe the API health endpoint to confirm it's accepting connections. */
 export async function waitForApiReady(): Promise<boolean> {
   const baseUrl = getApiBaseUrl();
-  const url = `${baseUrl}/agent/readiness`;
+  const url = `${baseUrl}/health`;
 
   for (let attempt = 1; attempt <= READINESS_MAX_RETRIES; attempt++) {
     try {
@@ -48,20 +48,7 @@ export async function waitForApiReady(): Promise<boolean> {
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
       if (res.ok) {
-        const payload = (await res.json().catch(() => null)) as {
-          ready?: boolean;
-          runtimeCount?: number;
-          enabledRuntimeProfileCount?: number;
-        } | null;
-        log.info(
-          {
-            attempt,
-            apiReady: payload?.ready ?? null,
-            runtimeCount: payload?.runtimeCount ?? null,
-            enabledRuntimeProfileCount: payload?.enabledRuntimeProfileCount ?? null,
-          },
-          "API runtime readiness endpoint responded",
-        );
+        log.info({ attempt }, "API health endpoint responded");
         return true;
       }
       log.debug({ attempt, status: res.status }, "API not ready yet");

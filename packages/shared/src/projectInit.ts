@@ -6,20 +6,18 @@ import { logger } from "./logger.js";
 const log = logger("project-init");
 
 /**
- * Initialize the base project directory structure: .ai-factory/ and git repo.
- * Runtime-specific directories (.claude/, .codex/) are handled by adapter.initProject().
+ * Initialize the base project directory structure: project root and git repo.
+ *
+ * Does NOT create `.ai-factory/` — that directory is created exclusively by
+ * `ai-factory init` (invoked from `@aif/runtime` `initProject()`).
+ * This ensures a missing `.ai-factory/` correctly signals that init has not
+ * completed and can be retried.
  *
  * This is the low-level primitive — callers should use the runtime-aware
- * `initProject()` from `@aif/runtime` which also invokes adapter init hooks.
+ * `initProject()` from `@aif/runtime` which also invokes `ai-factory init`.
  */
 export function initBaseProjectDirectory(projectRoot: string): void {
   mkdirSync(projectRoot, { recursive: true });
-
-  const targetAiFactory = resolve(projectRoot, ".ai-factory");
-  if (!existsSync(targetAiFactory)) {
-    mkdirSync(targetAiFactory, { recursive: true });
-    log.info({ projectRoot }, "Created .ai-factory directory");
-  }
 
   const gitDir = resolve(projectRoot, ".git");
   if (!existsSync(gitDir)) {

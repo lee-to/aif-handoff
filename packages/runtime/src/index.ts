@@ -105,15 +105,7 @@ export {
 
 export { bootstrapRuntimeRegistry, type BootstrapRuntimeRegistryOptions } from "./bootstrap.js";
 
-export { initProject, type InitProjectOptions } from "./projectInit.js";
-
-export {
-  checkRuntimeReadiness,
-  type CheckRuntimeReadinessInput,
-  type RuntimeReadinessEntry,
-  type RuntimeReadinessLogger,
-  type RuntimeReadinessResult,
-} from "./readiness.js";
+export { initProject, type InitProjectOptions, type InitProjectResult } from "./projectInit.js";
 
 export { isValidTrustToken, RUNTIME_TRUST_TOKEN, type RuntimeTrustToken } from "./trust.js";
 

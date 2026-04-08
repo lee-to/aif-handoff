@@ -8,7 +8,6 @@ import { useWebSocket } from "./hooks/useWebSocket";
 import { useProjects } from "./hooks/useProjects";
 import { useTasks } from "./hooks/useTasks";
 import { useTheme } from "./hooks/useTheme";
-import { useAgentReadiness } from "./hooks/useSettings";
 import { useKeyboardShortcut } from "./hooks/useKeyboardShortcut";
 import { ChatBubble } from "./components/chat/ChatBubble";
 import { ChatPanel } from "./components/chat/ChatPanel";
@@ -32,7 +31,6 @@ function AppContent() {
   useWebSocket();
   const { theme, toggleTheme } = useTheme();
   const { data: projects } = useProjects();
-  const { data: agentReadiness = null } = useAgentReadiness();
   const [project, setProject] = useState<Project | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -160,13 +158,6 @@ function AppContent() {
       />
 
       <main className={`mx-auto w-full ${density === "compact" ? "p-4 md:p-5" : "p-6 md:p-8"}`}>
-        {agentReadiness && !agentReadiness.ready ? (
-          <div className="mb-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-800 dark:text-red-200">
-            Runtime execution is not configured.{" "}
-            {agentReadiness.message ||
-              "Configure at least one enabled runtime profile or provider credential to run AI stages."}
-          </div>
-        ) : null}
         {project && (
           <ProjectRuntimeSettings
             key={project.id}
@@ -188,7 +179,10 @@ function AppContent() {
             <div className="w-full max-w-xl border border-border bg-card/80 p-8 text-center">
               <p className="text-base font-semibold tracking-tight">// no project selected</p>
               <p className="mt-2 text-sm text-muted-foreground">
-                Select or create a project to get started
+                Select or create a project to get started.
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Don&apos;t forget to configure runtime profiles in project settings.
               </p>
               <div className="mt-4 flex items-center justify-center gap-2">
                 <Button size="sm" onClick={() => setCommandOpen(true)}>

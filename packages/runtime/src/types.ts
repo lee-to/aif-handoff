@@ -316,7 +316,7 @@ export interface RuntimeAdapter {
 
   // --- Discovery & validation (optional) ---
 
-  /** Check whether the runtime is reachable and configured. Used by /agent/readiness. */
+  /** Check whether the runtime is reachable and configured. */
   validateConnection?(
     input: RuntimeConnectionValidationInput,
   ): Promise<RuntimeConnectionValidationResult>;

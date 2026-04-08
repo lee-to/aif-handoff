@@ -63,6 +63,7 @@ export interface AifConfig {
   };
 }
 
+const API_PREFIX = import.meta.env.DEV ? "" : "/api";
 const API_BASE = "/tasks";
 const REQUEST_TIMEOUT_MS = 15000;
 const FAST_FIX_TIMEOUT_MS = 120000;
@@ -82,27 +83,6 @@ export interface SettingsResponse {
   };
 }
 
-export interface RuntimeReadinessValidation {
-  ok: boolean;
-  message?: string;
-  details?: Record<string, unknown>;
-}
-
-export interface AgentReadinessResponse {
-  ready: boolean;
-  runtimeCount: number;
-  enabledRuntimeProfileCount: number;
-  runtimes: Array<{
-    runtimeId: string;
-    providerId: string;
-    displayName: string;
-    capabilities: Record<string, boolean>;
-    validation: RuntimeReadinessValidation;
-  }>;
-  message: string;
-  checkedAt: string;
-}
-
 async function request<T>(
   url: string,
   options?: RequestInit,
@@ -113,7 +93,7 @@ async function request<T>(
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetch(`${API_PREFIX}${url}`, {
       headers: { "Content-Type": "application/json" },
       ...options,
       signal: controller.signal,
@@ -165,11 +145,6 @@ export const api = {
   getSettings(): Promise<SettingsResponse> {
     console.debug("[api] GET /settings");
     return request("/settings");
-  },
-
-  getAgentReadiness(): Promise<AgentReadinessResponse> {
-    console.debug("[api] GET /agent/readiness");
-    return request("/agent/readiness");
   },
 
   // Projects

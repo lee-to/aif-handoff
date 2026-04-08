@@ -20,6 +20,7 @@ import {
   useUpdateProject,
   useDeleteProject,
 } from "@/hooks/useProjects";
+import { useToast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
 import type { Project } from "@aif/shared/browser";
 
@@ -36,6 +37,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
   const createProject = useCreateProject();
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
+  const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("create");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -145,6 +147,13 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
           onSuccess: (project) => {
             onSelect(project);
             setDialogOpen(false);
+          },
+          onError: (error) => {
+            toast(
+              error instanceof Error ? error.message : "Failed to create project",
+              "error",
+              8000,
+            );
           },
         },
       );

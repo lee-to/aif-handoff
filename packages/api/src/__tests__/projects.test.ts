@@ -26,7 +26,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
 });
 
 vi.mock("@aif/runtime", () => ({
-  initProject: vi.fn(),
+  initProject: vi.fn(() => ({ ok: true })),
   bootstrapRuntimeRegistry: vi.fn(() =>
     Promise.resolve({
       resolveRuntime: vi.fn(),
@@ -203,11 +203,58 @@ describe("projects API", () => {
     });
   });
 
-  it("creates project even when directory initialization fails", async () => {
-    mockInitProjectDirectory.mockImplementation(() => {
-      throw new Error("permission denied");
+  it("returns 500 and rolls back project when ai-factory init fails", async () => {
+    const { initProject: initProjectMock } = await import("@aif/runtime");
+    (initProjectMock as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      ok: false,
+      error: "ai-factory init failed: command not found",
     });
 
+    const res = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Demo",
+        rootPath: "/tmp/demo-project",
+      }),
+    });
+
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toContain("ai-factory init failed");
+
+    // Verify project was rolled back from DB
+    const listRes = await app.request("/projects");
+    const projects = await listRes.json();
+    expect(projects.find((p: { name: string }) => p.name === "Demo")).toBeUndefined();
+  });
+
+  it("returns 500 and rolls back project when runtime registry throws", async () => {
+    const { getApiRuntimeRegistry } = await import("../services/runtime.js");
+    (getApiRuntimeRegistry as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("registry unavailable"),
+    );
+
+    const res = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "RegistryFail",
+        rootPath: "/tmp/registry-fail-project",
+      }),
+    });
+
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toContain("registry unavailable");
+
+    // Verify project was rolled back from DB
+    const listRes = await app.request("/projects");
+    const projects = await listRes.json();
+    expect(projects.find((p: { name: string }) => p.name === "RegistryFail")).toBeUndefined();
+  });
+
+  it("creates project successfully when init passes", async () => {
     const res = await app.request("/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

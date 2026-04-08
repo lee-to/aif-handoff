@@ -9,15 +9,6 @@ export function useSettings() {
   });
 }
 
-export function useAgentReadiness() {
-  return useQuery({
-    queryKey: ["agentReadiness"],
-    queryFn: api.getAgentReadiness,
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-  });
-}
-
 export function useProjectDefaults(projectId: string | null) {
   return useQuery({
     queryKey: ["projectDefaults", projectId],

@@ -183,7 +183,14 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
   }
 
   if (_runtimeRegistry) {
-    initProject({ projectRoot: project.rootPath, registry: _runtimeRegistry });
+    const initResult = initProject({ projectRoot: project.rootPath, registry: _runtimeRegistry });
+    if (!initResult.ok) {
+      log.error(
+        { taskId: task.id, projectId: task.projectId, error: initResult.error },
+        "Project .ai-factory/ scaffold missing and init failed, skipping task",
+      );
+      return false;
+    }
   }
 
   log.info(

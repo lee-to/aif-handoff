@@ -14,7 +14,7 @@ import {
 
 const log = logger("projects-repo");
 
-export function createProject(input: {
+export async function createProject(input: {
   name: string;
   rootPath: string;
   plannerMaxBudgetUsd?: number | null;
@@ -24,28 +24,37 @@ export function createProject(input: {
   parallelEnabled?: boolean;
   defaultTaskRuntimeProfileId?: string | null;
   defaultChatRuntimeProfileId?: string | null;
-}): { project: ProjectRow | undefined; pathError?: string } {
+}): Promise<{ project: ProjectRow | undefined; pathError?: string; initError?: string }> {
   const pathError = validateProjectRootPath(input.rootPath);
   if (pathError) return { project: undefined, pathError };
 
   const project = createProjectRecord(input);
 
   try {
-    getApiRuntimeRegistry()
-      .then((registry) => {
-        initProject({ projectRoot: input.rootPath, registry });
-      })
-      .catch((err) => {
-        log.warn(
-          { rootPath: input.rootPath, err },
-          "Runtime registry unavailable, project init skipped",
-        );
-      });
+    const registry = await getApiRuntimeRegistry();
+    const result = initProject({ projectRoot: input.rootPath, registry });
+    if (!result.ok) {
+      log.error(
+        { projectId: project?.id, rootPath: input.rootPath, error: result.error },
+        "Project init failed, rolling back project record",
+      );
+      if (project) {
+        deleteProjectRecord(project.id);
+      }
+      return { project: undefined, initError: result.error };
+    }
   } catch (err) {
-    log.warn(
+    log.error(
       { projectId: project?.id, rootPath: input.rootPath, err },
-      "Project directory initialization failed",
+      "Project init failed, rolling back project record",
     );
+    if (project) {
+      deleteProjectRecord(project.id);
+    }
+    return {
+      project: undefined,
+      initError: `Project initialization failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   return { project };

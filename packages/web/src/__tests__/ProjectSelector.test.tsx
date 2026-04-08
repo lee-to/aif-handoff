@@ -5,6 +5,7 @@ const mockUseQuery = vi.fn();
 const mutateCreateProject = vi.fn();
 const mutateUpdateProject = vi.fn();
 const mutateDeleteProject = vi.fn();
+const mockToast = vi.fn();
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: unknown) => mockUseQuery(options),
@@ -37,6 +38,11 @@ vi.mock("@/hooks/useProjects", () => ({
   }),
 }));
 
+vi.mock("@/components/ui/toast", () => ({
+  useToast: () => ({ toast: mockToast }),
+  ToastProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 const { ProjectSelector } = await import("@/components/project/ProjectSelector");
 
 describe("ProjectSelector", () => {
@@ -45,6 +51,7 @@ describe("ProjectSelector", () => {
     mutateCreateProject.mockReset();
     mutateUpdateProject.mockReset();
     mutateDeleteProject.mockReset();
+    mockToast.mockReset();
   });
 
   it("shows MCP servers in edit modal", () => {
@@ -83,5 +90,38 @@ describe("ProjectSelector", () => {
 
     expect(screen.getByText("Create Project")).toBeDefined();
     expect(screen.queryByText("MCP Servers")).toBeNull();
+  });
+
+  it("shows error toast when project creation fails", () => {
+    mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+    mutateCreateProject.mockImplementation(
+      (_input: unknown, options: { onError?: (error: Error) => void }) => {
+        options.onError?.(new Error("Project initialization failed: ai-factory init not found"));
+      },
+    );
+
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+
+    // Open create dialog
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+    fireEvent.click(screen.getByText("New project"));
+
+    // Fill form
+    fireEvent.change(screen.getByPlaceholderText("My Project"), {
+      target: { value: "Test Project" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("/Users/me/projects/my-project"), {
+      target: { value: "/tmp/test-project" },
+    });
+
+    // Submit
+    fireEvent.click(screen.getByText("Create"));
+
+    expect(mockToast).toHaveBeenCalledWith(
+      "Project initialization failed: ai-factory init not found",
+      "error",
+      8000,
+    );
   });
 });

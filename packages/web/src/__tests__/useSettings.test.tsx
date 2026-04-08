@@ -5,18 +5,16 @@ import type { PropsWithChildren } from "react";
 
 // Mock api module
 const mockGetSettings = vi.fn();
-const mockGetAgentReadiness = vi.fn();
 const mockGetProjectDefaults = vi.fn();
 
 vi.mock("../lib/api.js", () => ({
   api: {
     getSettings: (...args: unknown[]) => mockGetSettings(...args),
-    getAgentReadiness: (...args: unknown[]) => mockGetAgentReadiness(...args),
     getProjectDefaults: (...args: unknown[]) => mockGetProjectDefaults(...args),
   },
 }));
 
-import { useSettings, useAgentReadiness, useProjectDefaults } from "../hooks/useSettings.js";
+import { useSettings, useProjectDefaults } from "../hooks/useSettings.js";
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -30,7 +28,6 @@ function createWrapper() {
 describe("useSettings", () => {
   beforeEach(() => {
     mockGetSettings.mockReset();
-    mockGetAgentReadiness.mockReset();
     mockGetProjectDefaults.mockReset();
   });
 
@@ -43,26 +40,6 @@ describe("useSettings", () => {
 
     expect(result.current.data).toEqual({ useSubagents: true, maxReviewIterations: 3 });
     expect(mockGetSettings).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("useAgentReadiness", () => {
-  it("fetches agent readiness via React Query", async () => {
-    mockGetAgentReadiness.mockResolvedValue({
-      ready: true,
-      runtimeCount: 1,
-      enabledRuntimeProfileCount: 0,
-      runtimes: [],
-      message: "Ready",
-      checkedAt: "2026-04-03T00:00:00Z",
-    });
-
-    const { result } = renderHook(() => useAgentReadiness(), { wrapper: createWrapper() });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    expect(result.current.data?.ready).toBe(true);
-    expect(mockGetAgentReadiness).toHaveBeenCalledTimes(1);
   });
 });
 

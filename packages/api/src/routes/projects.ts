@@ -36,8 +36,9 @@ projectsRouter.get("/", (c) => {
 // POST /projects
 projectsRouter.post("/", jsonValidator(createProjectSchema), async (c) => {
   const body = c.req.valid("json");
-  const { project: created, pathError } = createProject(body);
+  const { project: created, pathError, initError } = await createProject(body);
   if (pathError) return c.json({ error: pathError }, 400);
+  if (initError) return c.json({ error: initError }, 500);
   if (!created) return c.json({ error: "Failed to create project" }, 500);
 
   log.debug({ projectId: created.id, name: body.name }, "Project created");

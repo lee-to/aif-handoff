@@ -28,6 +28,8 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+type CodexApiInput = RuntimeRunInput | RuntimeConnectionValidationInput | RuntimeModelListInput;
+
 const SENSITIVE_OPTION_KEYS = new Set(["apiKey", "apikey", "api_key", "secret", "password"]);
 
 function stripSensitiveOptions(
@@ -43,9 +45,16 @@ function stripSensitiveOptions(
   return cleaned;
 }
 
-function resolveBaseUrl(input: RuntimeRunInput | RuntimeConnectionValidationInput): string {
+function resolveApiKeyEnvVar(input: CodexApiInput): string {
+  const options = asRecord(input.options);
+  const topLevelApiKeyEnvVar = "apiKeyEnvVar" in input ? readString(input.apiKeyEnvVar) : null;
+  return topLevelApiKeyEnvVar ?? readString(options.apiKeyEnvVar) ?? "OPENAI_API_KEY";
+}
+
+function resolveBaseUrl(input: CodexApiInput): string {
   const options = asRecord(input.options);
   const baseUrl =
+    ("baseUrl" in input ? readString(input.baseUrl) : null) ??
     readString(options.agentApiBaseUrl) ??
     readString(options.baseUrl) ??
     readString(process.env.OPENAI_BASE_URL);
@@ -55,19 +64,28 @@ function resolveBaseUrl(input: RuntimeRunInput | RuntimeConnectionValidationInpu
   return baseUrl.replace(/\/+$/, "");
 }
 
-function resolveApiKey(input: RuntimeRunInput | RuntimeConnectionValidationInput): string | null {
+function resolveApiKey(input: CodexApiInput): string | null {
   const options = asRecord(input.options);
-  return readString(options.apiKey) ?? readString(process.env.OPENAI_API_KEY);
+  const apiKeyEnvVar = resolveApiKeyEnvVar(input);
+  return (
+    ("apiKey" in input ? readString(input.apiKey) : null) ??
+    readString(options.apiKey) ??
+    readString(process.env[apiKeyEnvVar]) ??
+    readString(process.env.OPENAI_API_KEY)
+  );
 }
 
-function buildHeaders(input: RuntimeRunInput | RuntimeConnectionValidationInput): Headers {
+function buildHeaders(input: CodexApiInput): Headers {
   const headers = new Headers({ "Content-Type": "application/json" });
   const apiKey = resolveApiKey(input);
   if (apiKey) {
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
 
-  const rawHeaders = asRecord(asRecord(input.options).headers);
+  const rawHeaders = {
+    ...asRecord(asRecord(input.options).headers),
+    ...("headers" in input ? asRecord(input.headers) : {}),
+  };
   for (const [key, value] of Object.entries(rawHeaders)) {
     if (typeof value === "string") {
       headers.set(key, value);

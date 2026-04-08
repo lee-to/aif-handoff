@@ -216,6 +216,30 @@ describe("codex api transport (OpenAI Chat Completions)", () => {
     expect(url).toBe("https://api.openai.com/v1/models");
   });
 
+  it("uses top-level baseUrl, apiKeyEnvVar, apiKey, and headers for model listing", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: [{ id: "gpt-4o", owned_by: "openai" }],
+      }),
+    );
+
+    await listCodexAgentApiModels({
+      runtimeId: "codex",
+      providerId: "openai",
+      baseUrl: "https://runtime.example.com/v1",
+      apiKeyEnvVar: "RUNTIME_API_KEY",
+      apiKey: "sk-top-level",
+      headers: { "X-Trace-Id": "trace-top-level" },
+      options: {},
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://runtime.example.com/v1/models");
+    const headers = new Headers(init.headers);
+    expect(headers.get("authorization")).toBe("Bearer sk-top-level");
+    expect(headers.get("x-trace-id")).toBe("trace-top-level");
+  });
+
   it("throws classified error when model listing returns non-ok", async () => {
     fetchMock.mockResolvedValueOnce(new Response("oops", { status: 500 }));
 

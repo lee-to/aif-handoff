@@ -90,6 +90,7 @@ const ALLOWED_ENV_PREFIXES = [
   "FORCE_COLOR",
   "NO_COLOR",
 ];
+const BLOCKED_ENV_KEYS = new Set(["OPENAI_BASE_URL"]);
 
 interface JsonRpcMessage {
   id?: number | string | null;
@@ -316,7 +317,7 @@ export async function listCodexAppServerModels(
     executablePath,
     listenUrl,
     input.projectRoot,
-    buildDiscoveryEnv(input),
+    buildCodexAppServerDiscoveryEnv(input),
   );
   logger?.debug?.(
     {
@@ -569,10 +570,13 @@ function findBundledCodexBinary(): string {
   return path.join(vendorRoot, targetTriple, "codex", binaryName);
 }
 
-function buildDiscoveryEnv(input: RuntimeModelListInput): Record<string, string> {
+export function buildCodexAppServerDiscoveryEnv(
+  input: RuntimeModelListInput,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value == null) continue;
+    if (BLOCKED_ENV_KEYS.has(key)) continue;
     if (ALLOWED_ENV_PREFIXES.some((prefix) => key === prefix || key.startsWith(prefix))) {
       env[key] = value;
     }
@@ -594,10 +598,8 @@ function buildDiscoveryEnv(input: RuntimeModelListInput): Record<string, string>
   const baseUrl =
     readString(input.baseUrl) ??
     readString(options.baseUrl) ??
-    readString(process.env.OPENAI_BASE_URL) ??
     readString(process.env.CODEX_BASE_URL);
   if (baseUrl) {
-    env.OPENAI_BASE_URL = baseUrl;
     env.CODEX_BASE_URL = baseUrl;
   }
 

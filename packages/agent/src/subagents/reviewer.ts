@@ -14,6 +14,7 @@ async function runSidecar(
   maxBudgetUsd: number | null,
   useSubagentAgent: boolean,
   workflowSpec: RuntimeWorkflowSpec,
+  fallbackSlashCommand?: string,
 ): Promise<string> {
   const { resultText } = await executeSubagentQuery({
     taskId,
@@ -25,6 +26,7 @@ async function runSidecar(
     agent: useSubagentAgent ? agentName : undefined,
     workflowSpec,
     workflowKind: workflowSpec.workflowKind,
+    fallbackSlashCommand,
   });
   return resultText;
 }
@@ -70,8 +72,10 @@ Task attachments:
 ${formatAttachmentsForPrompt(task.attachments)}
 
 Focus on auth, validation, secrets, injection, and unsafe shell/file handling in changed code.`;
-  const reviewPrompt = reviewPromptBase;
-  const securityPrompt = securityPromptBase;
+  const reviewPrompt = useSubagents ? reviewPromptBase : `/aif-review ${reviewPromptBase}`;
+  const securityPrompt = useSubagents
+    ? securityPromptBase
+    : `/aif-security-checklist ${securityPromptBase}`;
   const reviewAgentName = useSubagents ? "review-sidecar" : "aif-review";
   const securityAgentName = useSubagents ? "security-sidecar" : "aif-security-checklist";
   const reviewWorkflow = createRuntimeWorkflowSpec({
@@ -79,8 +83,7 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
     prompt: reviewPrompt,
     requiredCapabilities: useSubagents ? ["supportsAgentDefinitions"] : [],
     agentDefinitionName: useSubagents ? reviewAgentName : undefined,
-    skillCommand: "aif-review",
-    skillCommandMode: useSubagents ? "fallback" : "always",
+    fallbackSlashCommand: "/aif-review",
     fallbackStrategy: useSubagents ? "slash_command" : "none",
     sessionReusePolicy: "new_session",
     systemPromptAppend: scopeConstraint,
@@ -90,8 +93,7 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
     prompt: securityPrompt,
     requiredCapabilities: useSubagents ? ["supportsAgentDefinitions"] : [],
     agentDefinitionName: useSubagents ? securityAgentName : undefined,
-    skillCommand: "aif-security-checklist",
-    skillCommandMode: useSubagents ? "fallback" : "always",
+    fallbackSlashCommand: "/aif-security-checklist",
     fallbackStrategy: useSubagents ? "slash_command" : "none",
     sessionReusePolicy: "new_session",
     systemPromptAppend: scopeConstraint,
@@ -113,6 +115,7 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
             sidecarBudget,
             true,
             reviewWorkflow,
+            "/aif-review",
           ),
           runSidecar(
             securityPrompt,
@@ -122,6 +125,7 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
             sidecarBudget,
             true,
             securityWorkflow,
+            "/aif-security-checklist",
           ),
         ]);
       } else {
@@ -133,6 +137,7 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
           sidecarBudget,
           false,
           reviewWorkflow,
+          "/aif-review",
         );
         securityResult = await runSidecar(
           securityPrompt,
@@ -142,6 +147,7 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
           sidecarBudget,
           false,
           securityWorkflow,
+          "/aif-security-checklist",
         );
       }
     } finally {

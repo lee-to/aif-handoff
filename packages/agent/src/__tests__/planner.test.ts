@@ -137,7 +137,7 @@ describe("runPlanner comment selection", () => {
     expect(updatedTask?.plan).toBe("## New Plan\n- [ ] Step");
   });
 
-  it("uses Claude slash skill invocation for fix tasks", async () => {
+  it("uses /aif-fix --plan-first when task is marked as fix", async () => {
     const db = testDb.current;
     db.insert(tasks)
       .values({
@@ -215,7 +215,7 @@ describe("runPlanner comment selection", () => {
     expect(updatedTask?.plan).toBe("## Fallback Plan\n- [ ] Step from fallback");
   });
 
-  it("uses Claude slash skill invocation in planner skill mode", async () => {
+  it("uses /aif-plan command format only in skill mode", async () => {
     const db = testDb.current;
     db.insert(tasks)
       .values({

@@ -228,7 +228,7 @@ describe("runImplementer rework behavior", () => {
     );
   });
 
-  it("uses Claude slash skill invocation in implementer skill mode", async () => {
+  it("uses /aif-implement command format only in skill mode", async () => {
     const db = testDb.current;
     db.insert(tasks)
       .values({

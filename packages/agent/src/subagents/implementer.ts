@@ -197,9 +197,9 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   log.info({ taskId, title: task.title, useSubagents }, "Starting implementation stage");
   const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}
 All files must be created and modified inside this directory. Do NOT create files outside of it.`;
-  const implementSkillCommand = `aif-implement ${planSection}`;
+  const implementSlashCommand = `/aif-implement ${planSection}`;
 
-  const prompt = `Implement the task using the provided plan.
+  const prompt = `${useSubagents ? "Implement the task using the provided plan." : implementSlashCommand}
 
 ${scopeConstraint}
 
@@ -229,8 +229,7 @@ Execution rules:
     prompt,
     requiredCapabilities: useSubagents ? ["supportsAgentDefinitions"] : [],
     agentDefinitionName: useSubagents ? AGENT_NAME : undefined,
-    skillCommand: implementSkillCommand,
-    skillCommandMode: useSubagents ? "fallback" : "always",
+    fallbackSlashCommand: implementSlashCommand,
     fallbackStrategy: useSubagents ? "slash_command" : "none",
     sessionReusePolicy: "resume_if_available",
     systemPromptAppend: scopeConstraint,
@@ -250,6 +249,7 @@ Execution rules:
     skipReview: task.skipReview ?? false,
     workflowSpec,
     workflowKind: "implementer",
+    fallbackSlashCommand: implementSlashCommand,
   });
 
   let finalResultText = resultText;

@@ -94,11 +94,12 @@ export async function generateRoadmapFile(
     "Project context loaded for roadmap generation",
   );
 
-  const prompt = buildRoadmapGenerationPrompt({
+  const basePrompt = buildRoadmapGenerationPrompt({
     description,
     architecture,
     vision: vision ?? null,
   });
+  const prompt = `/aif-roadmap generate\n\n${basePrompt}`;
 
   let rawResult = "";
   try {

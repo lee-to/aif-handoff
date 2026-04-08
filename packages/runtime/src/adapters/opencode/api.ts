@@ -123,21 +123,14 @@ function resolveRequestTimeoutMs(
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
-  if ("metadata" in input) {
-    const metadata = asRecord((input as RuntimeRunInput).metadata);
-    const metadataTimeout = metadata.timeoutMs;
-    if (
-      typeof metadataTimeout === "number" &&
-      Number.isFinite(metadataTimeout) &&
-      metadataTimeout > 0
-    ) {
-      return Math.floor(metadataTimeout);
-    }
-  }
   if ("execution" in input) {
-    const execution = input.execution;
-    if (execution?.timeoutMs && execution.timeoutMs > 0) {
-      return execution.timeoutMs;
+    const exec = (input as RuntimeRunInput).execution;
+    if (
+      typeof exec?.runTimeoutMs === "number" &&
+      Number.isFinite(exec.runTimeoutMs) &&
+      exec.runTimeoutMs > 0
+    ) {
+      return Math.floor(exec.runTimeoutMs);
     }
   }
   return 30_000;

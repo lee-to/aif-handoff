@@ -16,7 +16,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { initProject } = await import("../projectInit.js");
 
-function createMockRegistry(runtimeIds: string[] = ["claude", "codex"]): RuntimeRegistry {
+function createMockRegistry(
+  runtimeIds: string[] = ["claude", "codex"],
+  overrides?: Record<string, { supportsProjectInit?: boolean }>,
+): RuntimeRegistry {
   return {
     resolveRuntime: vi.fn(),
     listRuntimes: vi.fn(() =>
@@ -25,6 +28,7 @@ function createMockRegistry(runtimeIds: string[] = ["claude", "codex"]): Runtime
         providerId: id,
         displayName: id,
         capabilities: {},
+        supportsProjectInit: overrides?.[id]?.supportsProjectInit ?? true,
       })),
     ),
     registerRuntimeModule: vi.fn(),
@@ -82,7 +86,9 @@ describe("initProject (runtime)", () => {
   });
 
   it("filters runtimes by runtimeIds option", () => {
-    const registry = createMockRegistry(["claude", "codex", "openrouter"]);
+    const registry = createMockRegistry(["claude", "codex", "openrouter"], {
+      openrouter: { supportsProjectInit: false },
+    });
 
     initProject({ projectRoot, registry, runtimeIds: ["claude"] });
 
@@ -91,6 +97,31 @@ describe("initProject (runtime)", () => {
       ["ai-factory", "init", "--agents", "claude"],
       expect.any(Object),
     );
+  });
+
+  it("excludes runtimes without supportsProjectInit", () => {
+    const registry = createMockRegistry(["claude", "codex", "openrouter"], {
+      openrouter: { supportsProjectInit: false },
+    });
+
+    initProject({ projectRoot, registry });
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "npx",
+      ["ai-factory", "init", "--agents", "claude,codex"],
+      expect.any(Object),
+    );
+  });
+
+  it("skips ai-factory init when all runtimes lack supportsProjectInit", () => {
+    const registry = createMockRegistry(["openrouter"], {
+      openrouter: { supportsProjectInit: false },
+    });
+
+    const result = initProject({ projectRoot, registry });
+
+    expect(result.ok).toBe(true);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
   it("skips ai-factory init when no runtimes match", () => {

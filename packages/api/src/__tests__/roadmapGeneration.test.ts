@@ -157,6 +157,10 @@ describe("roadmapGeneration", () => {
       const { existsSync, readFileSync } = await import("node:fs");
       expect(existsSync(result.roadmapPath)).toBe(true);
       expect(readFileSync(result.roadmapPath, "utf8")).toContain("# Project Roadmap");
+
+      // Prompt must include /aif-roadmap skill prefix
+      const callArgs = mockRunApiRuntimeOneShot.mock.calls[0][0];
+      expect(callArgs.prompt).toMatch(/^\/aif-roadmap generate\n/);
     });
 
     it("should accept vision without DESCRIPTION.md", async () => {

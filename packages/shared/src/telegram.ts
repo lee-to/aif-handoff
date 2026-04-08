@@ -29,6 +29,9 @@ export async function sendTelegramNotification(
 ): Promise<void> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const userId = process.env.TELEGRAM_USER_ID;
+  const apiBaseUrl = (process.env.TELEGRAM_BOT_API_URL ?? "https://api.telegram.org")
+    .trim()
+    .replace(/\/+$/, "");
   if (!botToken || !userId) return;
 
   const displayTitle = options.title ?? options.taskId.slice(0, 8);
@@ -40,7 +43,7 @@ export async function sendTelegramNotification(
   const text = `📋 *${escapeMarkdown(displayTitle)}*\n${escapeMarkdown(transition)}`;
 
   try {
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    const res = await fetch(`${apiBaseUrl}/bot${botToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: userId, text, parse_mode: "MarkdownV2" }),

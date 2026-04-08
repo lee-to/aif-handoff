@@ -7,21 +7,12 @@ import { projects } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
-const mockInitProjectDirectory = vi.fn();
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
   return {
     ...actual,
     getDb: () => testDb.current,
-  };
-});
-
-vi.mock("@aif/shared", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@aif/shared")>();
-  return {
-    ...actual,
-    initProjectDirectory: (projectRoot: string) => mockInitProjectDirectory(projectRoot),
   };
 });
 
@@ -67,7 +58,6 @@ describe("projects API", () => {
 
   beforeEach(() => {
     testDb.current = createTestDb();
-    mockInitProjectDirectory.mockReset();
     app = createApp();
   });
 

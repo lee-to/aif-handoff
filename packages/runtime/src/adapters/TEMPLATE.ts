@@ -87,7 +87,8 @@
  *   // Generic options (any adapter can use):
  *   exec?.maxBudgetUsd       // cost cap
  *   exec?.maxTurns           // iteration limit
- *   exec?.timeoutMs          // first-output timeout
+ *   exec?.startTimeoutMs     // first-output timeout
+ *   exec?.runTimeoutMs       // hard timeout for the entire run
  *   exec?.systemPromptAppend // appended to system prompt
  *   exec?.environment        // env vars for subprocess
  *   exec?.abortController    // cancellation signal
@@ -105,6 +106,65 @@
  *   // Example: hooks._trustToken, hooks.settingSources, etc.
  * }
  * ```
+ *
+ * ## Timeout handling (MANDATORY)
+ *
+ * All adapters MUST support timeout parameters from `RuntimeExecutionIntent`.
+ * Use the shared timeout utilities from `../../timeouts.js`:
+ *
+ * ### Stream transports (SDK/SSE)
+ * ```ts
+ * import { withStreamTimeouts, isRetriableTimeoutError, resolveRetryDelay, sleepMs } from "../../timeouts.js";
+ *
+ * // Wrap your async iterator with timeout guards
+ * const abort = execution?.abortController ?? new AbortController();
+ * const wrappedIterator = withStreamTimeouts(rawIterator, {
+ *   startTimeoutMs: execution?.startTimeoutMs,
+ *   runTimeoutMs: execution?.runTimeoutMs,
+ * }, abort);
+ *
+ * // Consume with for-await — timeouts are enforced automatically
+ * for await (const event of wrappedIterator) { ... }
+ *
+ * // Handle start timeout retry at the caller level:
+ * try {
+ *   return await runAttempt(input);
+ * } catch (error) {
+ *   if (isRetriableTimeoutError(error)) {
+ *     await sleepMs(resolveRetryDelay(input.execution ?? {}));
+ *     return runAttempt(input); // single retry
+ *   }
+ *   throw error;
+ * }
+ * ```
+ *
+ * ### CLI transports (child process)
+ * ```ts
+ * import { withProcessTimeouts, makeProcessStartTimeoutError, makeProcessRunTimeoutError } from "../../timeouts.js";
+ *
+ * const timeouts = withProcessTimeouts(child, {
+ *   startTimeoutMs: execution?.startTimeoutMs,
+ *   runTimeoutMs: execution?.runTimeoutMs,
+ * });
+ *
+ * child.on("close", async () => {
+ *   timeouts.cleanup();
+ *   if (await timeouts.startTimedOut) { /* retry or throw * / }
+ *   if (timeouts.runTimedOut) { throw makeProcessRunTimeoutError(runMs); }
+ * });
+ * ```
+ *
+ * ### HTTP transports (non-streaming fetch)
+ * For non-streaming HTTP, `startTimeoutMs` is not applicable (first byte ≈ full response).
+ * Use `AbortSignal.timeout(runTimeoutMs)` directly on fetch:
+ * ```ts
+ * const signal = runTimeoutMs > 0 ? AbortSignal.timeout(runTimeoutMs) : undefined;
+ * const response = await fetch(url, { ...init, signal });
+ * ```
+ *
+ * **Test guard:** The `timeoutCoverage.test.ts` integration test verifies that
+ * all adapter transport files contain timeout patterns. Adding a new adapter
+ * without timeout support will fail this test.
  *
  * ## Error handling
  *

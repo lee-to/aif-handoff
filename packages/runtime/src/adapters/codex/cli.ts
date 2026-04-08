@@ -1,5 +1,12 @@
 import { spawn, execFileSync } from "node:child_process";
 import type { RuntimeRunInput, RuntimeRunResult } from "../../types.js";
+import {
+  makeProcessRunTimeoutError,
+  makeProcessStartTimeoutError,
+  resolveRetryDelay,
+  sleepMs,
+  withProcessTimeouts,
+} from "../../timeouts.js";
 import { classifyCodexRuntimeError } from "./errors.js";
 
 const IS_WINDOWS = process.platform === "win32";
@@ -151,10 +158,13 @@ export function probeCodexCli(cliPath: string): { ok: boolean; version?: string;
 }
 
 function resolveTimeoutMs(input: RuntimeRunInput): number {
-  const metadata = asRecord(input.metadata);
-  const value = metadata.timeoutMs;
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
+  const exec = input.execution;
+  if (
+    typeof exec?.runTimeoutMs === "number" &&
+    Number.isFinite(exec.runTimeoutMs) &&
+    exec.runTimeoutMs > 0
+  ) {
+    return Math.floor(exec.runTimeoutMs);
   }
   return 120_000;
 }
@@ -304,13 +314,100 @@ function shouldWritePromptToStdin(args: string[], prompt: string): boolean {
   );
 }
 
+function spawnCodexProcess(
+  input: RuntimeRunInput,
+  cliPath: string,
+  args: string[],
+  env: Record<string, string>,
+): ReturnType<typeof spawn> {
+  /* v8 ignore next 2 -- Windows branch */
+  return IS_WINDOWS
+    ? spawnCliWindows(cliPath, args, input.cwd ?? input.projectRoot, env)
+    : spawn(cliPath, args, { cwd: input.cwd ?? input.projectRoot, env, stdio: "pipe" });
+}
+
+function runCodexCliAttempt(
+  input: RuntimeRunInput,
+  cliPath: string,
+  args: string[],
+  env: Record<string, string>,
+  logger?: CodexCliLogger,
+): Promise<{ result: RuntimeRunResult; startTimedOut: boolean }> {
+  const execution = input.execution;
+  const child = spawnCodexProcess(input, cliPath, args, env);
+
+  // Attach shared timeout utilities
+  const timeouts = withProcessTimeouts(child, {
+    startTimeoutMs: execution?.startTimeoutMs,
+    runTimeoutMs: execution?.runTimeoutMs ?? resolveTimeoutMs(input),
+  });
+
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout!.on("data", (chunk: Buffer | string) => {
+    stdout += String(chunk);
+  });
+
+  child.stderr!.on("data", (chunk: Buffer | string) => {
+    stderr += String(chunk);
+  });
+
+  child.stdin!.on("error", () => {
+    // Ignore broken-pipe errors — the child may exit before stdin is fully written
+  });
+  if (shouldWritePromptToStdin(args, input.prompt)) {
+    child.stdin!.write(input.prompt);
+  }
+  child.stdin!.end();
+
+  return new Promise((resolve, reject) => {
+    child.on("error", (error) => {
+      timeouts.cleanup();
+      reject(classifyCodexRuntimeError(error));
+    });
+
+    child.on("close", async (code) => {
+      timeouts.cleanup();
+
+      const startTimedOut = await timeouts.startTimedOut;
+
+      if (startTimedOut) {
+        logger?.warn?.(
+          { runtimeId: input.runtimeId, startTimeoutMs: execution?.startTimeoutMs },
+          "Codex CLI start timeout — process produced no output",
+        );
+        resolve({ result: null as unknown as RuntimeRunResult, startTimedOut: true });
+        return;
+      }
+
+      if (timeouts.runTimedOut) {
+        const runMs = execution?.runTimeoutMs ?? resolveTimeoutMs(input);
+        reject(makeProcessRunTimeoutError(runMs));
+        return;
+      }
+
+      if (code !== 0) {
+        const message = `Codex CLI exited with code ${code}: ${stderr || stdout || "unknown error"}`;
+        reject(classifyCodexRuntimeError(message));
+        return;
+      }
+
+      try {
+        resolve({ result: parseCliResult(stdout, input.sessionId ?? null), startTimedOut: false });
+      } catch (error) {
+        reject(classifyCodexRuntimeError(error));
+      }
+    });
+  });
+}
+
 export async function runCodexCli(
   input: RuntimeRunInput,
   logger?: CodexCliLogger,
 ): Promise<RuntimeRunResult> {
   const cliPath = resolveCliPath(input);
   const args = normalizeCliArgs(input);
-  const timeoutMs = resolveTimeoutMs(input);
   const options = asRecord(input.options);
   const apiKeyEnvVar =
     typeof options.apiKeyEnvVar === "string" ? options.apiKeyEnvVar : "OPENAI_API_KEY";
@@ -344,69 +441,28 @@ export async function runCodexCli(
       transport: "cli",
       cliPath,
       argCount: args.length,
-      timeoutMs,
+      startTimeoutMs: input.execution?.startTimeoutMs ?? null,
+      runTimeoutMs: input.execution?.runTimeoutMs ?? resolveTimeoutMs(input),
     },
     "Starting Codex CLI run",
   );
 
-  return new Promise<RuntimeRunResult>((resolve, reject) => {
-    // On Windows, spawn cannot launch .cmd files directly (ENOENT/EINVAL).
-    // Using shell: true breaks stdin piping — cmd.exe does not reliably forward
-    // stdin to the child process, causing Codex to hang on "Reading additional
-    // input from stdin...". Instead, invoke cmd.exe explicitly with /d /s /c
-    // which preserves the stdin pipe while resolving .cmd wrappers.
-    /* v8 ignore next 2 -- Windows branch */
-    const child = IS_WINDOWS
-      ? spawnCliWindows(cliPath, args, input.cwd ?? input.projectRoot, env)
-      : spawn(cliPath, args, { cwd: input.cwd ?? input.projectRoot, env, stdio: "pipe" });
+  const { result, startTimedOut } = await runCodexCliAttempt(input, cliPath, args, env, logger);
 
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+  if (startTimedOut) {
+    const retryDelayMs = resolveRetryDelay(input.execution ?? {});
+    logger?.warn?.(
+      { runtimeId: input.runtimeId, retryDelayMs },
+      "Codex CLI start timeout, retrying once after delay",
+    );
+    await sleepMs(retryDelayMs);
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      stdout += String(chunk);
-    });
-
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      stderr += String(chunk);
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(classifyCodexRuntimeError(error));
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(classifyCodexRuntimeError(`Codex CLI timed out after ${timeoutMs}ms`));
-        return;
-      }
-      if (code !== 0) {
-        const message = `Codex CLI exited with code ${code}: ${stderr || stdout || "unknown error"}`;
-        reject(classifyCodexRuntimeError(message));
-        return;
-      }
-
-      try {
-        resolve(parseCliResult(stdout, input.sessionId ?? null));
-      } catch (error) {
-        reject(classifyCodexRuntimeError(error));
-      }
-    });
-
-    child.stdin.on("error", () => {
-      // Ignore broken-pipe errors — the child may exit before stdin is fully written
-    });
-    if (shouldWritePromptToStdin(args, input.prompt)) {
-      child.stdin.write(input.prompt);
+    const retry = await runCodexCliAttempt(input, cliPath, args, env, logger);
+    if (retry.startTimedOut) {
+      throw makeProcessStartTimeoutError(input.execution?.startTimeoutMs ?? 0);
     }
-    child.stdin.end();
-  });
+    return retry.result;
+  }
+
+  return result;
 }

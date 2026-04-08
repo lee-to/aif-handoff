@@ -785,11 +785,13 @@ describe("tasks API", () => {
           attachments: "[]",
         })
         .run();
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-fast-fix-err-"));
+      mkdirSync(join(rootPath, ".ai-factory"), { recursive: true });
       db.insert(projects)
         .values({
           id: "project-fast-fix-err",
           name: "Fast fix error project",
-          rootPath: process.cwd(),
+          rootPath,
         })
         .run();
 
@@ -1301,11 +1303,13 @@ describe("tasks API", () => {
           attachments: "[]",
         })
         .run();
+      const ffRootPath = mkdtempSync(join(tmpdir(), "aif-fast-fix-"));
+      mkdirSync(join(ffRootPath, ".ai-factory"), { recursive: true });
       db.insert(projects)
         .values({
           id: "project-fast-fix",
           name: "Fast fix project",
-          rootPath: process.cwd(),
+          rootPath: ffRootPath,
         })
         .run();
 
@@ -1343,8 +1347,10 @@ describe("tasks API", () => {
           attachments: "[]",
         })
         .run();
+      const noPlanRootPath = mkdtempSync(join(tmpdir(), "aif-fast-fix-no-plan-"));
+      mkdirSync(join(noPlanRootPath, ".ai-factory"), { recursive: true });
       db.insert(projects)
-        .values({ id: "project-fast-fix", name: "FF project", rootPath: process.cwd() })
+        .values({ id: "project-fast-fix", name: "FF project", rootPath: noPlanRootPath })
         .onConflictDoNothing()
         .run();
 

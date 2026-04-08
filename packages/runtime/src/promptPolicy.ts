@@ -20,6 +20,24 @@ export interface RuntimePromptPolicyResult {
   usedFallbackSlashCommand: boolean;
 }
 
+const DEFAULT_SKILL_PREFIX = "/";
+
+/**
+ * Pattern matching skill command invocations in prompts.
+ * Matches "/aif-<name>" at word boundaries (start of line or after whitespace).
+ * The pattern captures the "/" prefix so it can be replaced with the runtime-specific prefix.
+ */
+const SKILL_COMMAND_PATTERN = /(?<=^|\s)\/(?=aif-)/gm;
+
+/**
+ * Transform skill command prefixes in text from the default "/" to the runtime-specific prefix.
+ * Only transforms when the target prefix differs from the default.
+ */
+export function transformSkillCommandPrefix(text: string, prefix: string): string {
+  if (!prefix || prefix === DEFAULT_SKILL_PREFIX) return text;
+  return text.replace(SKILL_COMMAND_PATTERN, prefix);
+}
+
 function prependSlashFallbackPrompt(prompt: string, fallbackSlashCommand: string): string {
   const trimmedCommand = fallbackSlashCommand.trim();
   if (!trimmedCommand) return prompt;

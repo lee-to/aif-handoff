@@ -8,6 +8,8 @@ import type {
   RuntimeRunResult,
   RuntimeUsage,
 } from "../../types.js";
+import { RuntimeExecutionError } from "../../errors.js";
+import { isRetriableTimeoutError, resolveRetryDelay, sleepMs } from "../../timeouts.js";
 import { classifyCodexRuntimeError } from "./errors.js";
 
 export interface CodexAgentApiLogger {
@@ -258,6 +260,20 @@ function normalizeUsage(usage: unknown): RuntimeUsage | null {
 }
 
 // ---------------------------------------------------------------------------
+// Timeout signal helpers
+// ---------------------------------------------------------------------------
+
+function buildRunTimeoutSignal(input: RuntimeRunInput): AbortSignal | undefined {
+  const runMs = input.execution?.runTimeoutMs;
+  if (typeof runMs !== "number" || !Number.isFinite(runMs) || runMs <= 0) return undefined;
+  return AbortSignal.timeout(Math.floor(runMs));
+}
+
+function isAbortTimeoutError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "TimeoutError";
+}
+
+// ---------------------------------------------------------------------------
 // Non-streaming run (OpenAI Chat Completions)
 // ---------------------------------------------------------------------------
 
@@ -274,12 +290,14 @@ export async function runCodexAgentApi(
       transport: "api",
       url,
       model: input.model ?? null,
+      runTimeoutMs: input.execution?.runTimeoutMs ?? null,
       options: stripSensitiveOptions(asRecord(input.options)),
     },
     "Starting OpenAI API run",
   );
 
   try {
+    const signal = buildRunTimeoutSignal(input);
     const response = await fetchWithRetries(
       input,
       url,
@@ -287,6 +305,7 @@ export async function runCodexAgentApi(
         method: "POST",
         headers: buildHeaders(input),
         body: JSON.stringify(buildRequestBody(input, false)),
+        ...(signal ? { signal } : {}),
       },
       logger,
       "non-stream",
@@ -319,6 +338,13 @@ export async function runCodexAgentApi(
       raw: payload,
     };
   } catch (error) {
+    if (isAbortTimeoutError(error)) {
+      throw new RuntimeExecutionError(
+        `Run timeout: Codex API request exceeded ${input.execution?.runTimeoutMs}ms limit`,
+        error,
+        "timeout",
+      );
+    }
     throw classifyCodexRuntimeError(error);
   }
 }
@@ -327,126 +353,180 @@ export async function runCodexAgentApi(
 // Streaming run (SSE, OpenAI Chat Completions)
 // ---------------------------------------------------------------------------
 
-export async function runCodexAgentApiStreaming(
+async function runCodexStreamingAttempt(
   input: RuntimeRunInput,
   logger?: CodexAgentApiLogger,
 ): Promise<RuntimeRunResult> {
   const baseUrl = resolveBaseUrl(input);
   const url = `${baseUrl}/chat/completions`;
+  const signal = buildRunTimeoutSignal(input);
 
+  const response = await fetchWithRetries(
+    input,
+    url,
+    {
+      method: "POST",
+      headers: buildHeaders(input),
+      body: JSON.stringify(buildRequestBody(input, true)),
+      ...(signal ? { signal } : {}),
+    },
+    logger,
+    "stream",
+  );
+
+  if (!response.ok) {
+    const rawText = await response.text();
+    throw classifyCodexRuntimeError(new Error(`OpenAI API HTTP ${response.status}: ${rawText}`));
+  }
+
+  if (!response.body) {
+    throw classifyCodexRuntimeError(new Error("OpenAI API streaming response has no body"));
+  }
+
+  let outputText = "";
+  let sessionId: string | null = null;
+  let usage: RuntimeUsage | null = null;
+  const events: RuntimeEvent[] = [];
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let firstChunkReceived = false;
+
+  // Start timeout — detect hung stream after connection is established
+  const startMs = input.execution?.startTimeoutMs;
+  let startTimer: ReturnType<typeof setTimeout> | null = null;
+  let startTimedOut = false;
+
+  if (typeof startMs === "number" && Number.isFinite(startMs) && startMs > 0) {
+    startTimer = setTimeout(() => {
+      startTimedOut = true;
+      reader.cancel().catch(() => {});
+    }, startMs);
+  }
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      if (!firstChunkReceived) {
+        firstChunkReceived = true;
+        if (startTimer) {
+          clearTimeout(startTimer);
+          startTimer = null;
+        }
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(":")) continue;
+        if (!trimmed.startsWith("data: ")) continue;
+
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          if (!sessionId && parsed.id) {
+            sessionId = parsed.id;
+          }
+
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.content) {
+            outputText += delta.content;
+            const event: RuntimeEvent = {
+              type: "stream:text",
+              timestamp: new Date().toISOString(),
+              message: delta.content,
+            };
+            events.push(event);
+            input.execution?.onEvent?.(event);
+          }
+
+          if (parsed.usage) {
+            usage = normalizeUsage(parsed.usage);
+          }
+        } catch {
+          logger?.debug?.(
+            { runtimeId: input.runtimeId, rawLine: trimmed },
+            "Failed to parse SSE chunk, skipping",
+          );
+        }
+      }
+    }
+  } finally {
+    if (startTimer) clearTimeout(startTimer);
+    reader.releaseLock();
+  }
+
+  if (startTimedOut) {
+    const err = new RuntimeExecutionError(
+      `Start timeout: Codex API streaming produced no data within ${startMs}ms`,
+      undefined,
+      "timeout",
+    );
+    (err as unknown as Record<string, unknown>).__timeoutRetriable__ = true;
+    throw err;
+  }
+
+  logger?.debug?.(
+    {
+      runtimeId: input.runtimeId,
+      outputLength: outputText.length,
+      eventCount: events.length,
+    },
+    "OpenAI API streaming run completed",
+  );
+
+  return {
+    outputText,
+    sessionId,
+    usage,
+    events,
+    raw: { streaming: true, eventCount: events.length },
+  };
+}
+
+export async function runCodexAgentApiStreaming(
+  input: RuntimeRunInput,
+  logger?: CodexAgentApiLogger,
+): Promise<RuntimeRunResult> {
   logger?.info?.(
     {
       runtimeId: input.runtimeId,
       transport: "api",
-      url,
       model: input.model ?? null,
       streaming: true,
+      startTimeoutMs: input.execution?.startTimeoutMs ?? null,
+      runTimeoutMs: input.execution?.runTimeoutMs ?? null,
     },
     "Starting OpenAI API streaming run",
   );
 
   try {
-    const response = await fetchWithRetries(
-      input,
-      url,
-      {
-        method: "POST",
-        headers: buildHeaders(input),
-        body: JSON.stringify(buildRequestBody(input, true)),
-      },
-      logger,
-      "stream",
-    );
-
-    if (!response.ok) {
-      const rawText = await response.text();
-      return Promise.reject(
-        classifyCodexRuntimeError(new Error(`OpenAI API HTTP ${response.status}: ${rawText}`)),
-      );
-    }
-
-    if (!response.body) {
-      return Promise.reject(
-        classifyCodexRuntimeError(new Error("OpenAI API streaming response has no body")),
-      );
-    }
-
-    let outputText = "";
-    let sessionId: string | null = null;
-    let usage: RuntimeUsage | null = null;
-    const events: RuntimeEvent[] = [];
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith(":")) continue;
-          if (!trimmed.startsWith("data: ")) continue;
-
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            if (!sessionId && parsed.id) {
-              sessionId = parsed.id;
-            }
-
-            const delta = parsed.choices?.[0]?.delta;
-            if (delta?.content) {
-              outputText += delta.content;
-              const event: RuntimeEvent = {
-                type: "stream:text",
-                timestamp: new Date().toISOString(),
-                message: delta.content,
-              };
-              events.push(event);
-              input.execution?.onEvent?.(event);
-            }
-
-            if (parsed.usage) {
-              usage = normalizeUsage(parsed.usage);
-            }
-          } catch {
-            logger?.debug?.(
-              { runtimeId: input.runtimeId, rawLine: trimmed },
-              "Failed to parse SSE chunk, skipping",
-            );
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    logger?.debug?.(
-      {
-        runtimeId: input.runtimeId,
-        outputLength: outputText.length,
-        eventCount: events.length,
-      },
-      "OpenAI API streaming run completed",
-    );
-
-    return {
-      outputText,
-      sessionId,
-      usage,
-      events,
-      raw: { streaming: true, eventCount: events.length },
-    };
+    return await runCodexStreamingAttempt(input, logger);
   } catch (error) {
+    if (isRetriableTimeoutError(error)) {
+      const retryDelayMs = resolveRetryDelay(input.execution ?? {});
+      logger?.warn?.(
+        { runtimeId: input.runtimeId, retryDelayMs },
+        "Codex API streaming start timeout, retrying once after delay",
+      );
+      await sleepMs(retryDelayMs);
+      return runCodexStreamingAttempt(input, logger);
+    }
+    if (isAbortTimeoutError(error)) {
+      throw new RuntimeExecutionError(
+        `Run timeout: Codex API streaming request exceeded ${input.execution?.runTimeoutMs}ms limit`,
+        error,
+        "timeout",
+      );
+    }
     throw classifyCodexRuntimeError(error);
   }
 }

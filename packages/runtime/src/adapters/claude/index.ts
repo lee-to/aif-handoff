@@ -454,6 +454,7 @@ export function createClaudeRuntimeAdapter(
       id: runtimeId,
       providerId,
       displayName: options.displayName ?? "Claude",
+      supportsProjectInit: true,
       lightModel: "haiku",
       defaultApiKeyEnvVar: "ANTHROPIC_API_KEY",
       defaultBaseUrlEnvVar: "ANTHROPIC_BASE_URL",

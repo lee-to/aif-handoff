@@ -76,6 +76,8 @@ describe("Codex runtime adapter", () => {
     expect(adapter.descriptor.capabilities.supportsCustomEndpoint).toBe(true);
     expect(adapter.descriptor.capabilities.supportsAgentDefinitions).toBe(false);
     expect(adapter.descriptor.capabilities.supportsSessionList).toBe(false);
+    expect(adapter.descriptor.skillCommandPrefix).toBe("$");
+    expect(adapter.descriptor.supportsProjectInit).toBe(true);
   });
 
   it("runs via CLI transport by default", async () => {

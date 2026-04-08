@@ -1,5 +1,12 @@
 import { spawn, execFileSync } from "node:child_process";
 import type { RuntimeEvent, RuntimeRunInput, RuntimeRunResult, RuntimeUsage } from "../../types.js";
+import {
+  makeProcessRunTimeoutError,
+  makeProcessStartTimeoutError,
+  resolveRetryDelay,
+  sleepMs,
+  withProcessTimeouts,
+} from "../../timeouts.js";
 import { classifyClaudeRuntimeError } from "./errors.js";
 
 const IS_WINDOWS = process.platform === "win32";
@@ -116,19 +123,11 @@ function spawnCliWindows(
 function resolveTimeoutMs(input: RuntimeRunInput): number {
   const exec = input.execution;
   if (
-    typeof exec?.timeoutMs === "number" &&
-    Number.isFinite(exec.timeoutMs) &&
-    exec.timeoutMs > 0
+    typeof exec?.runTimeoutMs === "number" &&
+    Number.isFinite(exec.runTimeoutMs) &&
+    exec.runTimeoutMs > 0
   ) {
-    return Math.floor(exec.timeoutMs);
-  }
-  const metadata = asRecord(input.metadata);
-  if (
-    typeof metadata.timeoutMs === "number" &&
-    Number.isFinite(metadata.timeoutMs) &&
-    (metadata.timeoutMs as number) > 0
-  ) {
-    return Math.floor(metadata.timeoutMs as number);
+    return Math.floor(exec.runTimeoutMs);
   }
   return 300_000;
 }
@@ -266,6 +265,108 @@ function parseCliResult(stdout: string, fallbackSessionId: string | null): Runti
   }
 }
 
+function spawnCliProcess(
+  input: RuntimeRunInput,
+  cliPath: string,
+  args: string[],
+  env: Record<string, string>,
+): ReturnType<typeof spawn> {
+  /* v8 ignore next 2 -- Windows branch */
+  return IS_WINDOWS
+    ? spawnCliWindows(cliPath, args, input.cwd ?? input.projectRoot, env)
+    : spawn(cliPath, args, { cwd: input.cwd ?? input.projectRoot, env, stdio: "pipe" });
+}
+
+function runCliAttempt(
+  input: RuntimeRunInput,
+  cliPath: string,
+  args: string[],
+  env: Record<string, string>,
+  logger?: ClaudeCliLogger,
+): Promise<{ result: RuntimeRunResult; startTimedOut: boolean }> {
+  const execution = input.execution;
+  const child = spawnCliProcess(input, cliPath, args, env);
+
+  // Attach shared timeout utilities
+  const timeouts = withProcessTimeouts(child, {
+    startTimeoutMs: execution?.startTimeoutMs,
+    runTimeoutMs: execution?.runTimeoutMs ?? resolveTimeoutMs(input),
+  });
+
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout!.on("data", (chunk: Buffer | string) => {
+    stdout += String(chunk);
+  });
+
+  child.stderr!.on("data", (chunk: Buffer | string) => {
+    const text = String(chunk);
+    stderr += text;
+    execution?.onStderr?.(text);
+  });
+
+  // Prompt is passed via -p flag, close stdin immediately to prevent
+  // "no stdin data received" warnings from the CLI.
+  child.stdin!.end();
+
+  // If abort is requested, kill the child
+  if (execution?.abortController) {
+    execution.abortController.signal.addEventListener(
+      "abort",
+      () => {
+        child.kill("SIGTERM");
+      },
+      { once: true },
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    child.on("error", (error) => {
+      timeouts.cleanup();
+      reject(classifyClaudeRuntimeError(error));
+    });
+
+    child.on("close", async (code) => {
+      timeouts.cleanup();
+
+      const startTimedOut = await timeouts.startTimedOut;
+
+      if (startTimedOut) {
+        const startMs = execution?.startTimeoutMs ?? 0;
+        logger?.warn?.(
+          { runtimeId: input.runtimeId, startTimeoutMs: startMs },
+          "Claude CLI start timeout — process produced no output",
+        );
+        resolve({ result: null as unknown as RuntimeRunResult, startTimedOut: true });
+        return;
+      }
+
+      if (timeouts.runTimedOut) {
+        const runMs = execution?.runTimeoutMs ?? resolveTimeoutMs(input);
+        reject(makeProcessRunTimeoutError(runMs));
+        return;
+      }
+
+      if (code !== 0) {
+        const message = `Claude CLI exited with code ${code}: ${stderr || stdout || "unknown error"}`;
+        reject(classifyClaudeRuntimeError(message));
+        return;
+      }
+
+      try {
+        resolve({ result: parseCliResult(stdout, input.sessionId ?? null), startTimedOut: false });
+      } catch (error) {
+        reject(
+          error instanceof Error && error.name === "ClaudeRuntimeAdapterError"
+            ? error
+            : classifyClaudeRuntimeError(error),
+        );
+      }
+    });
+  });
+}
+
 export async function runClaudeCli(
   input: RuntimeRunInput,
   logger?: ClaudeCliLogger,
@@ -273,7 +374,6 @@ export async function runClaudeCli(
 ): Promise<RuntimeRunResult> {
   const cliPath = resolveCliPath(input, adapterDefaults?.pathToClaudeCodeExecutable);
   const args = buildCliArgs(input);
-  const timeoutMs = resolveTimeoutMs(input);
   const execution = input.execution;
   const options = asRecord(input.options);
   const apiKeyEnvVar =
@@ -286,78 +386,30 @@ export async function runClaudeCli(
       transport: "cli",
       cliPath,
       argCount: args.length,
-      timeoutMs,
+      startTimeoutMs: execution?.startTimeoutMs ?? null,
+      runTimeoutMs: execution?.runTimeoutMs ?? resolveTimeoutMs(input),
       hasAgent: args.includes("--agent"),
     },
     "Starting Claude CLI run",
   );
 
-  return new Promise<RuntimeRunResult>((resolve, reject) => {
-    /* v8 ignore next 2 -- Windows branch */
-    const child = IS_WINDOWS
-      ? spawnCliWindows(cliPath, args, input.cwd ?? input.projectRoot, env)
-      : spawn(cliPath, args, { cwd: input.cwd ?? input.projectRoot, env, stdio: "pipe" });
+  const { result, startTimedOut } = await runCliAttempt(input, cliPath, args, env, logger);
 
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+  if (startTimedOut) {
+    // Single retry after start timeout
+    const retryDelayMs = resolveRetryDelay(execution ?? {});
+    logger?.warn?.(
+      { runtimeId: input.runtimeId, retryDelayMs },
+      "Claude CLI start timeout, retrying once after delay",
+    );
+    await sleepMs(retryDelayMs);
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      stdout += String(chunk);
-    });
-
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      const text = String(chunk);
-      stderr += text;
-      execution?.onStderr?.(text);
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(classifyClaudeRuntimeError(error));
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(classifyClaudeRuntimeError(`Claude CLI timed out after ${timeoutMs}ms`));
-        return;
-      }
-      if (code !== 0) {
-        const message = `Claude CLI exited with code ${code}: ${stderr || stdout || "unknown error"}`;
-        reject(classifyClaudeRuntimeError(message));
-        return;
-      }
-
-      try {
-        resolve(parseCliResult(stdout, input.sessionId ?? null));
-      } catch (error) {
-        reject(
-          error instanceof Error && error.name === "ClaudeRuntimeAdapterError"
-            ? error
-            : classifyClaudeRuntimeError(error),
-        );
-      }
-    });
-
-    // Prompt is passed via -p flag, close stdin immediately to prevent
-    // "no stdin data received" warnings from the CLI.
-    child.stdin.end();
-
-    // If abort is requested, kill the child
-    if (execution?.abortController) {
-      execution.abortController.signal.addEventListener(
-        "abort",
-        () => {
-          child.kill("SIGTERM");
-        },
-        { once: true },
-      );
+    const retry = await runCliAttempt(input, cliPath, args, env, logger);
+    if (retry.startTimedOut) {
+      throw makeProcessStartTimeoutError(execution?.startTimeoutMs ?? 0);
     }
-  });
+    return retry.result;
+  }
+
+  return result;
 }

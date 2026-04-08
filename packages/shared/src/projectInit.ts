@@ -34,17 +34,3 @@ export function initBaseProjectDirectory(projectRoot: string): void {
     }
   }
 }
-
-/**
- * @deprecated Use `initBaseProjectDirectory` + adapter init hooks instead.
- * Kept for backwards compat during migration.
- */
-export type RuntimeInitHook = (projectRoot: string, monorepoRoot: string) => void;
-
-/** @deprecated Use runtime-aware init from `@aif/runtime` bootstrap. */
-export function initProjectDirectory(
-  projectRoot: string,
-  _runtimeHooks: RuntimeInitHook[] = [],
-): void {
-  initBaseProjectDirectory(projectRoot);
-}

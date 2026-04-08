@@ -394,7 +394,6 @@ export function RuntimeProfileForm({
             />
             <Button
               type="button"
-              size="sm"
               variant="outline"
               disabled={runtimeModels.isPending || !supportsModelDiscovery}
               onClick={() => {

@@ -47,7 +47,6 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     model: "gpt-5.4",
     sessionId: "session-1",
     options: {},
-    metadata: {},
     ...overrides,
   };
 }
@@ -232,7 +231,7 @@ describe("codex cli transport", () => {
 
     const runPromise = runCodexCli(
       createRunInput({
-        metadata: { timeoutMs: 5 },
+        execution: { runTimeoutMs: 5 },
       }),
     );
 
@@ -241,8 +240,65 @@ describe("codex cli transport", () => {
     child.emit("close", 0);
 
     await expect(runPromise).rejects.toMatchObject({
-      name: "CodexRuntimeAdapterError",
-      adapterCode: "CODEX_TIMEOUT",
+      name: "RuntimeExecutionError",
+      category: "timeout",
+    });
+  });
+
+  it("retries once after start timeout and succeeds on second attempt", async () => {
+    vi.useFakeTimers();
+    const child1 = createMockChildProcess();
+    const child2 = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child1).mockReturnValueOnce(child2);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        execution: { startTimeoutMs: 10, startRetryDelayMs: 0, runTimeoutMs: 60_000 },
+      }),
+    );
+
+    // First attempt: no output → start timeout fires
+    vi.advanceTimersByTime(10);
+    expect(child1.kill).toHaveBeenCalledWith("SIGKILL");
+    child1.emit("close", null);
+
+    // Let async close handler + retry settle
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Second attempt succeeds
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    child2.stdout.emit("data", "retry output");
+    child2.emit("close", 0);
+
+    const result = await runPromise;
+    expect(result.outputText).toBe("retry output");
+  });
+
+  it("throws start timeout error when both attempts time out", async () => {
+    vi.useFakeTimers();
+    const child1 = createMockChildProcess();
+    const child2 = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child1).mockReturnValueOnce(child2);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        execution: { startTimeoutMs: 10, startRetryDelayMs: 0, runTimeoutMs: 60_000 },
+      }),
+    );
+
+    // First attempt: start timeout
+    vi.advanceTimersByTime(10);
+    child1.emit("close", null);
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Second attempt: also times out
+    vi.advanceTimersByTime(10);
+    child2.emit("close", null);
+
+    await expect(runPromise).rejects.toMatchObject({
+      name: "RuntimeExecutionError",
+      category: "timeout",
+      message: expect.stringContaining("Start timeout"),
     });
   });
 });

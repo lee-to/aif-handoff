@@ -13,7 +13,7 @@
 - [x] **AI Chat for Codebase Questions** — add in-app AI chat focused on repository-aware developer assistance.
 - [x] **AI Chat Sessions** — add persistent chat sessions with history, context carry-over, and session management UI.
 - [x] **Bidirectional Handoff ↔ AIF Sync** — implement two-way synchronization between Handoff and AI Factory via MCP server, keeping tasks, plans, and status in sync across both systems. Plans should include task ID annotations for traceability.
-- [ ] **OpenRouter Runtime Adapter** — add built-in OpenRouter adapter with API transport, streaming, model discovery, and full test coverage.
+- [x] **OpenRouter Runtime Adapter** — add built-in OpenRouter adapter with API transport, streaming, model discovery, and full test coverage.
 
 ## Completed
 

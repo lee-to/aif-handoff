@@ -235,6 +235,8 @@ export function createCodexRuntimeAdapter(
       id: runtimeId,
       providerId,
       displayName: options.displayName ?? "Codex",
+      supportsProjectInit: true,
+      skillCommandPrefix: "$",
       lightModel: null,
       defaultApiKeyEnvVar: "OPENAI_API_KEY",
       defaultBaseUrlEnvVar: "OPENAI_BASE_URL",

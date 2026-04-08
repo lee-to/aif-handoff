@@ -36,7 +36,7 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
   if (!open || typeof document === "undefined") return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0" style={{ zIndex: "var(--z-modal)" }}>
       <div className="fixed inset-0 bg-black/85 animate-in fade-in-0" />
       <div
         className="fixed inset-0 flex items-start justify-center overflow-y-auto p-4 pt-[10vh]"
@@ -57,7 +57,7 @@ function DialogContent({ className, children, ...props }: React.HTMLAttributes<H
   return (
     <div
       className={cn(
-        "relative z-50 w-full max-w-lg rounded-none border border-border bg-card p-6 animate-in fade-in-0 zoom-in-95",
+        "relative w-full max-w-lg rounded-none border border-border bg-card p-6 animate-in fade-in-0 zoom-in-95",
         className,
       )}
       {...props}

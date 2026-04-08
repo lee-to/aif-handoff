@@ -57,6 +57,7 @@ describe("OpenRouter runtime adapter", () => {
     expect(adapter.descriptor.defaultApiKeyEnvVar).toBe("OPENROUTER_API_KEY");
     expect(adapter.descriptor.lightModel).toBeNull();
     expect(adapter.descriptor.supportedTransports).toEqual(["api"]);
+    expect(adapter.descriptor.supportsProjectInit).toBeUndefined();
   });
 
   it("has correct capabilities", () => {

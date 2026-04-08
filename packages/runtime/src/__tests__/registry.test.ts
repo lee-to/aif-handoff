@@ -231,6 +231,174 @@ export function registerRuntimeModule(registry) {
   });
 });
 
+describe("skill command prefix decorator", () => {
+  it("transforms /aif-* prompts to $aif-* for adapters with skillCommandPrefix $", async () => {
+    const runMock = vi.fn().mockResolvedValue({ outputText: "ok" });
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "codex",
+        providerId: "openai",
+        displayName: "Codex",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+        skillCommandPrefix: "$",
+      },
+      run: runMock,
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const resolved = registry.resolveRuntime("codex");
+
+    await resolved.run({
+      runtimeId: "codex",
+      prompt: "/aif-plan fast @PLAN.md\n\nAlso /aif-review",
+    });
+
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const passedPrompt = runMock.mock.calls[0][0].prompt;
+    expect(passedPrompt).toContain("$aif-plan fast");
+    expect(passedPrompt).toContain("$aif-review");
+    expect(passedPrompt).not.toContain("/aif-plan");
+    expect(passedPrompt).not.toContain("/aif-review");
+  });
+
+  it("does not transform prompts for adapters without skillCommandPrefix", async () => {
+    const runMock = vi.fn().mockResolvedValue({ outputText: "ok" });
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "claude",
+        providerId: "anthropic",
+        displayName: "Claude",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+      },
+      run: runMock,
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const resolved = registry.resolveRuntime("claude");
+
+    await resolved.run({
+      runtimeId: "claude",
+      prompt: "/aif-plan fast",
+    });
+
+    expect(runMock.mock.calls[0][0].prompt).toBe("/aif-plan fast");
+  });
+
+  it("transforms prompts in resume() calls too", async () => {
+    const resumeMock = vi.fn().mockResolvedValue({ outputText: "resumed" });
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "codex",
+        providerId: "openai",
+        displayName: "Codex",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+        skillCommandPrefix: "$",
+      },
+      run: vi.fn(),
+      resume: resumeMock,
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const resolved = registry.resolveRuntime("codex");
+
+    await resolved.resume!({
+      runtimeId: "codex",
+      prompt: "/aif-implement @PLAN.md",
+      sessionId: "session-1",
+    });
+
+    expect(resumeMock.mock.calls[0][0].prompt).toBe("$aif-implement @PLAN.md");
+  });
+
+  it("preserves adapter descriptor on wrapped adapter", () => {
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "codex",
+        providerId: "openai",
+        displayName: "Codex",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+        skillCommandPrefix: "$",
+      },
+      run: vi.fn(),
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const resolved = registry.resolveRuntime("codex");
+
+    expect(resolved.descriptor.id).toBe("codex");
+    expect(resolved.descriptor.skillCommandPrefix).toBe("$");
+    expect(resolved.descriptor.providerId).toBe("openai");
+  });
+
+  it("does not wrap resume when adapter has no resume method", () => {
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "codex",
+        providerId: "openai",
+        displayName: "Codex",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+        skillCommandPrefix: "$",
+      },
+      run: vi.fn(),
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const resolved = registry.resolveRuntime("codex");
+
+    expect(resolved.resume).toBeUndefined();
+  });
+
+  it("transforms via tryResolveRuntime as well", async () => {
+    const runMock = vi.fn().mockResolvedValue({ outputText: "ok" });
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "codex",
+        providerId: "openai",
+        displayName: "Codex",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+        skillCommandPrefix: "$",
+      },
+      run: runMock,
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const resolved = registry.tryResolveRuntime("codex")!;
+
+    await resolved.run({
+      runtimeId: "codex",
+      prompt: "/aif-commit",
+    });
+
+    expect(runMock.mock.calls[0][0].prompt).toBe("$aif-commit");
+  });
+
+  it("does not transform /etc or /usr paths", async () => {
+    const runMock = vi.fn().mockResolvedValue({ outputText: "ok" });
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "codex",
+        providerId: "openai",
+        displayName: "Codex",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+        skillCommandPrefix: "$",
+      },
+      run: runMock,
+    };
+
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const resolved = registry.resolveRuntime("codex");
+
+    await resolved.run({
+      runtimeId: "codex",
+      prompt: "Check /etc/config\n/aif-plan fast",
+    });
+
+    const passedPrompt = runMock.mock.calls[0][0].prompt;
+    expect(passedPrompt).toContain("/etc/config");
+    expect(passedPrompt).toContain("$aif-plan fast");
+  });
+});
+
 describe("runtime error classes", () => {
   it("exposes consistent codes and names", () => {
     const cause = new Error("root-cause");

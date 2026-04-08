@@ -81,11 +81,7 @@ export { logger, rootLogger } from "./logger.js";
 export { findMonorepoRoot, findMonorepoRootFromUrl } from "./monorepoRoot.js";
 
 // Project initialization
-export {
-  initBaseProjectDirectory,
-  initProjectDirectory,
-  type RuntimeInitHook,
-} from "./projectInit.js";
+export { initBaseProjectDirectory } from "./projectInit.js";
 export {
   slugify,
   generatePlanPath,

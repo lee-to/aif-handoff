@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -35,6 +35,8 @@ export function RoadmapDialog({
   const [exists, setExists] = useState<boolean | null>(null);
   const [importLoading, setImportLoading] = useState(false);
 
+  const prevOpenRef = useRef(false);
+
   const resetAndCheck = useCallback((projectId: string) => {
     setAlias("");
     setVision("");
@@ -57,6 +59,18 @@ export function RoadmapDialog({
     },
     [project, onOpenChange, resetAndCheck],
   );
+
+  // Detect when the parent sets `open` directly (bypassing handleOpenChange).
+  // Only fetches roadmap status — no synchronous setState calls.
+  useEffect(() => {
+    if (open && !prevOpenRef.current && project) {
+      api.checkRoadmapStatus(project.id).then(
+        ({ exists: e }) => setExists(e),
+        () => setExists(false),
+      );
+    }
+    prevOpenRef.current = open;
+  }, [open, project]);
 
   // Listen for roadmap WS events
   useEffect(() => {

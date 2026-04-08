@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { RuntimeEvent, RuntimeRunInput, RuntimeUsage } from "../../types.js";
+import { withStreamTimeouts } from "../../timeouts.js";
 import { classifyClaudeResultSubtype } from "./errors.js";
 import type { ClaudeOptionsLogger, ClaudeRuntimeExecutionOptions } from "./options.js";
 import { buildClaudeQueryOptions } from "./options.js";
@@ -139,15 +140,25 @@ function resolveQueryImplementation(): typeof query {
 export async function runClaudeQueryAttempt(
   input: RuntimeRunInput,
   execution: ClaudeRuntimeExecutionOptions,
-  timeoutMs: number,
   logger?: ClaudeOptionsLogger,
 ): Promise<ClaudeQueryAttemptResult> {
   const options = buildClaudeQueryOptions(input, execution, logger);
   const queryImpl = resolveQueryImplementation();
   const stream = queryImpl({ prompt: input.prompt, options });
 
-  const iterator = stream[Symbol.asyncIterator]();
-  const timeoutError = makeQueryStartTimeoutError(timeoutMs);
+  const rawIterator = stream[Symbol.asyncIterator]();
+
+  // Wrap with shared timeout utilities — start + run timeout
+  const abort = execution.abortController ?? new AbortController();
+  const iterator = withStreamTimeouts(
+    rawIterator,
+    {
+      startTimeoutMs: execution.queryStartTimeoutMs,
+      runTimeoutMs: execution.runTimeoutMs,
+    },
+    abort,
+  );
+
   let sessionId: string | null = input.sessionId ?? null;
   let outputText = "";
   let usage: RuntimeUsage | null = null;
@@ -203,30 +214,8 @@ export async function runClaudeQueryAttempt(
     }
   };
 
-  try {
-    const firstEntry = await Promise.race<IteratorResult<unknown>>([
-      iterator.next(),
-      new Promise<IteratorResult<unknown>>((_, reject) => {
-        setTimeout(() => reject(timeoutError), timeoutMs);
-      }),
-    ]);
-
-    if (!firstEntry.done) {
-      processMessage(firstEntry.value);
-    }
-
-    let next = await iterator.next();
-    while (!next.done) {
-      processMessage(next.value);
-      next = await iterator.next();
-    }
-  } catch (error) {
-    try {
-      await iterator.return?.();
-    } catch {
-      // best-effort stream cleanup
-    }
-    throw error;
+  for await (const value of iterator) {
+    processMessage(value);
   }
 
   if (terminalErrorSubtype) {

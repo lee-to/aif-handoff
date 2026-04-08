@@ -1,7 +1,8 @@
 import type { RuntimeRunInput, RuntimeRunResult } from "../../types.js";
+import { isRetriableTimeoutError, resolveRetryDelay } from "../../timeouts.js";
 import { classifyClaudeRuntimeError } from "./errors.js";
 import { parseExecutionOptions } from "./options.js";
-import { isQueryStartTimeoutError, runClaudeQueryAttempt } from "./stream.js";
+import { runClaudeQueryAttempt } from "./stream.js";
 
 export type { ClaudeRuntimeExecutionOptions } from "./options.js";
 
@@ -63,8 +64,9 @@ export async function runClaudeRuntime(
   adapterDefaults?: { pathToClaudeCodeExecutable?: string },
 ): Promise<RuntimeRunResult> {
   const execution = parseExecutionOptions(input, adapterDefaults);
-  const timeoutMs = Math.max(execution.queryStartTimeoutMs ?? 60_000, 1);
-  const retryDelayMs = Math.max(execution.queryStartRetryDelayMs ?? 1_000, 0);
+  const retryDelayMs = resolveRetryDelay({
+    startRetryDelayMs: execution.queryStartRetryDelayMs,
+  });
 
   logger.info(
     {
@@ -76,12 +78,14 @@ export async function runClaudeRuntime(
       resume: Boolean(input.resume && input.sessionId),
       hasAgentDefinitionName: Boolean(execution.agentDefinitionName),
       maxBudgetUsd: execution.maxBudgetUsd ?? null,
+      startTimeoutMs: execution.queryStartTimeoutMs ?? null,
+      runTimeoutMs: execution.runTimeoutMs ?? null,
     },
     "Starting Claude runtime run",
   );
 
   try {
-    const attempt = await runClaudeQueryAttempt(input, execution, timeoutMs, logger);
+    const attempt = await runClaudeQueryAttempt(input, execution, logger);
     logger.info(
       {
         runtimeId: input.runtimeId,
@@ -109,7 +113,6 @@ export async function runClaudeRuntime(
           await runClaudeQueryAttempt(
             { ...input, resume: false, sessionId: null },
             execution,
-            timeoutMs,
             logger,
           ),
         );
@@ -128,19 +131,19 @@ export async function runClaudeRuntime(
       }
     }
 
-    // Retry path 2: query_start_timeout → single retry
-    if (isQueryStartTimeoutError(error)) {
+    // Retry path 2: start timeout (retriable) → single retry
+    if (isRetriableTimeoutError(error)) {
       logger.warn(
         {
           runtimeId: input.runtimeId,
           workflowKind: input.workflowKind ?? null,
-          timeoutMs,
+          startTimeoutMs: execution.queryStartTimeoutMs ?? null,
         },
-        "Claude runtime query_start_timeout detected, retrying once",
+        "Claude runtime start timeout detected, retrying once",
       );
       await sleep(retryDelayMs);
       try {
-        return toResult(await runClaudeQueryAttempt(input, execution, timeoutMs, logger));
+        return toResult(await runClaudeQueryAttempt(input, execution, logger));
       } catch (retryError) {
         const classified = classifyClaudeRuntimeError(retryError);
         logger.error(

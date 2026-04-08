@@ -132,6 +132,7 @@ export function createOpenCodeRuntimeAdapter(
       id: runtimeId,
       providerId,
       displayName: options.displayName ?? "OpenCode",
+      supportsProjectInit: true,
       lightModel: null,
       defaultBaseUrlEnvVar: "OPENCODE_BASE_URL",
       defaultModelPlaceholder: "anthropic/claude-sonnet-4",

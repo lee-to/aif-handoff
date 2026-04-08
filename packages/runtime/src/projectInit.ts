@@ -47,7 +47,8 @@ export function initProject(options: InitProjectOptions): InitProjectResult {
   if (alreadyInitialized) return { ok: true };
 
   const descriptors = registry.listRuntimes();
-  const targets = runtimeIds ? descriptors.filter((d) => runtimeIds.includes(d.id)) : descriptors;
+  const initCapable = descriptors.filter((d) => d.supportsProjectInit);
+  const targets = runtimeIds ? initCapable.filter((d) => runtimeIds.includes(d.id)) : initCapable;
 
   const agentIds = targets.map((d) => d.id).join(",");
   if (!agentIds) return { ok: true };

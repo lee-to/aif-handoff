@@ -23,6 +23,7 @@ export interface ClaudeRuntimeExecutionOptions {
   maxTurns?: number;
   queryStartTimeoutMs?: number;
   queryStartRetryDelayMs?: number;
+  runTimeoutMs?: number;
   environment?: Record<string, string>;
   stderr?: (chunk: string) => void;
   onEvent?: (event: RuntimeEvent) => void;
@@ -50,7 +51,6 @@ function toStringRecord(value: Record<string, unknown> | null): Record<string, s
 
 /**
  * Parse generic RuntimeExecutionIntent + Claude-specific hooks into ClaudeRuntimeExecutionOptions.
- * Supports legacy `metadata` for backwards compat.
  */
 export function parseExecutionOptions(
   input: RuntimeRunInput,
@@ -58,8 +58,7 @@ export function parseExecutionOptions(
 ): ClaudeRuntimeExecutionOptions {
   const exec = input.execution;
   const hooks = (exec?.hooks ?? {}) as Record<string, unknown>;
-  const meta = input.metadata ?? {};
-  const src = { ...meta, ...hooks };
+  const src = { ...hooks };
 
   const maxBudgetUsd =
     exec?.maxBudgetUsd !== undefined
@@ -113,11 +112,13 @@ export function parseExecutionOptions(
       (typeof src.includePartialMessages === "boolean" ? src.includePartialMessages : undefined),
     maxTurns: exec?.maxTurns ?? (typeof src.maxTurns === "number" ? src.maxTurns : undefined),
     queryStartTimeoutMs:
-      exec?.timeoutMs ??
+      exec?.startTimeoutMs ??
       (typeof src.queryStartTimeoutMs === "number" ? src.queryStartTimeoutMs : undefined),
     queryStartRetryDelayMs:
-      exec?.retryDelayMs ??
+      exec?.startRetryDelayMs ??
       (typeof src.queryStartRetryDelayMs === "number" ? src.queryStartRetryDelayMs : undefined),
+    runTimeoutMs:
+      exec?.runTimeoutMs ?? (typeof src.runTimeoutMs === "number" ? src.runTimeoutMs : undefined),
     environment: {
       ...toStringRecord(toRecord(src.environment)),
       ...exec?.environment,

@@ -267,7 +267,7 @@ describe("executeSubagentQuery query_start_timeout retry", () => {
       .mockImplementationOnce(makeDelayedSuccess(40, "late-1"))
       .mockImplementationOnce(makeDelayedSuccess(40, "late-2"));
 
-    await expect(executeSubagentQuery(baseOptions)).rejects.toThrow(/query_start_timeout/i);
+    await expect(executeSubagentQuery(baseOptions)).rejects.toThrow(/start timeout/i);
     expect(queryMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -402,8 +402,9 @@ describe("executeSubagentQuery model fallback policy", () => {
     expect(callOptions.model).toBe("profile-model");
   });
 
-  it("uses adapter lightModel when no task override and no profile model", async () => {
-    // Claude adapter has lightModel: "haiku"
+  it("does not inject lightModel when no task override and no profile model", async () => {
+    // lightModel should only be used when explicitly passed via modelOverride
+    // (e.g. reviewGate.ts), not as a general fallback for all tasks
     findTaskByIdMock.mockReturnValue({
       id: "task-1",
       projectId: "project-1",
@@ -433,7 +434,7 @@ describe("executeSubagentQuery model fallback policy", () => {
     });
 
     const callOptions = queryMock.mock.calls[0][0].options as Record<string, unknown>;
-    expect(callOptions.model).toBe("haiku");
+    expect(callOptions.model).toBeUndefined();
   });
 
   it("omits model entirely when suppression is enabled", async () => {

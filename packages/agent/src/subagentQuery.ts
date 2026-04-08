@@ -190,18 +190,11 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
   const modelOverride =
     options.modelOverride ?? (suppressModelFallback ? null : (task?.modelOverride ?? null));
 
-  // Resolve adapter early to get lightModel for the resolution chain:
-  // modelOverride → profile.defaultModel → lightModel → env default
-  const registry = await getRuntimeRegistry();
-  const effectiveRuntimeId = effective.profile?.runtimeId ?? getEnv().AIF_DEFAULT_RUNTIME_ID;
-  const adapter = registry.resolveRuntime(effectiveRuntimeId);
-
   const resolved = resolveRuntimeProfile({
     source: effective.source,
     profile: effective.profile,
     workflow,
     modelOverride,
-    lightModelFallback: adapter.descriptor.lightModel ?? null,
     suppressModelFallback,
     runtimeOptionsOverride,
     fallbackRuntimeId: getEnv().AIF_DEFAULT_RUNTIME_ID,
@@ -219,6 +212,12 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
       },
     },
   });
+
+  // Resolve adapter after profile — lightModel is NOT injected into the
+  // general resolution chain. Callers that need lightModel (reviewGate)
+  // pass it explicitly via modelOverride.
+  const registry = await getRuntimeRegistry();
+  const adapter = registry.resolveRuntime(resolved.runtimeId);
 
   // Use transport-aware capabilities — adapters like Codex expose different
   // capabilities depending on the active transport (SDK vs CLI vs API).
@@ -323,8 +322,9 @@ function buildExecutionIntent(
   return {
     maxBudgetUsd: options.maxBudgetUsd ?? null,
     maxTurns: options.maxTurns,
-    timeoutMs: options.queryStartTimeoutMs ?? env.AGENT_QUERY_START_TIMEOUT_MS,
-    retryDelayMs: options.queryStartRetryDelayMs ?? env.AGENT_QUERY_START_RETRY_DELAY_MS,
+    startTimeoutMs: options.queryStartTimeoutMs ?? env.AGENT_QUERY_START_TIMEOUT_MS,
+    startRetryDelayMs: options.queryStartRetryDelayMs ?? env.AGENT_QUERY_START_RETRY_DELAY_MS,
+    runTimeoutMs: env.AGENT_STAGE_RUN_TIMEOUT_MS,
     includePartialMessages: options.includePartialMessages ?? false,
     agentDefinitionName,
     systemPromptAppend,
@@ -424,9 +424,6 @@ export async function executeSubagentQuery(
       headers: context.headers,
       options: context.options,
       execution: executionIntent,
-      metadata: {
-        timeoutMs: getEnv().AGENT_STAGE_RUN_TIMEOUT_MS,
-      },
     } as const;
 
     const result =

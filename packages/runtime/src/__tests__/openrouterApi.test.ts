@@ -171,6 +171,39 @@ describe("OpenRouter API transport", () => {
       ).rejects.toBeInstanceOf(OpenRouterRuntimeAdapterError);
     });
 
+    it("throws timeout error when run exceeds runTimeoutMs", async () => {
+      fetchMock.mockRejectedValueOnce(
+        new DOMException("The operation was aborted", "TimeoutError"),
+      );
+
+      await expect(
+        runOpenRouterApi(
+          createRunInput({
+            options: { apiKey: "sk-test" },
+            execution: { runTimeoutMs: 100 },
+          }),
+        ),
+      ).rejects.toMatchObject({
+        name: "RuntimeExecutionError",
+        category: "timeout",
+        message: expect.stringContaining("Run timeout"),
+      });
+    });
+
+    it("passes run timeout signal to fetch when runTimeoutMs is set", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ choices: [{ message: { content: "ok" } }] }));
+
+      await runOpenRouterApi(
+        createRunInput({
+          options: { apiKey: "sk-test" },
+          execution: { runTimeoutMs: 30_000 },
+        }),
+      );
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    });
+
     it("returns empty output when choices array is empty", async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse({ choices: [], usage: {} }));
 
@@ -282,6 +315,43 @@ describe("OpenRouter API transport", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(result.outputText).toBe("retry");
+    });
+
+    it("clears start timer when first chunk arrives before startTimeoutMs", async () => {
+      fetchMock.mockResolvedValueOnce(
+        sseResponse([
+          'data: {"id":"gen-1","choices":[{"delta":{"content":"quick"}}]}\n\n',
+          "data: [DONE]\n\n",
+        ]),
+      );
+
+      const result = await runOpenRouterApiStreaming(
+        createRunInput({
+          options: { apiKey: "sk-test" },
+          execution: { startTimeoutMs: 60_000, runTimeoutMs: 120_000 },
+        }),
+      );
+
+      expect(result.outputText).toBe("quick");
+    });
+
+    it("throws timeout error when streaming run exceeds runTimeoutMs", async () => {
+      fetchMock.mockRejectedValueOnce(
+        new DOMException("The operation was aborted", "TimeoutError"),
+      );
+
+      await expect(
+        runOpenRouterApiStreaming(
+          createRunInput({
+            options: { apiKey: "sk-test" },
+            execution: { runTimeoutMs: 100 },
+          }),
+        ),
+      ).rejects.toMatchObject({
+        name: "RuntimeExecutionError",
+        category: "timeout",
+        message: expect.stringContaining("Run timeout"),
+      });
     });
 
     it("ignores malformed SSE chunks and continues", async () => {

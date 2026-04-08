@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { initBaseProjectDirectory, initProjectDirectory } from "../projectInit.js";
+import { initBaseProjectDirectory } from "../projectInit.js";
 
 describe("projectInit", () => {
   it("creates project root and git repo but does not create .ai-factory/", () => {
@@ -22,17 +22,6 @@ describe("projectInit", () => {
     try {
       initBaseProjectDirectory(projectRoot);
       initBaseProjectDirectory(projectRoot);
-
-      expect(existsSync(projectRoot)).toBe(true);
-    } finally {
-      rmSync(projectRoot, { recursive: true, force: true });
-    }
-  }, 15000);
-
-  it("deprecated initProjectDirectory still works", () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), "aif-project-init-"));
-    try {
-      initProjectDirectory(projectRoot);
 
       expect(existsSync(projectRoot)).toBe(true);
     } finally {

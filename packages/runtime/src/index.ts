@@ -88,6 +88,7 @@ export {
 
 export {
   resolveRuntimePromptPolicy,
+  transformSkillCommandPrefix,
   type RuntimePromptPolicyInput,
   type RuntimePromptPolicyLogger,
   type RuntimePromptPolicyResult,
@@ -108,6 +109,20 @@ export { bootstrapRuntimeRegistry, type BootstrapRuntimeRegistryOptions } from "
 export { initProject, type InitProjectOptions, type InitProjectResult } from "./projectInit.js";
 
 export { isValidTrustToken, RUNTIME_TRUST_TOKEN, type RuntimeTrustToken } from "./trust.js";
+
+export {
+  isRetriableTimeoutError,
+  makeProcessRunTimeoutError,
+  makeProcessStartTimeoutError,
+  resolveRetryDelay,
+  sleepMs,
+  TIMEOUT_RETRIABLE_KEY,
+  type ProcessTimeoutResult,
+  type TimeoutIntent,
+  type TimeoutLogger,
+  withProcessTimeouts,
+  withStreamTimeouts,
+} from "./timeouts.js";
 
 export {
   createClaudeRuntimeAdapter,

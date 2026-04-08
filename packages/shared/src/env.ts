@@ -107,6 +107,7 @@ const envSchema = z.object({
       return value;
     }, z.boolean())
     .default(true),
+  TELEGRAM_BOT_API_URL: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_USER_ID: z.string().optional(),
 });

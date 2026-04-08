@@ -5,7 +5,8 @@ import {
   RuntimeResolutionError,
 } from "./errors.js";
 import { resolveRuntimeModuleRegistrar } from "./module.js";
-import type { RuntimeAdapter, RuntimeDescriptor } from "./types.js";
+import { transformSkillCommandPrefix } from "./promptPolicy.js";
+import type { RuntimeAdapter, RuntimeDescriptor, RuntimeRunInput } from "./types.js";
 
 export interface RuntimeRegistryLogger {
   debug(context: Record<string, unknown>, message: string): void;
@@ -35,6 +36,33 @@ function createFallbackLogger(): RuntimeRegistryLogger {
 
 function normalizeRuntimeId(runtimeId: string): string {
   return runtimeId.trim().toLowerCase();
+}
+
+/**
+ * Wrap an adapter so that `run()` and `resume()` automatically transform
+ * skill command prefixes in the prompt before forwarding to the real adapter.
+ *
+ * This is the single place where cross-cutting prompt transforms are applied,
+ * so callers never need to remember to transform manually.
+ */
+function wrapAdapterWithTransforms(adapter: RuntimeAdapter): RuntimeAdapter {
+  const prefix = adapter.descriptor.skillCommandPrefix;
+  if (!prefix || prefix === "/") return adapter;
+
+  function transformPrompt(input: RuntimeRunInput): RuntimeRunInput {
+    return { ...input, prompt: transformSkillCommandPrefix(input.prompt, prefix!) };
+  }
+
+  return {
+    ...adapter,
+    run(input) {
+      return adapter.run(transformPrompt(input));
+    },
+    resume: adapter.resume
+      ? (input) =>
+          adapter.resume!(transformPrompt(input) as RuntimeRunInput & { sessionId: string })
+      : undefined,
+  };
 }
 
 export class RuntimeRegistry {
@@ -91,7 +119,7 @@ export class RuntimeRegistry {
     }
 
     this.log.debug({ runtimeId: normalizedRuntimeId }, "Resolved runtime adapter");
-    return adapter;
+    return wrapAdapterWithTransforms(adapter);
   }
 
   tryResolveRuntime(runtimeId: string): RuntimeAdapter | null {
@@ -102,7 +130,7 @@ export class RuntimeRegistry {
       this.log.debug({ runtimeId: normalizedRuntimeId }, "Resolved runtime adapter");
     }
 
-    return adapter;
+    return adapter ? wrapAdapterWithTransforms(adapter) : null;
   }
 
   hasRuntime(runtimeId: string): boolean {

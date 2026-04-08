@@ -14,6 +14,12 @@ import type {
   RuntimeRunResult,
   RuntimeUsage,
 } from "../../types.js";
+import {
+  isRetriableTimeoutError,
+  resolveRetryDelay,
+  sleepMs,
+  withStreamTimeouts,
+} from "../../timeouts.js";
 import { classifyCodexRuntimeError } from "./errors.js";
 
 export interface CodexSdkLogger {
@@ -374,7 +380,7 @@ function threadEventToRuntimeEvent(event: ThreadEvent): RuntimeEvent | null {
 // Main SDK execution
 // ---------------------------------------------------------------------------
 
-export async function runCodexSdk(
+async function runCodexSdkAttempt(
   input: RuntimeRunInput,
   logger?: CodexSdkLogger,
 ): Promise<RuntimeRunResult> {
@@ -382,17 +388,6 @@ export async function runCodexSdk(
   const threadOpts = buildThreadOptions(input);
   const turnOpts = buildTurnOptions(input.execution);
   const execution = input.execution;
-
-  logger?.info?.(
-    {
-      runtimeId: input.runtimeId,
-      transport: "sdk",
-      resume: Boolean(input.resume && input.sessionId),
-      model: input.model ?? null,
-      hasOutputSchema: Boolean(turnOpts.outputSchema),
-    },
-    "Starting Codex SDK run",
-  );
 
   const codex = new Codex(codexOpts);
 
@@ -403,12 +398,23 @@ export async function runCodexSdk(
 
   const { events } = await thread.runStreamed(input.prompt, turnOpts);
 
+  // Wrap event stream with shared timeout utilities
+  const abort = execution?.abortController ?? new AbortController();
+  const wrappedEvents = withStreamTimeouts(
+    events[Symbol.asyncIterator](),
+    {
+      startTimeoutMs: execution?.startTimeoutMs,
+      runTimeoutMs: execution?.runTimeoutMs,
+    },
+    abort,
+  );
+
   let outputText = "";
   let sessionId: string | null = null;
   let usage: RuntimeUsage | null = null;
   const runtimeEvents: RuntimeEvent[] = [];
 
-  for await (const event of events) {
+  for await (const event of wrappedEvents) {
     // Extract thread ID from the first event
     if (event.type === "thread.started") {
       sessionId = event.thread_id;
@@ -451,22 +457,54 @@ export async function runCodexSdk(
     sessionId = thread.id ?? null;
   }
 
-  logger?.info?.(
-    {
-      runtimeId: input.runtimeId,
-      transport: "sdk",
-      sessionId,
-      outputLength: outputText.length,
-      eventCount: runtimeEvents.length,
-      hasUsage: Boolean(usage),
-    },
-    "Codex SDK run completed",
-  );
-
   return {
     outputText,
     sessionId,
     usage,
     events: runtimeEvents,
   };
+}
+
+export async function runCodexSdk(
+  input: RuntimeRunInput,
+  logger?: CodexSdkLogger,
+): Promise<RuntimeRunResult> {
+  logger?.info?.(
+    {
+      runtimeId: input.runtimeId,
+      transport: "sdk",
+      resume: Boolean(input.resume && input.sessionId),
+      model: input.model ?? null,
+      startTimeoutMs: input.execution?.startTimeoutMs ?? null,
+      runTimeoutMs: input.execution?.runTimeoutMs ?? null,
+    },
+    "Starting Codex SDK run",
+  );
+
+  try {
+    const result = await runCodexSdkAttempt(input, logger);
+    logger?.info?.(
+      {
+        runtimeId: input.runtimeId,
+        transport: "sdk",
+        sessionId: result.sessionId,
+        outputLength: result.outputText?.length ?? 0,
+        eventCount: result.events?.length ?? 0,
+        hasUsage: Boolean(result.usage),
+      },
+      "Codex SDK run completed",
+    );
+    return result;
+  } catch (error) {
+    if (isRetriableTimeoutError(error)) {
+      const retryDelayMs = resolveRetryDelay(input.execution ?? {});
+      logger?.warn?.(
+        { runtimeId: input.runtimeId, retryDelayMs },
+        "Codex SDK start timeout, retrying once after delay",
+      );
+      await sleepMs(retryDelayMs);
+      return runCodexSdkAttempt(input, logger);
+    }
+    throw error;
+  }
 }

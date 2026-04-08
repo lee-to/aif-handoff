@@ -18,7 +18,6 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     sessionId: "session-1",
     resume: false,
     options: {},
-    metadata: {},
     ...overrides,
   };
 }
@@ -333,6 +332,67 @@ describe("codex api transport (OpenAI Chat Completions)", () => {
     expect(events).toHaveLength(2);
     expect(events[0].message).toBe("Hello");
     expect(events[1].message).toBe(" world");
+  });
+
+  it("throws timeout error when non-streaming run exceeds runTimeoutMs", async () => {
+    fetchMock.mockRejectedValueOnce(new DOMException("The operation was aborted", "TimeoutError"));
+
+    await expect(
+      runCodexAgentApi(
+        createRunInput({
+          options: { baseUrl: "https://api.openai.com/v1" },
+          execution: { runTimeoutMs: 100 },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "RuntimeExecutionError",
+      category: "timeout",
+      message: expect.stringContaining("Run timeout"),
+    });
+  });
+
+  it("passes run timeout signal to non-streaming fetch request", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        choices: [{ message: { content: "ok" } }],
+      }),
+    );
+
+    await runCodexAgentApi(
+      createRunInput({
+        options: { baseUrl: "https://api.openai.com/v1" },
+        execution: { runTimeoutMs: 30_000 },
+      }),
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("clears start timer when streaming receives first chunk with startTimeoutMs", async () => {
+    const sseBody = [
+      'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"fast"}}]}',
+      "data: [DONE]",
+      "",
+    ].join("\n");
+
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseBody));
+        controller.close();
+      },
+    });
+
+    fetchMock.mockResolvedValueOnce(new Response(stream, { status: 200 }));
+
+    const result = await runCodexAgentApiStreaming(
+      createRunInput({
+        options: { baseUrl: "https://api.openai.com/v1" },
+        execution: { startTimeoutMs: 60_000, runTimeoutMs: 120_000 },
+      }),
+    );
+
+    expect(result.outputText).toBe("fast");
   });
 
   it("retries streaming request on retryable 5xx response", async () => {

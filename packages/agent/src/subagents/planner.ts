@@ -163,6 +163,10 @@ ${commentsForPrompt}`;
 ${handoffContext}
 ${scopeConstraint}
 
+Autonomous Handoff mode: true.
+Do not ask interactive questions.
+Do not perform Handoff MCP sync yourself.
+
 Mode: ${plannerMode}, tests: ${planTests}, docs: ${planDocs}.
 Plan file: @${planPath}
 

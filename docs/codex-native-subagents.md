@@ -28,6 +28,21 @@ Default behavior after this change:
 - `codexSubagentStrategy: "isolated"` → explicit escape hatch to legacy isolated skill-session flow
 - Claude remains unchanged and continues using `.claude/agents/*`
 
+## Handoff-Aware Contract
+
+The Codex agents materialized by AI Factory are no longer generic role prompts only. They now encode the Handoff contract directly:
+
+- top-level coordinators understand explicit `HANDOFF_MODE`, `HANDOFF_TASK_ID`, and `HANDOFF_SKIP_REVIEW` context from the parent runtime
+- autonomous Handoff runs stay non-interactive and do not attempt Handoff MCP sync from inside the Codex agent
+- manual Codex sessions may preserve Handoff task linkage when a plan annotation already exists
+- worker and sidecar agents explicitly keep Handoff sync coordinator-owned
+
+What still comes from `aif-handoff` at runtime:
+
+- exact task title/description/attachments
+- exact plan path for the current run
+- final runtime capability negotiation (`native` vs `isolated`)
+
 ## Verification Checklist
 
 1. Install or upgrade AI Factory to the release containing PR `#70`.

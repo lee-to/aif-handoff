@@ -130,6 +130,11 @@ describe("runImplementer rework behavior", () => {
     const firstLine = call.prompt.split("\n")[0] ?? "";
     expect(firstLine).toBe("Implement the task using the provided plan.");
     expect(call.prompt).toContain("Implement the task using the provided plan.");
+    expect(call.prompt).toContain("HANDOFF_MODE: 1");
+    expect(call.prompt).toContain("HANDOFF_TASK_ID: task-2");
+    expect(call.prompt).toContain("HANDOFF_SKIP_REVIEW: 0");
+    expect(call.prompt).toContain("Autonomous Handoff mode: true.");
+    expect(call.prompt).toContain("Do not perform Handoff MCP sync yourself.");
     expect(call.prompt).toContain("Plan path:\n@.ai-factory/PLAN.md");
     expect(call.prompt).toContain("Rework mode: true");
     expect(call.prompt).toContain("message: latest-human");
@@ -168,6 +173,9 @@ describe("runImplementer rework behavior", () => {
     const firstLine = call.prompt.split("\n")[0] ?? "";
     expect(firstLine).toBe("Implement the task using the provided plan.");
     expect(call.prompt).toContain("Implement the task using the provided plan.");
+    expect(call.prompt).toContain("HANDOFF_MODE: 1");
+    expect(call.prompt).toContain("HANDOFF_TASK_ID: task-3");
+    expect(call.prompt).toContain("HANDOFF_SKIP_REVIEW: 0");
     const syncCall = queryMock.mock.calls[1]?.[0] as { prompt: string };
     expect(syncCall.prompt).toContain("Update only checkbox states");
     const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-3")).get();
@@ -197,6 +205,8 @@ describe("runImplementer rework behavior", () => {
     const firstLine = call.prompt.split("\n")[0] ?? "";
     expect(firstLine).toBe("Implement the task using the provided plan.");
     expect(call.prompt).toContain("Implement the task using the provided plan.");
+    expect(call.prompt).toContain("HANDOFF_MODE: 1");
+    expect(call.prompt).toContain("HANDOFF_TASK_ID: task-4");
     const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-4")).get();
     expect(updatedTask?.implementationLog).toBe("Implementation done");
   });
@@ -247,5 +257,28 @@ describe("runImplementer rework behavior", () => {
 
     const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
     expect(call.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
+    expect(call.prompt).not.toContain("HANDOFF_MODE: 1");
+  });
+
+  it("passes HANDOFF_SKIP_REVIEW=1 in native mode when skipReview is enabled", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-skip-review",
+        projectId: "project-1",
+        title: "Task",
+        description: "Desc",
+        status: "implementing",
+        plan: "## Plan\n- [ ] Task 1: Pending",
+        reworkRequested: false,
+        useSubagents: true,
+        skipReview: true,
+      })
+      .run();
+
+    await runImplementer("task-skip-review", projectRoot);
+
+    const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(call.prompt).toContain("HANDOFF_SKIP_REVIEW: 1");
   });
 });

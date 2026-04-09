@@ -30,10 +30,10 @@ function isVersionAtLeast(
 }
 
 function getAiFactoryVersion(): string | null {
-  const execOptions = {
-    encoding: "utf8" as const,
+  const execOptions: { encoding: "utf8"; timeout: number; stdio: ["ignore", "pipe", "ignore"] } = {
+    encoding: "utf8",
     timeout: 15_000,
-    stdio: ["ignore", "pipe", "ignore"] as const,
+    stdio: ["ignore", "pipe", "ignore"],
   };
 
   // 1. Local install — fastest, no network

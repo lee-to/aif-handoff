@@ -135,7 +135,10 @@ SDK-specific options:
 - `codexConfig` — JSON object of CLI config overrides (flattened to `--config` flags)
 - `sandboxMode` — one of `read-only`, `workspace-write`, `danger-full-access`
 - `modelReasoningEffort` — one of `minimal`, `low`, `medium`, `high`, `xhigh`
-- `codexSubagentStrategy` — `isolated` (default) or `native`; use `native` only when Codex-native agent assets are materialized by the project bootstrap layer
+- `codexSubagentStrategy` — `native` (default) or `isolated`; use `isolated` as an escape hatch when you need the legacy fresh-session skill workflow instead of native Codex agents
+
+> Migration note: older releases defaulted `codexSubagentStrategy` to `isolated`.
+> If you relied on the isolated skill-session path, set `codexSubagentStrategy: "isolated"` explicitly after upgrading.
 
 ### Codex (CLI transport)
 

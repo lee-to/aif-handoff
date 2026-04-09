@@ -147,7 +147,7 @@ describe("runtime workflow spec + prompt policy", () => {
     expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
   });
 
-  it("defaults Codex native_subagents requests to isolated skill-command fallback until native strategy is explicitly enabled", () => {
+  it("defaults Codex native_subagents requests to native orchestration when no strategy override is set", () => {
     const workflow = createRuntimeWorkflowSpec({
       workflowKind: "implementer",
       prompt: "Implement this feature",
@@ -165,9 +165,34 @@ describe("runtime workflow spec + prompt policy", () => {
       workflow,
     });
 
-    expect(resolved.usedNativeSubagentWorkflow).toBe(false);
-    expect(resolved.usedIsolatedSkillCommand).toBe(true);
+    expect(resolved.usedNativeSubagentWorkflow).toBe(true);
+    expect(resolved.usedIsolatedSkillCommand).toBe(false);
     expect(resolved.usedFallbackSlashCommand).toBe(false);
+    expect(resolved.prompt).toContain('Spawn the custom Codex agent "implement-coordinator"');
+  });
+
+  it("keeps Claude native agent-definition behavior unchanged when Codex strategy options are present", () => {
+    const workflow = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this feature",
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement",
+      fallbackStrategy: "slash_command",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+    });
+
+    const resolved = resolveRuntimePromptPolicy({
+      runtimeId: "claude",
+      capabilities: CLAUDE_CAPABILITIES,
+      runtimeOptions: { codexSubagentStrategy: "isolated" },
+      workflow,
+    });
+
+    expect(resolved.usedNativeSubagentWorkflow).toBe(false);
+    expect(resolved.usedIsolatedSkillCommand).toBe(false);
+    expect(resolved.usedFallbackSlashCommand).toBe(false);
+    expect(resolved.agentDefinitionName).toBe("implement-coordinator");
+    expect(resolved.prompt).toBe("Implement this feature");
   });
 
   it("downgrades isolated skill-command mode to slash fallback when runtime lacks capability", () => {

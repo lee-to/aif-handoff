@@ -45,7 +45,7 @@ describe("runReviewer", () => {
       .run();
   });
 
-  it("uses isolated skill sessions for review sidecars when subagents are enabled", async () => {
+  it("uses native subagent workflows for review sidecars when subagents are enabled", async () => {
     testDb.current
       .insert(tasks)
       .values({
@@ -73,7 +73,7 @@ describe("runReviewer", () => {
     expect(reviewCall.agent).toBe("review-sidecar");
     expect(reviewCall.workflowSpec).toEqual(
       expect.objectContaining({
-        executionMode: "isolated_skill_session",
+        executionMode: "native_subagents",
         sessionReusePolicy: "new_session",
       }),
     );
@@ -82,7 +82,7 @@ describe("runReviewer", () => {
     expect(securityCall.agent).toBe("security-sidecar");
     expect(securityCall.workflowSpec).toEqual(
       expect.objectContaining({
-        executionMode: "isolated_skill_session",
+        executionMode: "native_subagents",
         sessionReusePolicy: "new_session",
       }),
     );

@@ -76,6 +76,10 @@ packages/
         ├── notifier.ts      # Notification dispatch
         ├── claudeDiagnostics.ts  # Agent SDK health checks
         └── subagents/       # Subagent launchers (planner, implementer, reviewer)
+
+.claude/agents/          # Claude-native custom agents loaded by Claude runtimes
+.codex/agents/           # Codex-native custom agents for native Codex subagent orchestration
+.codex/config.toml       # Project Codex agent orchestration defaults
 ```
 
 ## Dependency Rules
@@ -133,7 +137,7 @@ agent ──→ runtime
 
 4. **Single source of truth for data access** — Database schema and low-level primitives live in `shared`, but all reads/writes outside `shared` go through `@aif/data`. This keeps query construction and repository logic centralized. `web` always goes through the API via HTTP/WebSocket.
 
-5. **Agent definitions are config, not code** — Subagent behavior is defined in `.claude/agents/*.md` files, loaded by the Agent SDK via `settingSources: ["project"]`. The `agent` package orchestrates when to invoke them, not what they do.
+5. **Agent definitions are config, not code** — Subagent behavior is defined in runtime-specific agent assets (`.claude/agents/*.md` for Claude, `.codex/agents/*.toml` for Codex native subagents). The `agent` package orchestrates when to invoke them, not what they do.
 
 6. **Code quality principles are mandatory** — All modules must follow SOLID and DRY principles to keep responsibilities clear, reduce duplication, and preserve maintainability as the monorepo grows.
 

@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved subagent workflows (Claude adapter first).
+Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved subagent workflows across Claude and Codex execution paths.
 
 ## Tech Stack
 
@@ -87,7 +87,9 @@ packages/
         ├── notifier.ts      # Notification system
         └── subagents/       # planner.ts, implementer.ts, reviewer.ts
 
-.claude/agents/          # Agent definitions (loaded by runtimes that support them)
+.claude/agents/          # Claude-native agent definitions
+.codex/agents/           # Codex-native custom agent definitions
+.codex/config.toml       # Project Codex agent orchestration defaults
 .docker/                 # Dockerfile, entrypoint, Angie configs
 data/                    # SQLite database files (gitignored)
 .ai-factory/             # AI Factory context and references
@@ -105,6 +107,7 @@ data/                    # SQLite database files (gitignored)
 | `packages/data/src/index.ts`          | Centralized data-access API           |
 | `packages/shared/src/schema.ts`       | Database schema (drizzle-orm)         |
 | `packages/shared/src/stateMachine.ts` | Task state transitions                |
+| `.codex/agents/`                      | Codex-native agent contract mirror    |
 | `turbo.json`                          | Turborepo task definitions            |
 
 ## Documentation

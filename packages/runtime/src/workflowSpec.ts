@@ -13,7 +13,10 @@ export type RuntimeWorkflowKind =
 export type RuntimeWorkflowFallbackStrategy = "none" | "slash_command";
 
 export type RuntimeSessionReusePolicy = "resume_if_available" | "new_session" | "never";
-export type RuntimeWorkflowExecutionMode = "standard" | "isolated_skill_session";
+export type RuntimeWorkflowExecutionMode =
+  | "standard"
+  | "isolated_skill_session"
+  | "native_subagents";
 
 export interface RuntimeWorkflowPromptInput {
   prompt: string;
@@ -55,10 +58,12 @@ export function createRuntimeWorkflowSpec(input: RuntimeWorkflowSpecInput): Runt
       `Workflow ${input.workflowKind} requested isolated_skill_session without fallbackSlashCommand`,
     );
   }
-  const executionMode =
-    requestedExecutionMode === "isolated_skill_session" && input.fallbackSlashCommand
+  const executionMode: RuntimeWorkflowExecutionMode =
+    requestedExecutionMode === "isolated_skill_session"
       ? "isolated_skill_session"
-      : "standard";
+      : requestedExecutionMode === "native_subagents"
+        ? "native_subagents"
+        : "standard";
   const fallbackStrategy =
     executionMode === "isolated_skill_session" && rawFallbackStrategy === "none"
       ? "slash_command"

@@ -551,3 +551,88 @@ describe("executeSubagentQuery codex isolated skill-command mode", () => {
     expect(saveTaskSessionIdMock).not.toHaveBeenCalled();
   });
 });
+
+describe("executeSubagentQuery codex native subagent mode", () => {
+  beforeEach(() => {
+    (globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
+      queryMock;
+    queryMock.mockReset();
+    logActivityMock.mockReset();
+    incrementTaskTokenUsageMock.mockReset();
+    saveTaskSessionIdMock.mockReset();
+    getTaskSessionIdMock.mockReset();
+    findTaskByIdMock.mockReset();
+    resolveEffectiveRuntimeProfileMock.mockReset();
+    codexStartThreadMock.mockReset();
+    codexResumeThreadMock.mockReset();
+  });
+
+  it("uses native Codex orchestration prompt and skips session persistence", async () => {
+    getTaskSessionIdMock.mockReturnValue("persisted-session");
+    findTaskByIdMock.mockReturnValue({
+      id: "task-codex-native-1",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+    });
+    resolveEffectiveRuntimeProfileMock.mockReturnValue({
+      source: "project_default",
+      profile: {
+        id: "profile-codex",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        defaultModel: "gpt-5.4",
+        options: {},
+      },
+      taskRuntimeProfileId: null,
+      projectRuntimeProfileId: "profile-codex",
+      systemRuntimeProfileId: null,
+    });
+
+    const runStreamedMock = vi.fn<
+      (prompt: string, turnOptions?: unknown) => Promise<{ events: AsyncIterable<unknown> }>
+    >(async () => ({
+      events: (async function* () {
+        yield { type: "thread.started", thread_id: "thread-native-1" };
+        yield { type: "item.completed", item: { type: "agent_message", text: "done" } };
+        yield { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } };
+      })(),
+    }));
+
+    codexStartThreadMock.mockReturnValue({
+      id: "thread-native-1",
+      runStreamed: runStreamedMock,
+    });
+
+    const workflowSpec = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this task",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement @.ai-factory/PLAN.md",
+      fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
+      sessionReusePolicy: "resume_if_available",
+    });
+
+    await executeSubagentQuery({
+      taskId: "task-codex-native-1",
+      projectRoot: "/tmp/project",
+      agentName: "implement-coordinator",
+      prompt: "Implement this task",
+      workflowSpec,
+      workflowKind: "implementer",
+    });
+
+    expect(codexResumeThreadMock).not.toHaveBeenCalled();
+    expect(codexStartThreadMock).toHaveBeenCalledTimes(1);
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+    const [firstRunStreamedCall] = runStreamedMock.mock.calls;
+    const passedPrompt = firstRunStreamedCall[0];
+    expect(passedPrompt).toContain("Use Codex native subagents for this workflow.");
+    expect(passedPrompt).toContain('Spawn the custom Codex agent "implement-coordinator"');
+    expect(passedPrompt).not.toContain("$aif-implement @.ai-factory/PLAN.md");
+    expect(saveTaskSessionIdMock).not.toHaveBeenCalled();
+  });
+});

@@ -54,7 +54,12 @@ coverage/
 .claude/worktrees
 
 # Codex and other agent
-/.codex/
+/.codex/*
+!/.codex/skills/
+!/.codex/skills/**
+!/.codex/agents/
+!/.codex/agents/**
+!/.codex/config.toml
 /.agents/
 /.github/skills
 

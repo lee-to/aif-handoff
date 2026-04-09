@@ -15,6 +15,7 @@ const CODEX_CAPABILITIES: RuntimeCapabilities = {
   supportsApprovals: true,
   supportsCustomEndpoint: true,
   supportsIsolatedSubagentWorkflows: true,
+  supportsNativeSubagentWorkflows: true,
 };
 
 const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
@@ -26,6 +27,7 @@ const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
   supportsApprovals: true,
   supportsCustomEndpoint: true,
   supportsIsolatedSubagentWorkflows: false,
+  supportsNativeSubagentWorkflows: false,
 };
 
 describe("runtime workflow spec + prompt policy", () => {
@@ -94,6 +96,57 @@ describe("runtime workflow spec + prompt policy", () => {
     expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
   });
 
+  it("uses native Codex subagents when runtime supports them", () => {
+    const workflow = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this feature",
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement @.ai-factory/PLAN.md",
+      fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+    });
+
+    const resolved = resolveRuntimePromptPolicy({
+      runtimeId: "codex",
+      capabilities: CODEX_CAPABILITIES,
+      runtimeOptions: {},
+      workflow,
+    });
+
+    expect(resolved.usedNativeSubagentWorkflow).toBe(true);
+    expect(resolved.usedIsolatedSkillCommand).toBe(false);
+    expect(resolved.usedFallbackSlashCommand).toBe(false);
+    expect(resolved.agentDefinitionName).toBeUndefined();
+    expect(resolved.prompt).toContain("Use Codex native subagents for this workflow.");
+    expect(resolved.prompt).toContain('Spawn the custom Codex agent "implement-coordinator"');
+    expect(resolved.prompt).not.toContain("/aif-implement @.ai-factory/PLAN.md");
+  });
+
+  it("falls back to isolated skill-command mode when native Codex subagents are disabled by runtime option", () => {
+    const workflow = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this feature",
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement @.ai-factory/PLAN.md",
+      fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+    });
+
+    const resolved = resolveRuntimePromptPolicy({
+      runtimeId: "codex",
+      capabilities: CODEX_CAPABILITIES,
+      runtimeOptions: { codexSubagentStrategy: "isolated" },
+      workflow,
+    });
+
+    expect(resolved.usedNativeSubagentWorkflow).toBe(false);
+    expect(resolved.usedIsolatedSkillCommand).toBe(true);
+    expect(resolved.usedFallbackSlashCommand).toBe(false);
+    expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
+  });
+
   it("downgrades isolated skill-command mode to slash fallback when runtime lacks capability", () => {
     const workflow = createRuntimeWorkflowSpec({
       workflowKind: "implementer",
@@ -114,6 +167,33 @@ describe("runtime workflow spec + prompt policy", () => {
       workflow,
     });
 
+    expect(resolved.usedIsolatedSkillCommand).toBe(false);
+    expect(resolved.usedFallbackSlashCommand).toBe(true);
+    expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
+  });
+
+  it("downgrades native Codex subagents to slash fallback when neither native nor isolated execution is available", () => {
+    const workflow = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this feature",
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement @.ai-factory/PLAN.md",
+      fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+    });
+
+    const resolved = resolveRuntimePromptPolicy({
+      runtimeId: "openrouter",
+      capabilities: {
+        ...CODEX_CAPABILITIES,
+        supportsIsolatedSubagentWorkflows: false,
+        supportsNativeSubagentWorkflows: false,
+      },
+      workflow,
+    });
+
+    expect(resolved.usedNativeSubagentWorkflow).toBe(false);
     expect(resolved.usedIsolatedSkillCommand).toBe(false);
     expect(resolved.usedFallbackSlashCommand).toBe(true);
     expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");

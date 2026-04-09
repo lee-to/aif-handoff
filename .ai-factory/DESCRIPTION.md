@@ -7,7 +7,7 @@ Autonomous task management system with Kanban board and AI subagents. Tasks flow
 ## Core Features
 
 - Kanban board with drag-and-drop task management
-- Automated task pipeline via pluggable runtime adapters (Claude, Codex, custom)
+- Automated task pipeline via pluggable runtime adapters (Claude, Codex, custom), with runtime-specific agent contracts
 - Real-time updates via WebSocket
 - Plan generation, implementation, and code review — all autonomous
 
@@ -16,7 +16,7 @@ Autonomous task management system with Kanban board and AI subagents. Tasks flow
 - **Runtime:** Node.js + TypeScript (ES2022, ESNext modules)
 - **Monorepo:** Turborepo (npm workspaces)
 - **Runtime Modularity:** `@aif/runtime` workspace for runtime/provider contracts and registry
-- **Runtime Adapters:** Claude (Agent SDK), Codex (CLI/API), OpenRouter (API), extensible via AIF_RUNTIME_MODULES
+- **Runtime Adapters:** Claude (Agent SDK), Codex (SDK/CLI/API), OpenRouter (API), extensible via AIF_RUNTIME_MODULES
 - **Database:** SQLite (better-sqlite3 + drizzle-orm)
 - **API:** Hono + @hono/node-server + WebSocket (ws)
 - **Validation:** zod + @hono/zod-validator
@@ -40,9 +40,11 @@ Lint guard enforces DB boundaries: `api`, `agent`, and `runtime` can access DB o
 
 ## Agent Pipeline
 
-The coordinator polls every 30s and delegates to `.claude/agents/` definitions:
+The coordinator polls every 30s and delegates through runtime-specific agent contracts:
+- **Claude path:** `.claude/agents/` custom agents
+- **Codex path:** `.codex/agents/` custom agents (native subagent orchestration on supported transports)
 - **Backlog → Planning → Plan Ready:** `plan-coordinator` (iterative plan refinement)
-- **Plan Ready → Implementing → Review:** `implement-coordinator` (parallel task execution with worktrees)
+- **Plan Ready → Implementing → Review:** `implement-coordinator` (parallel task execution with workers/sidecars)
 - **Review → Done:** `review-sidecar` + `security-sidecar` (code review and security audit)
 
 ## Non-Functional Requirements

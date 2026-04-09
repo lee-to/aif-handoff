@@ -83,6 +83,7 @@ export function resolveRuntimePromptPolicy(
   const wantsNativeSubagentWorkflow = input.workflow.executionMode === "native_subagents";
   const wantsIsolatedSkillCommand = input.workflow.executionMode === "isolated_skill_session";
   const wantsSlashFallback = input.workflow.fallbackStrategy === "slash_command";
+  // Returns null for non-Codex runtimes; capability checks remain the real gate.
   const requestedCodexSubagentStrategy = resolveCodexSubagentStrategy(
     input.runtimeId,
     input.runtimeOptions,

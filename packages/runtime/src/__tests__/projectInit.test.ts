@@ -71,12 +71,22 @@ function createMockRegistry(
 describe("initProject (runtime)", () => {
   let projectRoot: string;
 
+  /** Configure execFileSyncMock to return a version string for --version calls. */
+  function mockAiFactoryVersion(version: string): void {
+    execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes("--version")) return version;
+      return undefined;
+    });
+  }
+
   beforeEach(() => {
     projectRoot = mkdtempSync(join(tmpdir(), "aif-runtime-init-"));
     execFileSyncMock.mockReset();
     aiFactoryResolveMock.mockReset();
     initBaseProjectDirectoryMock.mockReset();
     aiFactoryResolveMock.mockReturnValue("C:\\fake\\ai-factory\\bin\\ai-factory.js");
+    // Default: version below threshold — no --config
+    mockAiFactoryVersion("2.9.2");
   });
 
   afterEach(() => {
@@ -182,5 +192,64 @@ describe("initProject (runtime)", () => {
 
     expect(result.ok).toBe(true);
     expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("adds --config flag when ai-factory version >= 2.9.3", () => {
+    mockAiFactoryVersion("2.9.3");
+    const registry = createMockRegistry();
+
+    const result = initProject({ projectRoot, registry });
+
+    expect(result.ok).toBe(true);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["C:\\fake\\ai-factory\\bin\\ai-factory.js", "init", "--agents", "claude,codex", "--config"],
+      expect.objectContaining({ cwd: projectRoot }),
+    );
+  });
+
+  it("omits --config flag when ai-factory version < 2.9.3", () => {
+    mockAiFactoryVersion("2.9.2");
+    const registry = createMockRegistry();
+
+    const result = initProject({ projectRoot, registry });
+
+    expect(result.ok).toBe(true);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["C:\\fake\\ai-factory\\bin\\ai-factory.js", "init", "--agents", "claude,codex"],
+      expect.objectContaining({ cwd: projectRoot }),
+    );
+  });
+
+  it("adds --config flag for higher versions like 3.0.0", () => {
+    mockAiFactoryVersion("3.0.0");
+    const registry = createMockRegistry();
+
+    const result = initProject({ projectRoot, registry });
+
+    expect(result.ok).toBe(true);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      process.execPath,
+      expect.arrayContaining(["--config"]),
+      expect.any(Object),
+    );
+  });
+
+  it("omits --config flag when version check fails", () => {
+    execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "npx" && args.includes("--version")) throw new Error("not found");
+      return undefined;
+    });
+    const registry = createMockRegistry();
+
+    const result = initProject({ projectRoot, registry });
+
+    expect(result.ok).toBe(true);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["C:\\fake\\ai-factory\\bin\\ai-factory.js", "init", "--agents", "claude,codex"],
+      expect.objectContaining({ cwd: projectRoot }),
+    );
   });
 });

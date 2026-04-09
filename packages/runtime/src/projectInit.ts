@@ -9,6 +9,61 @@ const log = logger("runtime-project-init");
 const moduleRequire = createRequire(import.meta.url);
 const IS_WINDOWS = process.platform === "win32";
 
+/** Minimum ai-factory version that supports --config flag. */
+const CONFIG_FLAG_MIN_VERSION = [2, 9, 3] as const;
+
+function parseVersion(raw: string): [number, number, number] | null {
+  const match = raw.trim().match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function isVersionAtLeast(
+  version: [number, number, number],
+  minimum: readonly [number, number, number],
+): boolean {
+  for (let i = 0; i < 3; i++) {
+    if (version[i] > minimum[i]) return true;
+    if (version[i] < minimum[i]) return false;
+  }
+  return true; // equal
+}
+
+function getAiFactoryVersion(): string | null {
+  const execOptions = {
+    encoding: "utf8" as const,
+    timeout: 15_000,
+    stdio: ["ignore", "pipe", "ignore"] as const,
+  };
+
+  // 1. Local install — fastest, no network
+  try {
+    const aiFactoryBin = moduleRequire.resolve("ai-factory/bin/ai-factory.js");
+    return execFileSync(process.execPath, [aiFactoryBin, "--version"], execOptions).trim();
+  } catch {
+    // not installed locally — fall through
+  }
+
+  // 2. npx (Windows: cmd /d /c npx) — covers global installs and remote fetching
+  try {
+    if (IS_WINDOWS) {
+      const shell = process.env.ComSpec ?? "cmd.exe";
+      return execFileSync(shell, ["/d", "/c", "npx ai-factory --version"], execOptions).trim();
+    }
+    return execFileSync("npx", ["ai-factory", "--version"], execOptions).trim();
+  } catch {
+    return null;
+  }
+}
+
+function supportsConfigFlag(): boolean {
+  const raw = getAiFactoryVersion();
+  if (!raw) return false;
+  const version = parseVersion(raw);
+  if (!version) return false;
+  return isVersionAtLeast(version, CONFIG_FLAG_MIN_VERSION);
+}
+
 export interface InitProjectOptions {
   /** Project root directory path. */
   projectRoot: string;
@@ -32,24 +87,31 @@ function quoteAgentIdsForCmd(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-function resolveAiFactoryCommand(agentIds: string): AiFactoryCommand {
+function resolveAiFactoryCommand(agentIds: string, useConfig: boolean): AiFactoryCommand {
+  const configArgs = useConfig ? ["--config"] : [];
+
   try {
     const aiFactoryBin = moduleRequire.resolve("ai-factory/bin/ai-factory.js");
     return {
       command: process.execPath,
-      args: [aiFactoryBin, "init", "--agents", agentIds],
+      args: [aiFactoryBin, "init", "--agents", agentIds, ...configArgs],
     };
   } catch {
     if (IS_WINDOWS) {
+      const configSuffix = useConfig ? " --config" : "";
       return {
         command: process.env.ComSpec ?? "cmd.exe",
-        args: ["/d", "/c", `npx ai-factory init --agents ${quoteAgentIdsForCmd(agentIds)}`],
+        args: [
+          "/d",
+          "/c",
+          `npx ai-factory init --agents ${quoteAgentIdsForCmd(agentIds)}${configSuffix}`,
+        ],
       };
     }
 
     return {
       command: "npx",
-      args: ["ai-factory", "init", "--agents", agentIds],
+      args: ["ai-factory", "init", "--agents", agentIds, ...configArgs],
     };
   }
 }
@@ -101,7 +163,9 @@ export function initProject(options: InitProjectOptions): InitProjectResult {
   if (!agentIds) return { ok: true };
 
   try {
-    const command = resolveAiFactoryCommand(agentIds);
+    const useConfig = supportsConfigFlag();
+    const command = resolveAiFactoryCommand(agentIds, useConfig);
+    log.debug({ useConfig }, "ai-factory --config flag support");
     execFileSync(command.command, command.args, {
       cwd: projectRoot,
       stdio: "ignore",

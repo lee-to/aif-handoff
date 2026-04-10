@@ -7,6 +7,7 @@ import { tasksRouter } from "./routes/tasks.js";
 import { chatRouter } from "./routes/chat.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { runtimeProfilesRouter } from "./routes/runtimeProfiles.js";
+import { docsRouter } from "./routes/docs.js";
 import { setupWebSocket } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
 import { getApiRuntimeRegistry } from "./services/runtime.js";
@@ -114,6 +115,7 @@ app.route("/tasks", tasksRouter);
 app.route("/chat", chatRouter);
 app.route("/settings", settingsRoutes);
 app.route("/runtime-profiles", runtimeProfilesRouter);
+app.route("/docs", docsRouter);
 
 // Initialize DB and start server
 const port = Number(process.env.PORT) || 3009;

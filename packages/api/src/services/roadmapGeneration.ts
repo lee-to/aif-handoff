@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
-import { logger, getEnv, getProjectConfig } from "@aif/shared";
+import { logger, getEnv, getProjectConfig, generatePlanPath } from "@aif/shared";
 import {
   createTask,
   findProjectById,
@@ -394,6 +394,18 @@ export function importGeneratedTasks(
 
   log.info({ projectId, alias, totalTasks: generatedTasks.length }, "Starting task import");
 
+  // Resolve project config so every imported task gets a unique slug-based
+  // planPath. Without this each task would fall back to the shared default
+  // `cfg.paths.plan` and overwrite the previous task's plan on disk
+  // (see lee-to/aif-handoff#55). planPath is decoupled from plannerMode here:
+  // the task keeps whatever planner mode the project defaults to, we only
+  // ensure the plan file path itself is unique for bulk imports.
+  const project = findProjectById(projectId);
+  if (!project) {
+    throw new RoadmapGenerationError("PROJECT_NOT_FOUND", `Project ${projectId} not found`);
+  }
+  const cfg = getProjectConfig(project.rootPath);
+
   // Load existing tasks for this alias for dedupe
   const existing = findTasksByRoadmapAlias(projectId, alias);
   const existingTitles = new Set(existing.map((t) => normalizeTitle(t.title)));
@@ -419,12 +431,22 @@ export function importGeneratedTasks(
     }
 
     const tags = buildTaskTags(alias, genTask);
+    // Compute a unique plan path per task using the shared slug helper.
+    // "full" here is just the path-shape selector (`<plansDir>/<slug>.md`),
+    // NOT a planner-mode override — plannerMode is left untouched so the
+    // project/task defaults still apply (fast for regular projects,
+    // parallelEnabled projects already force full via POST /tasks).
+    const planPath = generatePlanPath(genTask.title, "full", {
+      plansDir: cfg.paths.plans,
+      defaultPlanPath: cfg.paths.plan,
+    });
     const created = createTask({
       projectId,
       title: genTask.title,
       description: genTask.description,
       roadmapAlias: alias,
       tags,
+      planPath,
       useSubagents: getEnv().AGENT_USE_SUBAGENTS,
     });
 
@@ -433,12 +455,28 @@ export function importGeneratedTasks(
       phaseStats.created++;
       result.created++;
       existingTitles.add(normalized);
+      log.debug(
+        {
+          id: created.id,
+          title: created.title,
+          planPath: created.planPath,
+          phase: genTask.phase,
+          sequence: genTask.sequence,
+          alias,
+        },
+        "Roadmap task created with unique plan path",
+      );
     }
   }
 
   log.info(
-    { projectId, alias, created: result.created, skipped: result.skipped },
-    "Task import complete",
+    {
+      projectId,
+      alias,
+      created: result.created,
+      skipped: result.skipped,
+    },
+    "Task import complete with distinct plan paths",
   );
 
   return result;

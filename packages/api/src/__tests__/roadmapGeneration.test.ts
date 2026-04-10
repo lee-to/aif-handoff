@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { projects } from "@aif/shared";
+import { generatePlanPath, projects } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -383,6 +383,75 @@ describe("roadmapGeneration", () => {
 
       expect(result.byPhase[1]).toEqual({ created: 1, skipped: 0 });
       expect(result.byPhase[2]).toEqual({ created: 2, skipped: 0 });
+    });
+
+    // Regression: lee-to/aif-handoff#55 — roadmap import used to assign every
+    // task the shared default plan path `.ai-factory/PLAN.md` because
+    // importGeneratedTasks didn't compute a per-task planPath, so successive
+    // tasks would overwrite each other's plan file on disk. The fix derives a
+    // unique slug-based planPath per task while leaving plannerMode untouched.
+    it("should assign a unique per-task planPath on roadmap import (#55)", () => {
+      const { projectId } = createProjectWithRoadmap("# Roadmap");
+
+      const tasks = [
+        {
+          title: "Implement auth flow",
+          description: "JWT + refresh",
+          phase: 1,
+          phaseName: "Backend",
+          sequence: 1,
+        },
+        {
+          title: "Add product search",
+          description: "Postgres FTS",
+          phase: 1,
+          phaseName: "Backend",
+          sequence: 2,
+        },
+        {
+          title: "Build dashboard page",
+          description: "React + Tailwind",
+          phase: 2,
+          phaseName: "Frontend",
+          sequence: 1,
+        },
+      ];
+
+      const result = importGeneratedTasks(projectId, {
+        alias: "v1",
+        tasks,
+      });
+
+      expect(result.created, "all three tasks should be created").toBe(3);
+      expect(result.skipped).toBe(0);
+
+      const stored = findTasksByRoadmapAlias(projectId, "v1");
+      expect(stored).toHaveLength(3);
+
+      const planPaths = stored.map((t) => t.planPath);
+      const uniquePlanPaths = new Set(planPaths);
+      expect(uniquePlanPaths.size, "each imported task must have a distinct planPath").toBe(3);
+
+      for (const path of planPaths) {
+        expect(
+          path,
+          "no imported task should inherit the shared default `.ai-factory/PLAN.md`",
+        ).not.toBe(".ai-factory/PLAN.md");
+        expect(path.startsWith(".ai-factory/plans/")).toBe(true);
+        expect(path.endsWith(".md")).toBe(true);
+      }
+
+      // Each planPath must match the slug computed from the title via the
+      // shared helper — keeps the contract with `generatePlanPath` explicit.
+      for (const task of tasks) {
+        const expectedPath = generatePlanPath(task.title, "full", {
+          plansDir: ".ai-factory/plans/",
+          defaultPlanPath: ".ai-factory/PLAN.md",
+        });
+        const matched = stored.find((t) => t.title === task.title);
+        expect(matched, `task ${task.title} should exist`).toBeDefined();
+        expect(matched?.planPath).toBe(expectedPath);
+      }
     });
   });
 });

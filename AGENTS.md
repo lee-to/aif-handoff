@@ -136,6 +136,11 @@ data/                    # SQLite database files (gitignored)
 
 - DB boundary is mandatory: `api`, `agent`, and `runtime` access database only through `@aif/data`. Direct imports of DB helpers from `@aif/shared/server` and direct SQL construction imports are blocked by ESLint.
 
+## Package Checklist Rule
+
+- **Every package under `packages/` owns a `CHECKLIST.md`.** When you finish work that touched files inside a package, open that package's `CHECKLIST.md` and run through every item before considering the task done. If a check does not apply, note it in the PR / handoff rather than silently skipping.
+- **Keep checklists alive.** If you discover a recurring mistake or a new package-specific rule, add it to the relevant `CHECKLIST.md` in the same PR.
+
 ## UI Component Rules
 
 - **Reuse existing components first.** Before creating a new UI component, check `packages/web/src/components/ui/` for an existing primitive that fits the need. Compose existing primitives (e.g. `Dialog` + `Button`) instead of writing new wrappers.

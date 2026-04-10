@@ -453,5 +453,93 @@ describe("roadmapGeneration", () => {
         expect(matched?.planPath).toBe(expectedPath);
       }
     });
+
+    // Regression: slug collisions between distinct titles must not produce
+    // duplicate planPaths. When two titles slugify to the same string (e.g.
+    // punctuation-only differences), the second task should get a `-2`
+    // suffix before `.md`, and so on.
+    it("should resolve slug collisions with numeric suffixes", () => {
+      const { projectId } = createProjectWithRoadmap("# Roadmap");
+
+      const tasks = [
+        {
+          title: "Fix bug!",
+          description: "first",
+          phase: 1,
+          phaseName: "Backend",
+          sequence: 1,
+        },
+        {
+          title: "Fix bug?",
+          description: "second",
+          phase: 1,
+          phaseName: "Backend",
+          sequence: 2,
+        },
+        {
+          title: "Fix bug.",
+          description: "third",
+          phase: 1,
+          phaseName: "Backend",
+          sequence: 3,
+        },
+      ];
+
+      const result = importGeneratedTasks(projectId, { alias: "v1", tasks });
+      expect(result.created).toBe(3);
+
+      const stored = findTasksByRoadmapAlias(projectId, "v1");
+      const planPaths = stored.map((t) => t.planPath).sort();
+
+      expect(new Set(planPaths).size, "collisions must be resolved to unique paths").toBe(3);
+      expect(planPaths).toEqual(
+        [
+          ".ai-factory/plans/fix-bug.md",
+          ".ai-factory/plans/fix-bug-2.md",
+          ".ai-factory/plans/fix-bug-3.md",
+        ].sort(),
+      );
+    });
+
+    // A second import against the same project should keep stepping the
+    // suffix forward instead of overwriting any existing plan file.
+    it("should avoid collisions across repeated imports", () => {
+      const { projectId } = createProjectWithRoadmap("# Roadmap");
+
+      importGeneratedTasks(projectId, {
+        alias: "v1",
+        tasks: [
+          {
+            title: "Fix bug",
+            description: "first pass",
+            phase: 1,
+            phaseName: "Backend",
+            sequence: 1,
+          },
+        ],
+      });
+
+      importGeneratedTasks(projectId, {
+        alias: "v2",
+        tasks: [
+          {
+            title: "Fix bug",
+            description: "second pass",
+            phase: 1,
+            phaseName: "Backend",
+            sequence: 1,
+          },
+        ],
+      });
+
+      const all = [
+        ...findTasksByRoadmapAlias(projectId, "v1"),
+        ...findTasksByRoadmapAlias(projectId, "v2"),
+      ];
+      const planPaths = all.map((t) => t.planPath).sort();
+      expect(planPaths).toEqual(
+        [".ai-factory/plans/fix-bug.md", ".ai-factory/plans/fix-bug-2.md"].sort(),
+      );
+    });
   });
 });

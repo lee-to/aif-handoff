@@ -7,6 +7,7 @@ import {
   findProjectById,
   findTasksByRoadmapAlias,
   incrementTaskTokenUsage,
+  listTasks,
 } from "@aif/data";
 import { resolveApiLightModel, runApiRuntimeOneShot } from "./runtime.js";
 
@@ -410,6 +411,42 @@ export function importGeneratedTasks(
   const existing = findTasksByRoadmapAlias(projectId, alias);
   const existingTitles = new Set(existing.map((t) => normalizeTitle(t.title)));
 
+  // Reserve every planPath already used by any task in this project (across
+  // all aliases), so collision suffixes don't accidentally overwrite an
+  // existing plan file. The shared default is excluded because it's not
+  // owned by any single task and stays safe to collide against.
+  const usedPlanPaths = new Set<string>(
+    listTasks(projectId)
+      .map((t) => t.planPath)
+      .filter((p): p is string => !!p && p !== cfg.paths.plan),
+  );
+
+  // Compute a unique plan path per task using the shared slug helper, and
+  // append `-2`, `-3`, … before `.md` if the base path collides with an
+  // already-reserved one. This covers both intra-batch collisions (two titles
+  // slugifying to the same string) and cross-import collisions (repeat
+  // imports or different aliases hitting the same slug).
+  const reserveUniquePlanPath = (title: string): string => {
+    const base = generatePlanPath(title, "full", {
+      plansDir: cfg.paths.plans,
+      defaultPlanPath: cfg.paths.plan,
+    });
+    if (!usedPlanPaths.has(base)) {
+      usedPlanPaths.add(base);
+      return base;
+    }
+    const suffixMatch = base.match(/^(.*)\.md$/);
+    const stem = suffixMatch ? suffixMatch[1] : base;
+    let counter = 2;
+    let candidate = `${stem}-${counter}.md`;
+    while (usedPlanPaths.has(candidate)) {
+      counter++;
+      candidate = `${stem}-${counter}.md`;
+    }
+    usedPlanPaths.add(candidate);
+    return candidate;
+  };
+
   const result: ImportResult = {
     roadmapAlias: alias,
     created: 0,
@@ -431,15 +468,11 @@ export function importGeneratedTasks(
     }
 
     const tags = buildTaskTags(alias, genTask);
-    // Compute a unique plan path per task using the shared slug helper.
     // "full" here is just the path-shape selector (`<plansDir>/<slug>.md`),
     // NOT a planner-mode override — plannerMode is left untouched so the
     // project/task defaults still apply (fast for regular projects,
     // parallelEnabled projects already force full via POST /tasks).
-    const planPath = generatePlanPath(genTask.title, "full", {
-      plansDir: cfg.paths.plans,
-      defaultPlanPath: cfg.paths.plan,
-    });
+    const planPath = reserveUniquePlanPath(genTask.title);
     const created = createTask({
       projectId,
       title: genTask.title,
@@ -455,17 +488,6 @@ export function importGeneratedTasks(
       phaseStats.created++;
       result.created++;
       existingTitles.add(normalized);
-      log.debug(
-        {
-          id: created.id,
-          title: created.title,
-          planPath: created.planPath,
-          phase: genTask.phase,
-          sequence: genTask.sequence,
-          alias,
-        },
-        "Roadmap task created with unique plan path",
-      );
     }
   }
 

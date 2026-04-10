@@ -20,7 +20,8 @@
   "dependencies": {
     "@aif/shared": "*",
     "@anthropic-ai/claude-agent-sdk": "0.2.90",
-    "@openai/codex-sdk": "^0.118.0"
+    "@openai/codex-sdk": "^0.118.0",
+    "smol-toml": "^1.6.1"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

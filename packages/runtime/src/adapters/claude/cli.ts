@@ -348,18 +348,28 @@ function processStreamJsonLine(
       state.sessionId = message.session_id;
     }
     const content = message.message?.content;
+    // When --include-partial-messages is on, Claude emits BOTH token-level
+    // deltas (stream_event.content_block_delta.text_delta) AND the complete
+    // assistant content block once it finishes. Emitting stream:text from
+    // both sources would deliver the full text twice to callbacks that
+    // concatenate (e.g. chat:token → fullAssistantResponse in the chat
+    // route), so in partial-messages mode we only accumulate the full text
+    // for fallback and rely on deltas for the live event stream.
+    const partialMode = Boolean(execution?.includePartialMessages);
     if (Array.isArray(content)) {
       for (const item of content) {
         if (!item || typeof item !== "object") continue;
         if (item.type === "text" && typeof item.text === "string") {
           state.assistantText += item.text;
-          emitEvent(state, execution, {
-            type: "stream:text",
-            timestamp: nowIso,
-            level: "debug",
-            message: item.text,
-            data: { text: item.text },
-          });
+          if (!partialMode) {
+            emitEvent(state, execution, {
+              type: "stream:text",
+              timestamp: nowIso,
+              level: "debug",
+              message: item.text,
+              data: { text: item.text },
+            });
+          }
         } else if (item.type === "tool_use" && typeof item.name === "string") {
           const summary = summarizeToolInput(item.input);
           const detailSuffix = summary ? ` ${summary}` : "";

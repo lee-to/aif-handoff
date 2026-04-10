@@ -357,6 +357,108 @@ describe("runClaudeCli", () => {
     expect(result.outputText).toBe("partial");
   });
 
+  it("does NOT double-emit stream:text when include-partial-messages is on (deltas + assistant block together)", async () => {
+    // When --include-partial-messages is enabled, Claude emits BOTH
+    // stream_event deltas AND the complete assistant content block for the
+    // same text. The adapter must rely on deltas only so the chat route
+    // doesn't concatenate the full text twice into fullAssistantResponse.
+    const onEvent = vi.fn();
+    const input = createInput({
+      prompt: "say hi",
+      execution: { includePartialMessages: true, onEvent },
+    });
+    const promise = runClaudeCli(input);
+
+    simulateStreamAndClose(0, [
+      { type: "system", subtype: "init", session_id: "sess-dedup" },
+      {
+        type: "stream_event",
+        session_id: "sess-dedup",
+        event: {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "text_delta", text: "hi" },
+        },
+      },
+      // Complete assistant block arrives after the delta with the same text
+      {
+        type: "assistant",
+        session_id: "sess-dedup",
+        message: {
+          model: "claude-haiku",
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "hi" }],
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "sess-dedup",
+        result: "hi",
+      },
+    ]);
+
+    const result = await promise;
+    // Final output text should be "hi", NOT "hihi"
+    expect(result.outputText).toBe("hi");
+
+    const streamTextEvents = onEvent.mock.calls
+      .map((c) => c[0] as { type: string; message?: string })
+      .filter((e) => e.type === "stream:text");
+    // Exactly ONE stream:text event — from the delta, not the assistant block
+    expect(streamTextEvents).toHaveLength(1);
+    expect(streamTextEvents[0]?.message).toBe("hi");
+  });
+
+  it("still emits tool:use from assistant blocks even when partial messages is on", async () => {
+    // Tool use content blocks are NOT streamed as deltas, only the complete
+    // assistant block carries them. Partial-messages mode must not suppress
+    // tool:use emission.
+    const onToolUse = vi.fn();
+    const onEvent = vi.fn();
+    const input = createInput({
+      execution: { includePartialMessages: true, onToolUse, onEvent },
+    });
+    const promise = runClaudeCli(input);
+
+    simulateStreamAndClose(0, [
+      { type: "system", subtype: "init", session_id: "sess-tool-partial" },
+      {
+        type: "assistant",
+        session_id: "sess-tool-partial",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "tool_1",
+              name: "Bash",
+              input: { command: "ls" },
+            },
+          ],
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "sess-tool-partial",
+        result: "",
+      },
+    ]);
+
+    await promise;
+
+    expect(onToolUse).toHaveBeenCalledTimes(1);
+    const toolEvents = onEvent.mock.calls
+      .map((c) => c[0] as { type: string; data?: { name?: string } })
+      .filter((e) => e.type === "tool:use");
+    expect(toolEvents).toHaveLength(1);
+    expect(toolEvents[0]?.data?.name).toBe("Bash");
+  });
+
   it("uses --dangerously-skip-permissions when bypassPermissions is true", async () => {
     const input = createInput({ execution: { bypassPermissions: true } });
     const promise = runClaudeCli(input);

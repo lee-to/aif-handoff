@@ -72,7 +72,16 @@ describe("codex cli transport", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const { cliPath, cliArgs: args } = getSpawnInvocation();
     expect(cliPath).toBe("codex");
-    expect(args).toEqual(["exec", "--json", "--model", "gpt-5.4"]);
+    expect(args).toEqual([
+      "exec",
+      "--json",
+      "--model",
+      "gpt-5.4",
+      "-c",
+      'approval_policy="on-request"',
+      "-c",
+      'sandbox_mode="workspace-write"',
+    ]);
     expect(child.stdin.write).toHaveBeenCalledWith("Implement feature");
 
     child.stdout.emit("data", "plain output");
@@ -91,7 +100,18 @@ describe("codex cli transport", () => {
     const runPromise = runCodexCli(createRunInput({ resume: true, sessionId: "thread-abc" }));
 
     const { cliArgs: args } = getSpawnInvocation();
-    expect(args).toEqual(["exec", "resume", "thread-abc", "--json", "--model", "gpt-5.4"]);
+    expect(args).toEqual([
+      "exec",
+      "resume",
+      "thread-abc",
+      "--json",
+      "--model",
+      "gpt-5.4",
+      "-c",
+      'approval_policy="on-request"',
+      "-c",
+      'sandbox_mode="workspace-write"',
+    ]);
     expect(child.stdin.write).toHaveBeenCalledWith("Implement feature");
 
     child.stdout.emit("data", "resumed output");
@@ -164,6 +184,120 @@ describe("codex cli transport", () => {
       costUsd: 0.3,
     });
     expect(result.events?.[0]?.type).toBe("stream:text");
+  });
+
+  it("emits -c approval_policy and -c sandbox_mode defaults when execution.bypassPermissions is true", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(createRunInput({ execution: { bypassPermissions: true } }));
+
+    const { cliArgs: args } = getSpawnInvocation();
+    const approvalIdx = args.indexOf('approval_policy="never"');
+    expect(approvalIdx).toBeGreaterThan(0);
+    expect(args[approvalIdx - 1]).toBe("-c");
+    const sandboxIdx = args.indexOf('sandbox_mode="danger-full-access"');
+    expect(sandboxIdx).toBeGreaterThan(0);
+    expect(args[sandboxIdx - 1]).toBe("-c");
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+    await runPromise;
+  });
+
+  it("emits stable non-bypass defaults (on-request + workspace-write) when bypassPermissions is absent", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(createRunInput());
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toContain('approval_policy="on-request"');
+    expect(args).toContain('sandbox_mode="workspace-write"');
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+    await runPromise;
+  });
+
+  it("lets explicit profile options.sandboxMode override the bypass default", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        execution: { bypassPermissions: true },
+        options: { sandboxMode: "workspace-write" },
+      }),
+    );
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toContain('approval_policy="never"'); // bypass still applies to approval
+    expect(args).toContain('sandbox_mode="workspace-write"');
+    expect(args).not.toContain('sandbox_mode="danger-full-access"');
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+    await runPromise;
+  });
+
+  it("reads options.approvalPolicy override while keeping sandbox at non-bypass default", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        options: { approvalPolicy: "on-failure" },
+      }),
+    );
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toContain('approval_policy="on-failure"');
+    // Sandbox was not explicitly set → stable non-bypass default kicks in
+    expect(args).toContain('sandbox_mode="workspace-write"');
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+    await runPromise;
+  });
+
+  it("custom codexCliArgs is a full escape hatch — adapter-managed flags are NOT injected", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        execution: { bypassPermissions: true },
+        options: {
+          codexCliArgs: ["run", "--json", "--prompt={prompt}"],
+        },
+      }),
+    );
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args.some((arg) => arg.startsWith("approval_policy="))).toBe(false);
+    expect(args.some((arg) => arg.startsWith("sandbox_mode="))).toBe(false);
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).toEqual(["run", "--json", "--prompt=Implement feature"]);
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+    await runPromise;
+  });
+
+  it("appends --skip-git-repo-check when options.skipGitRepoCheck is true", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(createRunInput({ options: { skipGitRepoCheck: true } }));
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toContain("--skip-git-repo-check");
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+    await runPromise;
   });
 
   it("throws classified error when CLI exits with non-zero code", async () => {

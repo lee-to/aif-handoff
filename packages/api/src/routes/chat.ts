@@ -41,7 +41,6 @@ import {
 import { chatRequestSchema, createChatSessionSchema, updateChatSessionSchema } from "../schemas.js";
 import { persistAttachments } from "../services/attachmentPersistence.js";
 import { readAttachment } from "../services/attachmentStorage.js";
-import { getCodexExecutionHooks } from "../services/codexExecutionHooks.js";
 import { broadcast, sendToClient } from "../ws.js";
 import {
   getCached,
@@ -873,16 +872,12 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         maxTurns: env.AGENT_CHAT_MAX_TURNS,
         onEvent: onRuntimeEvent,
         systemPromptAppend: systemAppend,
+        bypassPermissions,
         environment: {
           HANDOFF_MODE: "1",
           ...(taskId ? { HANDOFF_TASK_ID: taskId } : {}),
         },
         hooks: {
-          ...getCodexExecutionHooks({
-            runtimeId,
-            transport: runtimeContext.resolvedProfile.transport,
-            bypassPermissions,
-          }),
           permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
           allowDangerouslySkipPermissions: bypassPermissions,
           _trustToken: RUNTIME_TRUST_TOKEN,

@@ -42,6 +42,74 @@ function normalizeCodexCliEffort(value: unknown): CodexCliEffortLevel | null {
   return null;
 }
 
+const CODEX_APPROVAL_POLICIES = new Set([
+  "untrusted",
+  "on-failure",
+  "on-request",
+  "never",
+] as const);
+
+type CodexApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
+
+function normalizeCodexApprovalPolicy(value: unknown): CodexApprovalPolicy | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return CODEX_APPROVAL_POLICIES.has(trimmed as CodexApprovalPolicy)
+    ? (trimmed as CodexApprovalPolicy)
+    : null;
+}
+
+const CODEX_SANDBOX_MODES = new Set([
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+] as const);
+
+type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+
+function normalizeCodexSandboxMode(value: unknown): CodexSandboxMode | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return CODEX_SANDBOX_MODES.has(trimmed as CodexSandboxMode)
+    ? (trimmed as CodexSandboxMode)
+    : null;
+}
+
+/**
+ * Resolve the effective approval policy and sandbox mode for a Codex CLI run.
+ *
+ * Three-layer precedence:
+ *   1. explicit profile options (`options.approvalPolicy` / `options.sandboxMode`)
+ *   2. bypass defaults (when `execution.bypassPermissions=true`)
+ *   3. stable non-bypass defaults (`on-request` + `workspace-write`)
+ *
+ * The non-bypass defaults keep behaviour consistent across hosts regardless
+ * of the user's ~/.codex/config.toml — prior to the bypass-permissions
+ * refactor these defaults were set by a Codex-specific hook factory in the
+ * API layer; the logic now lives inside the adapter so api/agent/runtime all
+ * share the same contract.
+ *
+ * Values are always non-null — the caller always emits the corresponding
+ * `-c approval_policy="..."` / `-c sandbox_mode="..."` override. Routing
+ * through `-c` rather than `--sandbox` / the atomic
+ * `--dangerously-bypass-approvals-and-sandbox` flag is required because the
+ * `codex exec resume` subcommand rejects `--sandbox` outright.
+ */
+function resolveCodexPermissionOverrides(input: RuntimeRunInput): {
+  approvalPolicy: CodexApprovalPolicy;
+  sandboxMode: CodexSandboxMode;
+} {
+  const options = asRecord(input.options);
+  const explicitApproval = normalizeCodexApprovalPolicy(options.approvalPolicy);
+  const explicitSandbox = normalizeCodexSandboxMode(options.sandboxMode);
+  const bypass = input.execution?.bypassPermissions === true;
+
+  return {
+    approvalPolicy: explicitApproval ?? (bypass ? "never" : "on-request"),
+    sandboxMode: explicitSandbox ?? (bypass ? "danger-full-access" : "workspace-write"),
+  };
+}
+
 function readStringArray(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
   const parsed = value.filter((entry): entry is string => typeof entry === "string");
@@ -76,6 +144,27 @@ function normalizeCliArgs(input: RuntimeRunInput): string[] {
   if (effort) {
     args.push("-c", `model_reasoning_effort="${effort}"`);
   }
+
+  // Skip git repo check — opt-in via profile for non-git working directories
+  if (options.skipGitRepoCheck === true) {
+    args.push("--skip-git-repo-check");
+  }
+
+  // Approval policy and sandbox mode. Always emitted so behaviour stays
+  // stable across hosts regardless of the user's ~/.codex/config.toml.
+  //
+  //   bypass=false, no profile override → "on-request" + "workspace-write"
+  //   bypass=true,  no profile override → "never"      + "danger-full-access"
+  //   explicit `options.approvalPolicy` / `options.sandboxMode` always win
+  //
+  // Routed via `-c` rather than `--sandbox` or the atomic
+  // `--dangerously-bypass-approvals-and-sandbox` flag — `codex exec resume`
+  // rejects `--sandbox`, and `-c` overrides work uniformly across both the
+  // fresh exec and resume paths.
+  const { approvalPolicy, sandboxMode } = resolveCodexPermissionOverrides(input);
+  args.push("-c", `approval_policy="${approvalPolicy}"`);
+  args.push("-c", `sandbox_mode="${sandboxMode}"`);
+
   return args;
 }
 

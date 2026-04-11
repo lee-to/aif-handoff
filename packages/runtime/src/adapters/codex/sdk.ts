@@ -203,14 +203,27 @@ function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
     threadOpts.model = input.model;
   }
 
-  const approvalPolicy = readString(options.approvalPolicy) ?? readString(hooks.approvalPolicy);
+  // Resolve effective approval policy and sandbox mode with a three-layer
+  // precedence: explicit profile options > bypass defaults (when
+  // execution.bypassPermissions=true) > stable non-bypass defaults.
+  //
+  // The non-bypass defaults (`on-request` + `workspace-write`) keep behaviour
+  // stable across hosts regardless of the user's ~/.codex/config.toml. Prior
+  // to the bypass-permissions refactor these defaults were set by a
+  // Codex-specific hook factory in the API layer; the logic now lives inside
+  // the adapter so api/agent/runtime all see the same contract.
+  const explicitApproval = readString(options.approvalPolicy) ?? readString(hooks.approvalPolicy);
   if (
-    approvalPolicy === "never" ||
-    approvalPolicy === "on-request" ||
-    approvalPolicy === "on-failure" ||
-    approvalPolicy === "untrusted"
+    explicitApproval === "never" ||
+    explicitApproval === "on-request" ||
+    explicitApproval === "on-failure" ||
+    explicitApproval === "untrusted"
   ) {
-    threadOpts.approvalPolicy = approvalPolicy;
+    threadOpts.approvalPolicy = explicitApproval;
+  } else if (execution?.bypassPermissions) {
+    threadOpts.approvalPolicy = "never";
+  } else {
+    threadOpts.approvalPolicy = "on-request";
   }
 
   // Skip git repo check if explicitly requested
@@ -218,14 +231,17 @@ function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
     threadOpts.skipGitRepoCheck = true;
   }
 
-  // Sandbox mode
-  const sandboxMode = readString(options.sandboxMode) ?? readString(hooks.sandboxMode);
+  const explicitSandbox = readString(options.sandboxMode) ?? readString(hooks.sandboxMode);
   if (
-    sandboxMode === "read-only" ||
-    sandboxMode === "workspace-write" ||
-    sandboxMode === "danger-full-access"
+    explicitSandbox === "read-only" ||
+    explicitSandbox === "workspace-write" ||
+    explicitSandbox === "danger-full-access"
   ) {
-    threadOpts.sandboxMode = sandboxMode;
+    threadOpts.sandboxMode = explicitSandbox;
+  } else if (execution?.bypassPermissions) {
+    threadOpts.sandboxMode = "danger-full-access";
+  } else {
+    threadOpts.sandboxMode = "workspace-write";
   }
 
   const networkAccessEnabled =

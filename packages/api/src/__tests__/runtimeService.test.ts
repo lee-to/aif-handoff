@@ -395,6 +395,7 @@ describe("runtime service", () => {
           runTimeoutMs: 120_000,
           includePartialMessages: true,
           maxTurns: 4,
+          bypassPermissions: false,
           environment: {
             HANDOFF_MODE: "1",
             HANDOFF_TASK_ID: "task-77",
@@ -463,12 +464,34 @@ describe("runtime service", () => {
           runTimeoutMs: 240_000,
           includePartialMessages: false,
           systemPromptAppend: "extra",
+          bypassPermissions: true,
           environment: { HANDOFF_MODE: "1" },
           hooks: expect.objectContaining({
             permissionMode: "bypassPermissions",
             allowDangerouslySkipPermissions: true,
             _trustToken: Symbol.for("aif.runtime.trust"),
           }),
+        }),
+      }),
+    );
+  });
+
+  it("passes execution.bypassPermissions=false to adapter.run when AGENT_BYPASS_PERMISSIONS is unset", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      prompt: "do work",
+      workflowKind: "commit",
+    });
+
+    expect(adapter.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execution: expect.objectContaining({
+          bypassPermissions: false,
         }),
       }),
     );

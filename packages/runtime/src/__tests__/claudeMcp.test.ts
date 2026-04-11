@@ -27,6 +27,7 @@ describe("Claude MCP config", () => {
   it("writes stdio MCP servers to .claude.json", async () => {
     await installClaudeMcpServer({
       serverName: "handoff",
+      transport: "stdio",
       command: "npx",
       args: ["tsx", "packages/mcp/src/index.ts"],
       cwd: "C:\\projects\\aifhub\\aif-handoff",
@@ -64,6 +65,7 @@ describe("Claude MCP config", () => {
     expect(JSON.parse(content)).toEqual({
       mcpServers: {
         handoff: {
+          type: "http",
           url: "http://localhost:3100/mcp",
         },
       },
@@ -75,6 +77,7 @@ describe("Claude MCP config", () => {
       JSON.stringify({
         mcpServers: {
           handoff: {
+            type: "http",
             url: "http://localhost:3100/mcp",
           },
         },
@@ -85,6 +88,7 @@ describe("Claude MCP config", () => {
 
     expect(status.installed).toBe(true);
     expect(status.config).toEqual({
+      type: "http",
       url: "http://localhost:3100/mcp",
     });
   });
@@ -94,6 +98,7 @@ describe("Claude MCP config", () => {
       JSON.stringify({
         mcpServers: {
           handoff: {
+            type: "http",
             url: "http://localhost:3100/mcp",
           },
           other: {
@@ -111,6 +116,26 @@ describe("Claude MCP config", () => {
       mcpServers: {
         other: {
           command: "npx",
+        },
+      },
+    });
+  });
+
+  it("does not write unsupported bearer token env vars for Claude HTTP MCP servers", async () => {
+    await installClaudeMcpServer({
+      serverName: "handoff",
+      transport: "streamable_http",
+      url: "http://localhost:3100/mcp",
+      bearerTokenEnvVar: "AIF_MCP_TOKEN",
+    });
+
+    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    const [, content] = writeFileMock.mock.calls[0] as [string, string];
+    expect(JSON.parse(content)).toEqual({
+      mcpServers: {
+        handoff: {
+          type: "http",
+          url: "http://localhost:3100/mcp",
         },
       },
     });

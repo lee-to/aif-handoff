@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+// Minimal root .env loader for local dev scripts. Supports single-line KEY=VALUE pairs only.
 function parseEnvFile(path) {
   const entries = {};
   const lines = readFileSync(path, "utf8").split(/\r?\n/u);
@@ -47,13 +48,25 @@ function loadRootEnv() {
   }
 }
 
+function resolveMcpPort(value) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const port = Number(trimmed);
+  return Number.isInteger(port) && port > 0 ? String(port) : null;
+}
+
 loadRootEnv();
 
 const filters = ["@aif/api", "@aif/web", "@aif/agent"];
+const mcpPort = resolveMcpPort(process.env.MCP_PORT);
 
-if (process.env.MCP_PORT) {
+if (mcpPort) {
+  process.env.MCP_PORT = mcpPort;
   filters.push("@aif/mcp");
-  console.log(`[dev] MCP enabled on port ${process.env.MCP_PORT}`);
+  console.log(`[dev] MCP enabled on port ${mcpPort}`);
 }
 
 const args = [

@@ -180,6 +180,26 @@ describe("settings API — config routes", () => {
       const checkRes = await app.request("/settings/mcp");
       const checkBody = await checkRes.json();
       expect(checkBody.installed).toBe(true);
+
+      const claudeConfig = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
+      expect(claudeConfig.mcpServers.handoff).toEqual({
+        type: "stdio",
+        command: "npx",
+        args: ["tsx", join(tempRoot, "packages/mcp/src/index.ts")],
+        cwd: tempRoot,
+        env: {
+          DATABASE_URL: join(tempRoot, "data", "aif.sqlite"),
+          LOG_DESTINATION: "stderr",
+          LOG_LEVEL: "info",
+          MCP_TRANSPORT: "stdio",
+          PROJECTS_DIR: join(tempRoot, ".projects"),
+        },
+      });
+
+      const codexToml = readFileSync(codexConfigPath, "utf-8");
+      expect(codexToml).toContain("[mcp_servers.handoff]");
+      expect(codexToml).toContain('command = "npx"');
+      expect(codexToml).not.toContain('url = "http://localhost:3100/mcp"');
     });
 
     it("POST /settings/mcp/install adds handoff HTTP server when MCP_PORT is set", async () => {
@@ -197,6 +217,7 @@ describe("settings API — config routes", () => {
 
       const claudeConfig = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
       expect(claudeConfig.mcpServers.handoff).toEqual({
+        type: "http",
         url: "http://localhost:3100/mcp",
       });
 

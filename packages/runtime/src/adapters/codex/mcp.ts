@@ -140,7 +140,7 @@ function serializeMcpSection(name: string, entry: CodexMcpServerEntry): string {
 function removeServerSections(toml: string, serverName: string): string {
   const mainSectionHeader = `[mcp_servers.${serverName}]`;
   const envSectionHeader = `[mcp_servers.${serverName}.env]`;
-  const sectionHeaderRegex = /^\[[^\]]+\]\s*$/;
+  const sectionHeaderRegex = /^\[[^\]]+]\s*$/;
   const keptLines: string[] = [];
   let skipping = false;
 
@@ -198,24 +198,20 @@ export async function installCodexMcpServer(input: RuntimeMcpInstallInput): Prom
   let toml = await readToml();
   toml = removeServerSections(toml, input.serverName);
 
-  const section = serializeMcpSection(
-    input.serverName,
-    input.url
+  const entry: CodexMcpServerEntry =
+    input.transport === "streamable_http"
       ? {
           url: input.url,
           bearer_token_env_var: input.bearerTokenEnvVar,
         }
-      : input.command
-        ? {
-            command: input.command,
-            args: input.args ?? [],
-            cwd: input.cwd,
-            env: input.env,
-          }
-        : (() => {
-            throw new Error("Codex MCP install requires either url or command");
-          })(),
-  );
+      : {
+          command: input.command,
+          args: input.args ?? [],
+          cwd: input.cwd,
+          env: input.env,
+        };
+
+  const section = serializeMcpSection(input.serverName, entry);
 
   toml = toml ? `${toml}\n\n${section}\n` : `${section}\n`;
   await writeToml(toml);

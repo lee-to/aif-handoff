@@ -13,9 +13,19 @@ const log = logger("api:settings");
 const MCP_SERVER_NAME = "handoff";
 const MONOREPO_ROOT = findMonorepoRoot(import.meta.dirname);
 
+function resolveMcpPort(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const port = Number(trimmed);
+  return Number.isInteger(port) && port > 0 ? String(port) : null;
+}
+
 function buildMcpServerEntry(): RuntimeMcpInstallInput {
   const env = getEnv();
-  const mcpPort = process.env.MCP_PORT?.trim();
+  const mcpPort = resolveMcpPort(process.env.MCP_PORT);
 
   if (mcpPort) {
     return {

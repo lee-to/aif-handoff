@@ -37,12 +37,13 @@ export async function getClaudeMcpStatus(input: RuntimeMcpInput): Promise<Runtim
 export async function installClaudeMcpServer(input: RuntimeMcpInstallInput): Promise<void> {
   const config = await readConfig();
   if (!config.mcpServers) config.mcpServers = {};
-  if (input.url) {
+
+  if (input.transport === "streamable_http") {
     config.mcpServers[input.serverName] = {
+      type: "http",
       url: input.url,
-      ...(input.bearerTokenEnvVar ? { bearerTokenEnvVar: input.bearerTokenEnvVar } : {}),
     };
-  } else if (input.command) {
+  } else {
     config.mcpServers[input.serverName] = {
       type: "stdio",
       command: input.command,
@@ -50,8 +51,6 @@ export async function installClaudeMcpServer(input: RuntimeMcpInstallInput): Pro
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.env ? { env: input.env } : {}),
     };
-  } else {
-    throw new Error("Claude MCP install requires either url or command");
   }
   await writeConfig(config);
 }

@@ -91,6 +91,9 @@ vi.mock("@aif/shared", async (importOriginal) => {
     ...actual,
     getEnv: () => ({
       AGENT_BYPASS_PERMISSIONS: false,
+      API_RUNTIME_START_TIMEOUT_MS: 600_000,
+      API_RUNTIME_RUN_TIMEOUT_MS: 600_000,
+      AGENT_CHAT_MAX_TURNS: 50,
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
     }),
@@ -286,6 +289,27 @@ describe("chat API", () => {
         sessionId: "session-1",
         role: "assistant",
         content: "resumed output",
+      }),
+    );
+  });
+
+  it("passes chat execution timeouts from env", async () => {
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "plain prompt",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const runInput = mockAdapterRun.mock.calls[0]?.[0] as RuntimeRunInput;
+    expect(runInput.execution).toEqual(
+      expect.objectContaining({
+        startTimeoutMs: 600_000,
+        runTimeoutMs: 600_000,
+        maxTurns: 50,
       }),
     );
   });

@@ -538,4 +538,44 @@ describe("executeSubagentQuery first-activity watchdog", () => {
     delete mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS;
     delete mockEnvOverrides.AGENT_QUERY_START_TIMEOUT_MS;
   }, 10_000);
+
+  it("treats streamed runtime events as activity for tool-less workflows", async () => {
+    mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS = 100;
+    mockEnvOverrides.AGENT_QUERY_START_TIMEOUT_MS = 0;
+
+    queryMock.mockImplementation(async function* () {
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: "session-tool-less",
+      };
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      yield {
+        type: "result",
+        subtype: "success",
+        result: "done-without-tools",
+        usage: {},
+        total_cost_usd: 0,
+      };
+    });
+
+    await expect(
+      executeSubagentQuery({
+        taskId: "task-tool-less",
+        projectRoot: "/tmp/project",
+        agentName: "implement-checklist-sync",
+        prompt: "run",
+        workflowKind: "implementer_checklist_sync",
+      }),
+    ).resolves.toEqual({ resultText: "done-without-tools" });
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const stallLogs = logActivityMock.mock.calls.filter(
+      (call: string[]) => call[1] === "Agent" && call[2]?.includes("stalled"),
+    );
+    expect(stallLogs.length).toBe(0);
+
+    delete mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS;
+    delete mockEnvOverrides.AGENT_QUERY_START_TIMEOUT_MS;
+  });
 });

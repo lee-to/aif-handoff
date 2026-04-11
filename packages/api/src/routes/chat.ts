@@ -691,6 +691,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
   const body = c.req.valid("json") as ChatRequestPayload;
   const { projectId, message, clientId, conversationId, explore, taskId, attachments } = body;
   let { sessionId: inputSessionId } = body;
+  const env = getEnv();
 
   const project = findProjectById(projectId);
   if (!project) {
@@ -814,7 +815,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       });
     }
 
-    const bypassPermissions = getEnv().AGENT_BYPASS_PERMISSIONS;
+    const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
     let fullAssistantResponse = "";
     let hasStreamedTokens = false;
 
@@ -866,8 +867,10 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
           : {}),
       },
       execution: {
+        startTimeoutMs: env.API_RUNTIME_START_TIMEOUT_MS,
+        runTimeoutMs: env.API_RUNTIME_RUN_TIMEOUT_MS,
         includePartialMessages: true,
-        maxTurns: getEnv().AGENT_CHAT_MAX_TURNS,
+        maxTurns: env.AGENT_CHAT_MAX_TURNS,
         onEvent: onRuntimeEvent,
         systemPromptAppend: systemAppend,
         environment: {

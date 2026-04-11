@@ -17,11 +17,9 @@
   "dependencies": {
     "@aif/data": "*",
     "@aif/runtime": "*",
-    "@aif/shared": "*",
-    "node-cron": "^4.2.1"
+    "@aif/shared": "*"
   },
   "devDependencies": {
-    "@types/node-cron": "^3.0.11",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.2"

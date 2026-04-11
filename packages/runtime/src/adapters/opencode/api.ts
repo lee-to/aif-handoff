@@ -407,6 +407,17 @@ export async function runOpenCodeApi(
     body.reasoningEffort = effort;
   }
 
+  // bypassPermissions parity: OpenCode resolves `agent` to the user's
+  // configured default (or the built-in `build` agent). When the caller
+  // requests a permission bypass, force `build` so a user-configured
+  // restrictive default (e.g. `plan`) cannot block edits. Per-tool
+  // "ask" permissions (.env*, external_directory, doom_loop) are still
+  // enforced server-side — true parity would require responding to
+  // /session/:id/permissions/:permissionID events over SSE.
+  if (input.execution?.bypassPermissions) {
+    body.agent = "build";
+  }
+
   const messagePayload = await requestJson<{ info?: unknown; parts?: unknown[] }>(input, {
     method: "POST",
     path: `/session/${encodeURIComponent(activeSession.id)}/message`,

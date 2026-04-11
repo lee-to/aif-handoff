@@ -229,15 +229,10 @@ function extractTextFromParts(parts: unknown[]): string {
   const texts: string[] = [];
   for (const part of parts) {
     const record = asRecord(part);
-    const text = readString(record.text);
-    if (text) {
-      texts.push(text);
-      continue;
-    }
-    const content = readString(record.content);
-    if (content) {
-      texts.push(content);
-    }
+    const type = readString(record.type);
+    if (type && type !== "text") continue;
+    const text = readString(record.text) ?? readString(record.content);
+    if (text) texts.push(text);
   }
   return texts.join("\n\n").trim();
 }

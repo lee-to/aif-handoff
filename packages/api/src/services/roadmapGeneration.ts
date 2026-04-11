@@ -318,6 +318,36 @@ Rules:
 - Return ONLY valid JSON, no explanatory text`;
 }
 
+function extractJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 function parseAgentResponse(raw: string, expectedAlias: string): RoadmapGenerationResult {
   // Extract JSON from markdown fences — agent may include extra text after the closing fence
   const fenceMatch = raw.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
@@ -326,12 +356,29 @@ function parseAgentResponse(raw: string, expectedAlias: string): RoadmapGenerati
   let jsonObj: unknown;
   try {
     jsonObj = JSON.parse(cleaned);
-  } catch (err) {
-    log.error({ raw: raw.slice(0, 500), err }, "Failed to parse agent response as JSON");
-    throw new RoadmapGenerationError(
-      "PARSE_ERROR",
-      `Agent response is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  } catch (initialErr) {
+    // Fallback: agent may have prepended prose before the JSON object
+    const extracted = extractJsonObject(cleaned);
+    if (extracted) {
+      try {
+        jsonObj = JSON.parse(extracted);
+      } catch (err) {
+        log.error({ raw: raw.slice(0, 500), err }, "Failed to parse agent response as JSON");
+        throw new RoadmapGenerationError(
+          "PARSE_ERROR",
+          `Agent response is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } else {
+      log.error(
+        { raw: raw.slice(0, 500), err: initialErr },
+        "Failed to parse agent response as JSON",
+      );
+      throw new RoadmapGenerationError(
+        "PARSE_ERROR",
+        `Agent response is not valid JSON: ${initialErr instanceof Error ? initialErr.message : String(initialErr)}`,
+      );
+    }
   }
 
   const validated = roadmapResponseSchema.safeParse(jsonObj);

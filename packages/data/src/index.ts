@@ -906,14 +906,6 @@ export function recordUsageEvent(event: DbUsageEvent): void {
   const { usage, context } = event;
   const db = getDb();
 
-  // Shape the usage into the snake_case form `parseTaskTokenUsage` also
-  // accepts, so all three increment helpers see identical numbers.
-  const usagePayload: Record<string, unknown> = {
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens,
-    total_cost_usd: usage.costUsd ?? 0,
-  };
-
   // Wrap insert + aggregate updates in a single transaction so the
   // append-only log and rolled-up counters stay consistent. If any
   // update fails the entire batch rolls back — no partial divergence.
@@ -937,13 +929,20 @@ export function recordUsageEvent(event: DbUsageEvent): void {
       })
       .run();
 
+    // Use usage.totalTokens (the provider's authoritative total) for all
+    // aggregates — same source of truth as the usage_events row. Never
+    // recalculate as inputTokens + outputTokens: providers may include
+    // additional token categories (cache, reasoning, etc.) in their total.
+    const totalTokensDelta = usage.totalTokens;
+    const costDelta = usage.costUsd ?? 0;
+
     if (context.taskId) {
       tx.update(tasks)
         .set({
-          tokenInput: sql<number>`coalesce(${tasks.tokenInput}, 0) + ${usagePayload.input_tokens}`,
-          tokenOutput: sql<number>`coalesce(${tasks.tokenOutput}, 0) + ${usagePayload.output_tokens}`,
-          tokenTotal: sql<number>`coalesce(${tasks.tokenTotal}, 0) + ${(usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)}`,
-          costUsd: sql<number>`coalesce(${tasks.costUsd}, 0) + ${usagePayload.total_cost_usd}`,
+          tokenInput: sql<number>`coalesce(${tasks.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${tasks.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${tasks.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${tasks.costUsd}, 0) + ${costDelta}`,
         })
         .where(eq(tasks.id, context.taskId))
         .run();
@@ -951,10 +950,10 @@ export function recordUsageEvent(event: DbUsageEvent): void {
     if (context.projectId) {
       tx.update(projects)
         .set({
-          tokenInput: sql<number>`coalesce(${projects.tokenInput}, 0) + ${usagePayload.input_tokens}`,
-          tokenOutput: sql<number>`coalesce(${projects.tokenOutput}, 0) + ${usagePayload.output_tokens}`,
-          tokenTotal: sql<number>`coalesce(${projects.tokenTotal}, 0) + ${(usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)}`,
-          costUsd: sql<number>`coalesce(${projects.costUsd}, 0) + ${usagePayload.total_cost_usd}`,
+          tokenInput: sql<number>`coalesce(${projects.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${projects.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${projects.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${projects.costUsd}, 0) + ${costDelta}`,
         })
         .where(eq(projects.id, context.projectId))
         .run();
@@ -962,10 +961,10 @@ export function recordUsageEvent(event: DbUsageEvent): void {
     if (context.chatSessionId) {
       tx.update(chatSessions)
         .set({
-          tokenInput: sql<number>`coalesce(${chatSessions.tokenInput}, 0) + ${usagePayload.input_tokens}`,
-          tokenOutput: sql<number>`coalesce(${chatSessions.tokenOutput}, 0) + ${usagePayload.output_tokens}`,
-          tokenTotal: sql<number>`coalesce(${chatSessions.tokenTotal}, 0) + ${(usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)}`,
-          costUsd: sql<number>`coalesce(${chatSessions.costUsd}, 0) + ${usagePayload.total_cost_usd}`,
+          tokenInput: sql<number>`coalesce(${chatSessions.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${chatSessions.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${chatSessions.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${chatSessions.costUsd}, 0) + ${costDelta}`,
         })
         .where(eq(chatSessions.id, context.chatSessionId))
         .run();

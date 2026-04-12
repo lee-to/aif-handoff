@@ -185,6 +185,86 @@ describe("data layer", () => {
       const resp = toTaskResponse(raw);
       expect(resp.tags).toEqual(["ok"]);
     });
+
+    it("parses persisted autoReviewState JSON from task rows", () => {
+      const t = createTask({ projectId: "proj-1", title: "T", description: "D" });
+      setTaskFields(t!.id, {
+        manualReviewRequired: true,
+        autoReviewState: {
+          strategy: "closure_first",
+          iteration: 2,
+          findings: [
+            {
+              id: "finding-1",
+              source: "code_review",
+              text: "Add manual review banner",
+            },
+          ],
+        },
+      });
+      const raw = findTaskById(t!.id)!;
+      const resp = toTaskResponse(raw);
+      expect(resp.manualReviewRequired).toBe(true);
+      expect(resp.autoReviewState).toEqual({
+        strategy: "closure_first",
+        iteration: 2,
+        findings: [
+          {
+            id: "finding-1",
+            source: "code_review",
+            text: "Add manual review banner",
+          },
+        ],
+      });
+    });
+
+    it("returns null for malformed autoReviewState JSON", () => {
+      const t = createTask({ projectId: "proj-1", title: "Malformed", description: "D" });
+      setTaskFields(t!.id, { autoReviewStateJson: "{not-valid-json" });
+
+      const raw = findTaskById(t!.id)!;
+      const resp = toTaskResponse(raw);
+
+      expect(resp.autoReviewState).toBeNull();
+    });
+
+    it("returns null for autoReviewState with unsupported strategy", () => {
+      const t = createTask({ projectId: "proj-1", title: "Bad Strategy", description: "D" });
+      setTaskFields(t!.id, {
+        autoReviewStateJson: JSON.stringify({
+          strategy: "unknown_strategy",
+          iteration: 1,
+          findings: [],
+        }),
+      });
+
+      const raw = findTaskById(t!.id)!;
+      const resp = toTaskResponse(raw);
+
+      expect(resp.autoReviewState).toBeNull();
+    });
+
+    it("returns null for autoReviewState with unsupported finding source", () => {
+      const t = createTask({ projectId: "proj-1", title: "Bad Finding", description: "D" });
+      setTaskFields(t!.id, {
+        autoReviewStateJson: JSON.stringify({
+          strategy: "closure_first",
+          iteration: 1,
+          findings: [
+            {
+              id: "finding-1",
+              source: "unknown_source",
+              text: "Bad finding source",
+            },
+          ],
+        }),
+      });
+
+      const raw = findTaskById(t!.id)!;
+      const resp = toTaskResponse(raw);
+
+      expect(resp.autoReviewState).toBeNull();
+    });
   });
 
   // ── Comments ────────────────────────────────────────────

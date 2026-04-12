@@ -20,6 +20,8 @@ const mockTask: Task = {
   reworkRequested: false,
   reviewIterationCount: 0,
   maxReviewIterations: 3,
+  manualReviewRequired: false,
+  autoReviewState: null,
   paused: false,
   lastHeartbeatAt: null,
   lastSyncedAt: null,
@@ -53,6 +55,13 @@ const mockDoneFixTask: Task = {
   id: "detail-done-fix",
   isFix: true,
   title: "Done Fix Task",
+};
+
+const mockManualReviewTask: Task = {
+  ...mockDoneTask,
+  id: "detail-manual-review",
+  title: "Manual Review Task",
+  manualReviewRequired: true,
 };
 
 const mockBacklogTask: Task = {
@@ -143,21 +152,23 @@ vi.mock("@/hooks/useTasks", () => ({
           ? mockDoneTask
           : id === "detail-done-fix"
             ? mockDoneFixTask
-            : id === "detail-backlog"
-              ? mockBacklogTask
-              : id === "detail-blocked"
-                ? mockBlockedTask
-                : id === "detail-plan-ready-manual"
-                  ? mockPlanReadyManualTask
-                  : id === "detail-review"
-                    ? mockReviewTask
-                    : id === "detail-with-attachment"
-                      ? mockTaskWithAttachment
-                      : id === "detail-no-plan-no-log"
-                        ? mockTaskNoPlanNoLog
-                        : id === "detail-planning-activity"
-                          ? mockPlanningTaskWithActivityOnly
-                          : null,
+            : id === "detail-manual-review"
+              ? mockManualReviewTask
+              : id === "detail-backlog"
+                ? mockBacklogTask
+                : id === "detail-blocked"
+                  ? mockBlockedTask
+                  : id === "detail-plan-ready-manual"
+                    ? mockPlanReadyManualTask
+                    : id === "detail-review"
+                      ? mockReviewTask
+                      : id === "detail-with-attachment"
+                        ? mockTaskWithAttachment
+                        : id === "detail-no-plan-no-log"
+                          ? mockTaskNoPlanNoLog
+                          : id === "detail-planning-activity"
+                            ? mockPlanningTaskWithActivityOnly
+                            : null,
   }),
   useUpdateTask: () => ({ mutate: mutateUpdateTask }),
   useDeleteTask: () => ({ mutate: mutateDeleteTask }),
@@ -307,6 +318,15 @@ describe("TaskDetail", () => {
     render(<TaskDetail taskId="detail-done" onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByText("Approve")).toBeDefined();
     expect(screen.getByText("Request changes")).toBeDefined();
+  });
+
+  it("should show manual review warning banner for manual handoff tasks", () => {
+    render(<TaskDetail taskId="detail-manual-review" onClose={vi.fn()} />, {
+      wrapper: Wrapper,
+    });
+
+    expect(screen.getByText(/Auto-review stopped and human review is required/i)).toBeDefined();
+    expect(screen.getByText("MANUAL REVIEW")).toBeDefined();
   });
 
   it("should confirm approve_done and send deletePlanFile=false by default", () => {

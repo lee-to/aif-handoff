@@ -88,6 +88,14 @@ export function TaskDetailHeader({
           <Badge size="sm" style={statusColorStyle(task.status)}>
             {STATUS_CONFIG[task.status].label}
           </Badge>
+          {task.manualReviewRequired && (
+            <Badge
+              size="sm"
+              className="border-amber-500/35 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+            >
+              MANUAL REVIEW
+            </Badge>
+          )}
           {task.paused && (
             <Badge
               size="sm"

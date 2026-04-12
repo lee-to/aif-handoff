@@ -75,6 +75,7 @@ app.get("/settings", (c) => {
       return c.json({
         useSubagents: env.AGENT_USE_SUBAGENTS,
         maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
+        autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
         runtimeReadiness: {
           availableRuntimeCount: registry.listRuntimes().length,
           runtimeProfileCount: runtimeProfiles.length,
@@ -94,6 +95,7 @@ app.get("/settings", (c) => {
       return c.json({
         useSubagents: env.AGENT_USE_SUBAGENTS,
         maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
+        autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
         runtimeReadiness: {
           availableRuntimeCount: 0,
           runtimeProfileCount: allProfiles.length,

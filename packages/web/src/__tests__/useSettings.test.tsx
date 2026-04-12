@@ -32,13 +32,21 @@ describe("useSettings", () => {
   });
 
   it("fetches settings via React Query (single request, no duplication)", async () => {
-    mockGetSettings.mockResolvedValue({ useSubagents: true, maxReviewIterations: 3 });
+    mockGetSettings.mockResolvedValue({
+      useSubagents: true,
+      maxReviewIterations: 3,
+      autoReviewStrategy: "full_re_review",
+    });
 
     const { result } = renderHook(() => useSettings(), { wrapper: createWrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toEqual({ useSubagents: true, maxReviewIterations: 3 });
+    expect(result.current.data).toEqual({
+      useSubagents: true,
+      maxReviewIterations: 3,
+      autoReviewStrategy: "full_re_review",
+    });
     expect(mockGetSettings).toHaveBeenCalledTimes(1);
   });
 });

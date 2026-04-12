@@ -12,6 +12,9 @@
     "test": {
       "dependsOn": ["^build"]
     },
+    "coverage": {
+      "dependsOn": ["^build"]
+    },
     "lint": {
       "dependsOn": ["^build"]
     },

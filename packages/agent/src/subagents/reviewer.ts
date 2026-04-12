@@ -1,8 +1,13 @@
 import { findProjectById, findTaskById, setTaskFields } from "@aif/data";
 import { createRuntimeWorkflowSpec, type RuntimeWorkflowSpec } from "@aif/runtime";
-import { logger, formatAttachmentsForPrompt } from "@aif/shared";
+import { getEnv, logger, formatAttachmentsForPrompt } from "@aif/shared";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery, startHeartbeat } from "../subagentQuery.js";
+import {
+  buildStructuredReviewComments,
+  formatPreviousFindingsForPrompt,
+  parseStructuredSidecarOutput,
+} from "../reviewContract.js";
 
 const log = logger("reviewer");
 
@@ -32,6 +37,7 @@ async function runSidecar(
 }
 
 export async function runReviewer(taskId: string, projectRoot: string): Promise<void> {
+  const env = getEnv();
   const task = findTaskById(taskId);
 
   if (!task) {
@@ -42,11 +48,51 @@ export async function runReviewer(taskId: string, projectRoot: string): Promise<
   const project = findProjectById(task.projectId);
   const sidecarBudget = project?.reviewSidecarMaxBudgetUsd ?? null;
   const useSubagents = task.useSubagents;
+  const strategy = env.AGENT_AUTO_REVIEW_STRATEGY;
+  const reviewIteration = (task.reviewIterationCount ?? 0) + 1;
+  const previousFindings = task.autoReviewState?.findings ?? [];
+  const reviewPreviousFindingState = previousFindings.filter((finding) =>
+    ["code_review", "review_gate"].includes(finding.source),
+  );
+  const securityPreviousFindingState = previousFindings.filter(
+    (finding) => finding.source === "security_audit",
+  );
+  const reviewPreviousFindings = formatPreviousFindingsForPrompt(reviewPreviousFindingState);
+  const securityPreviousFindings = formatPreviousFindingsForPrompt(securityPreviousFindingState);
 
-  log.info({ taskId, title: task.title, useSubagents }, "Starting review stage");
+  log.info(
+    { taskId, title: task.title, useSubagents, strategy, reviewIteration },
+    "Starting review stage",
+  );
 
   const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}
 All file reads, searches, and analysis must stay within this directory. Do NOT navigate to parent directories or other projects.`;
+
+  const reviewOutputContract = `Output contract:
+Return markdown only with these exact sections, in this exact order:
+
+## Blocking Findings
+- <blocking finding>
+or
+- none
+
+## Advisories
+- <non-blocking advisory>
+or
+- none
+
+## Previous Findings
+- [<id>] resolved | <short closure note>
+- [<id>] still_blocking | <short reason>
+or
+- none
+
+Rules:
+- Blocking Findings must list only issues that should block automatic completion for this review source.
+- Advisories are non-blocking suggestions or follow-ups.
+- Reuse only IDs provided in the Previous Findings input below.
+- Do not add any headings before, between, or after these sections.
+- Do not use code fences.`;
 
   const reviewPromptBase = `Review the implementation for this task:
 
@@ -60,7 +106,15 @@ ${formatAttachmentsForPrompt(task.attachments)}
 Implementation Log:
 ${task.implementationLog ?? "No implementation log available."}
 
-Review changed code for correctness, regression risks, performance, and maintainability.`;
+Auto-review strategy: ${strategy}
+Review iteration: ${reviewIteration}
+
+Previous Findings Input:
+${reviewPreviousFindings}
+
+Review changed code for correctness, regression risks, performance, and maintainability.
+
+${reviewOutputContract}`;
 
   const securityPromptBase = `Audit the implementation for security risks:
 
@@ -71,7 +125,15 @@ Description: ${task.description}
 Task attachments:
 ${formatAttachmentsForPrompt(task.attachments)}
 
-Focus on auth, validation, secrets, injection, and unsafe shell/file handling in changed code.`;
+Auto-review strategy: ${strategy}
+Review iteration: ${reviewIteration}
+
+Previous Findings Input:
+${securityPreviousFindings}
+
+Focus on auth, validation, secrets, injection, and unsafe shell/file handling in changed code.
+
+${reviewOutputContract}`;
   const reviewPrompt = useSubagents ? reviewPromptBase : `/aif-review ${reviewPromptBase}`;
   const securityPrompt = useSubagents
     ? securityPromptBase
@@ -160,7 +222,39 @@ Focus on auth, validation, secrets, injection, and unsafe shell/file handling in
 
     log.info({ taskId }, "Review and security sidecars completed");
 
-    const combinedReview = `## Code Review\n\n${reviewResult}\n\n## Security Audit\n\n${securityResult}`;
+    const parsedReview = parseStructuredSidecarOutput(
+      reviewResult,
+      "code_review",
+      reviewPreviousFindingState,
+    );
+    const parsedSecurity = parseStructuredSidecarOutput(
+      securityResult,
+      "security_audit",
+      securityPreviousFindingState,
+    );
+
+    const combinedReview =
+      parsedReview && parsedSecurity
+        ? buildStructuredReviewComments({
+            strategy,
+            iteration: reviewIteration,
+            codeReview: parsedReview,
+            securityAudit: parsedSecurity,
+            rawCodeReview: reviewResult,
+            rawSecurityAudit: securityResult,
+          })
+        : `## Code Review\n\n${reviewResult}\n\n## Security Audit\n\n${securityResult}`;
+
+    if (!parsedReview || !parsedSecurity) {
+      log.warn(
+        {
+          taskId,
+          parsedReview: Boolean(parsedReview),
+          parsedSecurity: Boolean(parsedSecurity),
+        },
+        "Structured review contract not satisfied, falling back to legacy review comment format",
+      );
+    }
 
     setTaskFields(taskId, {
       reviewComments: combinedReview,

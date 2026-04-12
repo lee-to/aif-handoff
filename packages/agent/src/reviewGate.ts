@@ -1,19 +1,84 @@
 import { createRuntimeWorkflowSpec } from "@aif/runtime";
+import type { AutoReviewFinding, AutoReviewStrategy } from "@aif/shared";
+import {
+  createAutoReviewFindingId,
+  parseStructuredReviewComments,
+  toAutoReviewState,
+  type ParsedStructuredReviewComments,
+} from "./reviewContract.js";
 import { executeSubagentQuery } from "./subagentQuery.js";
 
-type ReviewGateResult = { status: "success" } | { status: "request_changes"; fixes: string };
+export type ReviewGateParserMode = "structured" | "fallback";
 
-interface ReviewGateInput {
+export type ReviewGateManualHandoffReason =
+  | "new_blockers_after_rework"
+  | "malformed_review_output_fallback";
+
+export interface ReviewGateMetrics {
+  strategy: AutoReviewStrategy;
+  iteration: number;
+  previousBlockingCount: number;
+  stillBlockingCount: number;
+  newBlockingCount: number;
+  totalBlockingCount: number;
+  parserMode: ReviewGateParserMode;
+}
+
+type ReviewGateBaseResult = {
+  metrics: ReviewGateMetrics;
+  blockingFindings: AutoReviewFinding[];
+  fixesMarkdown: string;
+};
+
+export type ReviewGateResult =
+  | (ReviewGateBaseResult & {
+      status: "success";
+      autoReviewState: null;
+    })
+  | (ReviewGateBaseResult & {
+      status: "request_changes";
+      autoReviewState: ReturnType<typeof toAutoReviewState>;
+    })
+  | (ReviewGateBaseResult & {
+      status: "manual_review_required";
+      autoReviewState: ReturnType<typeof toAutoReviewState>;
+      handoffReason: ReviewGateManualHandoffReason;
+    });
+
+export interface ReviewGateInput {
   taskId: string;
   projectRoot: string;
   reviewComments: string | null;
+  strategy: AutoReviewStrategy;
+  iteration: number;
+  previousFindings: AutoReviewFinding[];
 }
 
 const SUCCESS_TOKEN = "SUCCESS";
 
-export async function evaluateReviewCommentsForAutoMode(
-  input: ReviewGateInput,
-): Promise<ReviewGateResult> {
+function formatFixesMarkdown(findings: AutoReviewFinding[]): string {
+  if (findings.length === 0) {
+    return "- none";
+  }
+
+  return findings
+    .map((finding) => `- [${finding.id}] ${finding.source} | ${finding.text}`)
+    .join("\n");
+}
+
+function mergeFindings(...groups: AutoReviewFinding[][]): AutoReviewFinding[] {
+  const map = new Map<string, AutoReviewFinding>();
+  for (const group of groups) {
+    for (const finding of group) {
+      map.set(finding.id, finding);
+    }
+  }
+  return [...map.values()];
+}
+
+async function runLegacyFallbackExtraction(
+  input: Pick<ReviewGateInput, "taskId" | "projectRoot" | "reviewComments">,
+): Promise<AutoReviewFinding[]> {
   const normalizedComments = (input.reviewComments ?? "").trim();
   const prompt = `Read the review comments and extract only the points that must be fixed.
 
@@ -53,7 +118,7 @@ Rules:
   }
 
   if (normalizedResultText.toUpperCase() === SUCCESS_TOKEN) {
-    return { status: "success" };
+    return [];
   }
 
   const trimmedLines = normalizedResultText
@@ -63,17 +128,172 @@ Rules:
 
   const bulletLines = trimmedLines.filter((line) => line.startsWith("- "));
   const hasOnlyBulletLines = bulletLines.length > 0 && bulletLines.length === trimmedLines.length;
-
-  // Enforce strict format from prompt:
-  // - either SUCCESS
-  // - or only "- " bullet lines.
-  // Any mixed/prose output is treated as success to avoid false rework loops.
   if (!hasOnlyBulletLines) {
-    return { status: "success" };
+    return [];
+  }
+
+  return bulletLines.map((line) => {
+    const text = line.slice(2).trim();
+    return {
+      id: createAutoReviewFindingId("review_gate", text),
+      source: "review_gate" as const,
+      text,
+    };
+  });
+}
+
+function buildMetrics(input: {
+  strategy: AutoReviewStrategy;
+  iteration: number;
+  previousBlockingCount: number;
+  stillBlockingCount: number;
+  newBlockingCount: number;
+  totalBlockingCount: number;
+  parserMode: ReviewGateParserMode;
+}): ReviewGateMetrics {
+  return {
+    strategy: input.strategy,
+    iteration: input.iteration,
+    previousBlockingCount: input.previousBlockingCount,
+    stillBlockingCount: input.stillBlockingCount,
+    newBlockingCount: input.newBlockingCount,
+    totalBlockingCount: input.totalBlockingCount,
+    parserMode: input.parserMode,
+  };
+}
+
+function buildStructuredDecision(
+  input: ReviewGateInput,
+  parsed: ParsedStructuredReviewComments,
+): ReviewGateResult {
+  const previousIds = new Set(input.previousFindings.map((finding) => finding.id));
+  const stillBlockingIds = new Set(
+    parsed.previousFindings
+      .filter((finding) => finding.status === "still_blocking")
+      .map((finding) => finding.id),
+  );
+  const newBlockingFindings = parsed.blockingFindings.filter(
+    (finding) => !previousIds.has(finding.id),
+  );
+  const metrics = buildMetrics({
+    strategy: input.strategy,
+    iteration: input.iteration,
+    previousBlockingCount: input.previousFindings.length,
+    stillBlockingCount: stillBlockingIds.size,
+    newBlockingCount: newBlockingFindings.length,
+    totalBlockingCount: parsed.blockingFindings.length,
+    parserMode: "structured",
+  });
+
+  if (parsed.blockingFindings.length === 0) {
+    return {
+      status: "success",
+      metrics,
+      blockingFindings: [],
+      fixesMarkdown: "- none",
+      autoReviewState: null,
+    };
+  }
+
+  const autoReviewState = toAutoReviewState({
+    strategy: input.strategy,
+    iteration: input.iteration,
+    findings: parsed.blockingFindings,
+  });
+
+  if (
+    input.strategy === "closure_first" &&
+    input.previousFindings.length > 0 &&
+    stillBlockingIds.size === 0 &&
+    newBlockingFindings.length > 0
+  ) {
+    return {
+      status: "manual_review_required",
+      handoffReason: "new_blockers_after_rework",
+      metrics,
+      blockingFindings: parsed.blockingFindings,
+      fixesMarkdown: formatFixesMarkdown(parsed.blockingFindings),
+      autoReviewState,
+    };
   }
 
   return {
     status: "request_changes",
-    fixes: bulletLines.join("\n"),
+    metrics,
+    blockingFindings: parsed.blockingFindings,
+    fixesMarkdown: formatFixesMarkdown(parsed.blockingFindings),
+    autoReviewState,
   };
+}
+
+function buildFallbackDecision(
+  input: ReviewGateInput,
+  fallbackFindings: AutoReviewFinding[],
+): ReviewGateResult {
+  // Structured output is the only path that can prove a previous blocker was
+  // actually resolved. Once we drop to legacy fallback after prior iterations,
+  // preserve all previous blockers and escalate to manual review instead of
+  // guessing that malformed output means the loop converged.
+  const mergedFindings =
+    input.previousFindings.length > 0
+      ? mergeFindings(input.previousFindings, fallbackFindings)
+      : fallbackFindings;
+  const metrics = buildMetrics({
+    strategy: input.strategy,
+    iteration: input.iteration,
+    previousBlockingCount: input.previousFindings.length,
+    stillBlockingCount: input.previousFindings.length > 0 ? input.previousFindings.length : 0,
+    newBlockingCount: fallbackFindings.length,
+    totalBlockingCount: mergedFindings.length,
+    parserMode: "fallback",
+  });
+
+  if (input.previousFindings.length > 0) {
+    return {
+      status: "manual_review_required",
+      handoffReason: "malformed_review_output_fallback",
+      metrics,
+      blockingFindings: mergedFindings,
+      fixesMarkdown: formatFixesMarkdown(mergedFindings),
+      autoReviewState: toAutoReviewState({
+        strategy: input.strategy,
+        iteration: input.iteration,
+        findings: mergedFindings,
+      }),
+    };
+  }
+
+  if (fallbackFindings.length === 0) {
+    return {
+      status: "success",
+      metrics,
+      blockingFindings: [],
+      fixesMarkdown: "- none",
+      autoReviewState: null,
+    };
+  }
+
+  return {
+    status: "request_changes",
+    metrics,
+    blockingFindings: fallbackFindings,
+    fixesMarkdown: formatFixesMarkdown(fallbackFindings),
+    autoReviewState: toAutoReviewState({
+      strategy: input.strategy,
+      iteration: input.iteration,
+      findings: fallbackFindings,
+    }),
+  };
+}
+
+export async function evaluateReviewCommentsForAutoMode(
+  input: ReviewGateInput,
+): Promise<ReviewGateResult> {
+  const parsedStructuredComments = parseStructuredReviewComments(input.reviewComments);
+  if (parsedStructuredComments) {
+    return buildStructuredDecision(input, parsedStructuredComments);
+  }
+
+  const fallbackFindings = await runLegacyFallbackExtraction(input);
+  return buildFallbackDecision(input, fallbackFindings);
 }

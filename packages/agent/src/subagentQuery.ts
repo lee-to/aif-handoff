@@ -38,10 +38,12 @@ const log = logger("subagent-query");
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
-const LOCK_RENEWAL_MS = Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
-
 const FIRST_ACTIVITY_TIMEOUT_ERROR = "first_activity_timeout";
 const FIRST_ACTIVITY_MAX_RETRIES = 2;
+
+function getLockRenewalMs(): number {
+  return Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
+}
 
 /**
  * First-activity watchdog: aborts the agent if no runtime activity
@@ -599,7 +601,7 @@ export async function executeSubagentQuery(
 
     if (!result) {
       throw new Error(
-        `${agentName}: all ${FIRST_ACTIVITY_MAX_RETRIES + 1} attempts stalled without tool activity`,
+        `${agentName}: all ${FIRST_ACTIVITY_MAX_RETRIES + 1} attempts stalled without runtime activity`,
       );
     }
 
@@ -690,7 +692,7 @@ export function startHeartbeat(taskId: string): NodeJS.Timeout {
   return setInterval(() => {
     updateTaskHeartbeat(taskId);
     if (_coordinatorId) {
-      renewTaskClaim(taskId, _coordinatorId, LOCK_RENEWAL_MS);
+      renewTaskClaim(taskId, _coordinatorId, getLockRenewalMs());
     }
   }, HEARTBEAT_INTERVAL_MS);
 }

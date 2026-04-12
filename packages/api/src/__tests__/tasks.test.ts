@@ -60,6 +60,7 @@ function createAppWithSettings() {
     return c.json({
       useSubagents: env.AGENT_USE_SUBAGENTS,
       maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
+      autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
     });
   });
   return app;
@@ -333,6 +334,46 @@ describe("tasks API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.title).toBe("Find me");
+    });
+
+    it("should expose manualReviewRequired and autoReviewState in task payload", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "test-manual-review",
+          projectId: "test-project",
+          title: "Manual review task",
+          status: "done",
+          manualReviewRequired: true,
+          autoReviewStateJson: JSON.stringify({
+            strategy: "closure_first",
+            iteration: 2,
+            findings: [
+              {
+                id: "finding-1",
+                source: "code_review",
+                text: "Add manual review badge",
+              },
+            ],
+          }),
+        })
+        .run();
+
+      const res = await app.request("/tasks/test-manual-review");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.manualReviewRequired).toBe(true);
+      expect(body.autoReviewState).toEqual({
+        strategy: "closure_first",
+        iteration: 2,
+        findings: [
+          {
+            id: "finding-1",
+            source: "code_review",
+            text: "Add manual review badge",
+          },
+        ],
+      });
     });
 
     it("should return 404 for non-existent task", async () => {
@@ -1738,6 +1779,7 @@ describe("tasks API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(typeof body.useSubagents).toBe("boolean");
+      expect(["full_re_review", "closure_first"]).toContain(body.autoReviewStrategy);
     });
   });
 });

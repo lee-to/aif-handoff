@@ -230,27 +230,51 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
         projectRoot: project.rootPath,
       });
 
-      if (outcome === "max_iterations_reached") {
-        updateTaskStatus(task.id, "done", CLEAN_STATE_RESET, {
-          title: taskTitle,
-          fromStatus: stage.inProgress,
-        });
+      if (outcome?.status === "manual_review_required") {
+        updateTaskStatus(
+          task.id,
+          "done",
+          {
+            blockedReason: null,
+            blockedFromStatus: null,
+            retryAfter: null,
+            retryCount: 0,
+            reworkRequested: false,
+            reviewIterationCount: outcome.currentIteration,
+            manualReviewRequired: true,
+            autoReviewState: outcome.autoReviewState,
+          },
+          {
+            title: taskTitle,
+            fromStatus: stage.inProgress,
+          },
+        );
         log.info(
-          { taskId: task.id, from: stage.inProgress, to: "done" },
-          "Auto review gate: max iterations reached, moving to done",
+          {
+            taskId: task.id,
+            from: stage.inProgress,
+            to: "done",
+            reviewIteration: outcome.currentIteration,
+            handoffReason: outcome.handoffReason,
+          },
+          "Auto review gate stopped at manual review handoff",
         );
         return true;
       }
 
-      if (outcome === "rework_requested") {
-        const currentCount = task.reviewIterationCount ?? 0;
+      if (outcome?.status === "rework_requested") {
         updateTaskStatus(
           task.id,
           "implementing",
           {
-            ...CLEAN_STATE_RESET,
+            blockedReason: null,
+            blockedFromStatus: null,
+            retryAfter: null,
+            retryCount: 0,
             reworkRequested: true,
-            reviewIterationCount: currentCount + 1,
+            reviewIterationCount: outcome.currentIteration,
+            manualReviewRequired: false,
+            autoReviewState: outcome.autoReviewState,
           },
           { title: taskTitle, fromStatus: stage.inProgress },
         );
@@ -259,9 +283,21 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
             taskId: task.id,
             from: stage.inProgress,
             to: "implementing",
-            reviewIteration: currentCount + 1,
+            reviewIteration: outcome.currentIteration,
           },
           "Auto review gate requested changes, restarting implementing stage",
+        );
+        return true;
+      }
+
+      if (outcome?.status === "accepted") {
+        updateTaskStatus(task.id, "done", CLEAN_STATE_RESET, {
+          title: taskTitle,
+          fromStatus: stage.inProgress,
+        });
+        log.info(
+          { taskId: task.id, from: stage.inProgress, to: "done" },
+          "Auto review gate accepted review, moving to done",
         );
         return true;
       }

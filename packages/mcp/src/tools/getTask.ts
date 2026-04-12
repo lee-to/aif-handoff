@@ -43,6 +43,8 @@ const TASK_FIELDS = [
   "reworkRequested",
   "reviewIterationCount",
   "maxReviewIterations",
+  "manualReviewRequired",
+  "autoReviewState",
   "paused",
   "lastHeartbeatAt",
   "lastSyncedAt",

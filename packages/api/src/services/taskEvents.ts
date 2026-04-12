@@ -214,6 +214,8 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
     retryCount: 0,
     reworkRequested: false,
     reviewIterationCount: 0,
+    manualReviewRequired: false,
+    autoReviewState: null,
     lastHeartbeatAt: nowIso,
     updatedAt: nowIso,
   });

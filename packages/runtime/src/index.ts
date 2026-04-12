@@ -27,7 +27,12 @@ export {
   RUNTIME_TRANSPORTS,
   RuntimeTransport,
   type RuntimeUsage,
+  type RuntimeUsageContext,
+  UsageReporting,
+  UsageSource,
 } from "./types.js";
+
+export { createNoopUsageSink, type RuntimeUsageEvent, type RuntimeUsageSink } from "./usageSink.js";
 
 export {
   type RegisterRuntimeModule,
@@ -44,6 +49,9 @@ export {
   RuntimeRegistrationError,
   RuntimeResolutionError,
   RuntimeValidationError,
+  classifyByHttpStatus,
+  classifyByMessageFallback,
+  isExternalFailureCategory,
   isRuntimeErrorCategory,
   type RuntimeErrorCategory,
 } from "./errors.js";
@@ -125,16 +133,25 @@ export {
   withStreamTimeouts,
 } from "./timeouts.js";
 
-export {
-  createClaudeRuntimeAdapter,
-  type ClaudeRuntimeAdapterLogger,
-  type CreateClaudeRuntimeAdapterOptions,
+/**
+ * Adapter factories are intentionally NOT re-exported from the package root.
+ *
+ * The only supported way to obtain a runtime adapter is through
+ * `bootstrapRuntimeRegistry()` / `createRuntimeRegistry()` → `resolveRuntime()`,
+ * which wraps every adapter with the usage pipeline. Importing a factory
+ * directly bypasses that wrapper and silently drops token accounting — so
+ * external consumers must never do it. The ESLint `no-restricted-imports`
+ * rule in the repo root prevents deep imports like
+ * `@aif/runtime/src/adapters/...` outside of `packages/runtime/**`.
+ */
+export type {
+  ClaudeRuntimeAdapterLogger,
+  CreateClaudeRuntimeAdapterOptions,
 } from "./adapters/claude/index.js";
 
-export {
-  createCodexRuntimeAdapter,
-  type CodexRuntimeAdapterLogger,
-  type CreateCodexRuntimeAdapterOptions,
+export type {
+  CodexRuntimeAdapterLogger,
+  CreateCodexRuntimeAdapterOptions,
 } from "./adapters/codex/index.js";
 
 export {
@@ -145,14 +162,12 @@ export {
   type CodexSubagentStrategy,
 } from "./adapters/codex/subagentStrategy.js";
 
-export {
-  createOpenCodeRuntimeAdapter,
-  type CreateOpenCodeRuntimeAdapterOptions,
-  type OpenCodeRuntimeAdapterLogger,
+export type {
+  CreateOpenCodeRuntimeAdapterOptions,
+  OpenCodeRuntimeAdapterLogger,
 } from "./adapters/opencode/index.js";
 
-export {
-  createOpenRouterRuntimeAdapter,
-  type CreateOpenRouterRuntimeAdapterOptions,
-  type OpenRouterAdapterLogger,
+export type {
+  CreateOpenRouterRuntimeAdapterOptions,
+  OpenRouterAdapterLogger,
 } from "./adapters/openrouter/index.js";

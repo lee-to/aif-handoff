@@ -1,27 +1,15 @@
 /**
  * Error classification for coordinator pipeline.
- * Extensible via EXTERNAL_FAILURE_PATTERNS and FAST_RETRY_PATTERNS.
+ *
+ * Uses structured RuntimeExecutionError.category from @aif/runtime as the
+ * primary classification signal. String-based pattern matching is used only
+ * for non-RuntimeExecutionError errors (e.g., RuntimeCapabilityError).
  */
 
-const EXTERNAL_FAILURE_PATTERNS: string[] = [
-  "not logged in",
-  "usage limit",
-  "extra usage",
-  "out of extra usage",
-  "rate limit",
-  "quota",
-  "at capacity",
-  "model is at capacity",
-  "credits",
-  "exited with code 1",
-  "timed out",
-  "first_activity_timeout",
-  "stream interrupted",
-  "stream closed",
-  "error in hook callback",
-  "permission denied",
-  "blocked by permissions",
-  "write permission",
+import { RuntimeExecutionError, isExternalFailureCategory } from "@aif/runtime";
+
+/** Capability errors surface as RuntimeCapabilityError with these message fragments. */
+const CAPABILITY_FAILURE_PATTERNS = [
   "runtime capability",
   "required capabilities",
   "unsupported capabilities",
@@ -37,8 +25,14 @@ function errorText(err: unknown): string {
 }
 
 export function isExternalFailure(err: unknown): boolean {
+  // Primary: structured category from runtime adapter classification
+  if (err instanceof RuntimeExecutionError) {
+    return isExternalFailureCategory(err.category);
+  }
+
+  // Secondary: capability errors (RuntimeCapabilityError, not RuntimeExecutionError)
   const lower = errorText(err);
-  return EXTERNAL_FAILURE_PATTERNS.some((pattern) => lower.includes(pattern));
+  return CAPABILITY_FAILURE_PATTERNS.some((pattern) => lower.includes(pattern));
 }
 
 export function isFastRetryableFailure(err: unknown): boolean {

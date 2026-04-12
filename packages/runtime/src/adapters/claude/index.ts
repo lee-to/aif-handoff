@@ -2,6 +2,8 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { findClaudePath } from "./findPath.js";
 import {
   RuntimeTransport,
+  UsageReporting,
+  UsageSource,
   type RuntimeAdapter,
   type RuntimeCapabilities,
   type RuntimeConnectionValidationInput,
@@ -102,6 +104,7 @@ const SDK_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: true,
   supportsCustomEndpoint: true,
+  usageReporting: UsageReporting.FULL,
 };
 
 /**
@@ -116,6 +119,7 @@ const CLI_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: false,
+  usageReporting: UsageReporting.FULL,
 };
 
 /** API transport — requires explicit key + baseUrl, no agent definitions. */
@@ -127,6 +131,7 @@ const API_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  usageReporting: UsageReporting.FULL,
 };
 
 function readStringOption(input: RuntimeConnectionValidationInput, key: string): string | null {
@@ -165,6 +170,7 @@ function toClaudeModelDiscoveryInput(input: RuntimeModelListInput): RuntimeRunIn
     cwd: input.projectRoot,
     headers: input.headers,
     options,
+    usageContext: { source: UsageSource.MODEL_DISCOVERY },
   };
 }
 

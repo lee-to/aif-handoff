@@ -45,4 +45,39 @@ describe("codex error classification", () => {
     expect(classified.adapterCode).toBe("CODEX_RATE_LIMIT");
     expect(classified.category).toBe("rate_limit");
   });
+
+  // HTTP status classification
+  it("classifies by HTTP status 429 as rate_limit", () => {
+    const classified = classifyCodexRuntimeError(new Error("response body"), 429);
+    expect(classified.adapterCode).toBe("CODEX_RATE_LIMIT");
+    expect(classified.category).toBe("rate_limit");
+  });
+
+  it("classifies by HTTP status 401 as auth", () => {
+    const classified = classifyCodexRuntimeError(new Error("response body"), 401);
+    expect(classified.adapterCode).toBe("CODEX_AUTH_ERROR");
+    expect(classified.category).toBe("auth");
+  });
+
+  it("classifies by HTTP status 500 as transport", () => {
+    const classified = classifyCodexRuntimeError(new Error("internal server error"), 500);
+    expect(classified.adapterCode).toBe("CODEX_TRANSPORT_ERROR");
+    expect(classified.category).toBe("transport");
+  });
+
+  it("prefers HTTP status over message classification", () => {
+    const classified = classifyCodexRuntimeError(new Error("rate limit"), 401);
+    expect(classified.category).toBe("auth");
+  });
+
+  it("falls back to message when HTTP status is unrecognized", () => {
+    const classified = classifyCodexRuntimeError(new Error("rate limit exceeded"), 200);
+    expect(classified.category).toBe("rate_limit");
+  });
+
+  it("classifies transport errors with category transport", () => {
+    const classified = classifyCodexRuntimeError(new Error("connection refused"));
+    expect(classified.adapterCode).toBe("CODEX_TRANSPORT_ERROR");
+    expect(classified.category).toBe("transport");
+  });
 });

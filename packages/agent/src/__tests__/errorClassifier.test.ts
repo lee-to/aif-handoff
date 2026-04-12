@@ -1,29 +1,44 @@
 import { describe, it, expect } from "vitest";
+import { RuntimeExecutionError } from "@aif/runtime";
 import { isExternalFailure, isFastRetryableFailure, truncateReason } from "../errorClassifier.js";
 
 describe("isExternalFailure", () => {
+  // Primary path: RuntimeExecutionError with structured category
   it.each([
-    "not logged in to Claude",
-    "Usage limit exceeded",
-    "You're out of extra usage · resets 3pm",
-    "Rate limit reached",
-    "Selected model is at capacity. Please try a different model",
-    "Insufficient quota remaining",
-    "No credits available",
-    "Process exited with code 1",
-    "Request timed out",
-    "Claude stream interrupted",
-    "WebSocket stream closed",
-    "Error in hook callback",
-    "Permission denied: /etc/shadow",
-    "Blocked by permissions",
-    "No write permission for directory",
-  ])("returns true for external error: %s", (message) => {
+    ["rate_limit", true],
+    ["auth", true],
+    ["timeout", true],
+    ["permission", true],
+    ["stream", true],
+    ["transport", true],
+    ["unknown", false],
+    ["model_not_found", false],
+    ["context_length", false],
+    ["content_filter", false],
+  ] as Array<[string, boolean]>)(
+    "returns %s for RuntimeExecutionError with category %s",
+    (category, expected) => {
+      const err = new RuntimeExecutionError(
+        "test error",
+        undefined,
+        category as import("@aif/runtime").RuntimeErrorCategory,
+      );
+      expect(isExternalFailure(err)).toBe(expected);
+    },
+  );
+
+  // Secondary path: capability errors (not RuntimeExecutionError)
+  it.each([
+    "runtime capability check failed",
+    "required capabilities not met",
+    "unsupported capabilities for this adapter",
+  ])("returns true for capability error message: %s", (message) => {
     expect(isExternalFailure(new Error(message))).toBe(true);
   });
 
-  it("returns true for string errors", () => {
-    expect(isExternalFailure("rate limit hit")).toBe(true);
+  // Plain errors without category are NOT classified as external
+  it("returns false for plain Error with external-sounding message", () => {
+    expect(isExternalFailure(new Error("rate limit hit"))).toBe(false);
   });
 
   it("returns false for internal errors", () => {

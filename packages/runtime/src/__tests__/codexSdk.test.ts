@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeRunInput } from "../types.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 // Mock the Codex SDK
 const mockRunStreamed = vi.fn();
@@ -32,6 +33,7 @@ function createRunInput(overrides: Partial<RuntimeRunInput> = {}): RuntimeRunInp
     providerId: "openai",
     prompt: "Implement the feature",
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }
@@ -449,5 +451,66 @@ describe("runCodexSdk", () => {
     };
     expect(constructorOptions.env?.OPENAI_API_KEY).toBe("sk-sdk");
     expect(constructorOptions.env?.npm_config_registry).toBeUndefined();
+  });
+
+  it("warns and falls back to stable defaults when thread permission overrides are invalid", async () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    mockRunStreamed.mockResolvedValue({
+      events: createMockEvents([
+        { type: "thread.started", thread_id: "thread-invalid-overrides" },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 },
+        },
+      ]),
+    });
+
+    await runCodexSdk(
+      createRunInput({
+        options: { approvalPolicy: "bad-policy", sandboxMode: "bad-sandbox" },
+      }),
+      logger,
+    );
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+      }),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: "codex",
+        transport: "sdk",
+        field: "approvalPolicy",
+        source: "options",
+        invalidValue: "bad-policy",
+      }),
+      "Ignoring invalid Codex approvalPolicy override",
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: "codex",
+        transport: "sdk",
+        field: "sandboxMode",
+        source: "options",
+        invalidValue: "bad-sandbox",
+      }),
+      "Ignoring invalid Codex sandboxMode override",
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: "codex",
+        transport: "sdk",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+      }),
+      "Resolved Codex SDK approval and sandbox settings",
+    );
   });
 });

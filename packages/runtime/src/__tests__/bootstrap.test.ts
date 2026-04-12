@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { bootstrapRuntimeRegistry } from "../bootstrap.js";
+import { UsageReporting } from "../types.js";
+
+const VALID_USAGE_REPORTING = new Set<string>(Object.values(UsageReporting));
 
 describe("bootstrapRuntimeRegistry", () => {
   it("creates registry with built-in claude, codex, opencode, and openrouter adapters", async () => {
@@ -72,6 +75,26 @@ describe("bootstrapRuntimeRegistry", () => {
     // Each call creates a fresh registry
     expect(a).not.toBe(b);
     expect(a.listRuntimes().length).toBe(b.listRuntimes().length);
+  });
+
+  // Discovery test: enforces that every built-in adapter has declared a
+  // `usageReporting` capability. A new adapter added to bootstrap.ts without
+  // that field would ship with undefined usage tracking — this test is the
+  // last line of defence against that regression.
+  it("every built-in adapter declares a valid usageReporting capability", async () => {
+    const registry = await bootstrapRuntimeRegistry();
+    const runtimes = registry.listRuntimes();
+    expect(runtimes.length).toBeGreaterThan(0);
+    for (const descriptor of runtimes) {
+      expect(
+        descriptor.capabilities.usageReporting,
+        `runtime "${descriptor.id}" is missing usageReporting capability`,
+      ).toBeDefined();
+      expect(
+        VALID_USAGE_REPORTING.has(descriptor.capabilities.usageReporting),
+        `runtime "${descriptor.id}" declared invalid usageReporting "${descriptor.capabilities.usageReporting}"`,
+      ).toBe(true);
+    }
   });
 });
 it("opencode adapter has expected capabilities", async () => {

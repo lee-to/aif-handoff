@@ -1,4 +1,4 @@
-import { listProjects } from "@aif/data";
+import { createDbUsageSink, listProjects } from "@aif/data";
 import { getEnv, logger } from "@aif/shared";
 import { bootstrapRuntimeRegistry } from "@aif/runtime";
 import { pollAndProcess, setRuntimeRegistry } from "./coordinator.js";
@@ -24,7 +24,10 @@ const pollScheduler = startPollScheduler(async () => {
 }, env.POLL_INTERVAL_MS);
 
 // Pre-load runtime registry so project init includes all adapters
-bootstrapRuntimeRegistry({ runtimeModules: env.AIF_RUNTIME_MODULES })
+bootstrapRuntimeRegistry({
+  runtimeModules: env.AIF_RUNTIME_MODULES,
+  usageSink: createDbUsageSink(),
+})
   .then((registry) => {
     setRuntimeRegistry(registry);
     log.info("Runtime registry loaded for project initialization");

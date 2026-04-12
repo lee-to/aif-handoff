@@ -1,18 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeRunInput } from "../types.js";
 import { getCliSpawnInvocation } from "./helpers/cliSpawn.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
-// Mock child_process.spawn
-const mockStdout = { on: vi.fn() };
-const mockStderr = { on: vi.fn() };
-const mockStdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
-const mockChild = {
-  stdout: mockStdout,
-  stderr: mockStderr,
-  stdin: mockStdin,
-  on: vi.fn(),
-  kill: vi.fn(),
-};
+// vi.hoisted ensures the mock fixtures initialize before vi.mock's hoisted
+// factory runs. Without this, the factory below hits a TDZ error trying to
+// read `mockChild` — vi.mock is hoisted above regular top-level code.
+const { mockStdout, mockStderr, mockStdin, mockChild } = vi.hoisted(() => {
+  const stdout = { on: vi.fn() };
+  const stderr = { on: vi.fn() };
+  const stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
+  return {
+    mockStdout: stdout,
+    mockStderr: stderr,
+    mockStdin: stdin,
+    mockChild: {
+      stdout,
+      stderr,
+      stdin,
+      on: vi.fn(),
+      kill: vi.fn(),
+    },
+  };
+});
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn().mockReturnValue(mockChild),
@@ -28,6 +38,7 @@ function createInput(overrides: Partial<RuntimeRunInput> = {}): RuntimeRunInput 
     prompt: "Implement the feature",
     options: {},
     projectRoot: "/tmp/project",
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

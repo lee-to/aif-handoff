@@ -31,7 +31,7 @@
     "build": "turbo build",
     "lint": "turbo lint",
     "test": "turbo test",
-    "coverage": "turbo test -- --coverage",
+    "coverage": "npm run coverage --workspaces --if-present",
     "db:setup": "npm run db:setup --workspace=@aif/shared",
     "db:push": "turbo db:push --filter=@aif/shared",
     "format": "prettier --write .",

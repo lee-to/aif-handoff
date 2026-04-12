@@ -1,3 +1,4 @@
+import "./stdioEnv.js";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { logger } from "@aif/shared";
@@ -103,8 +104,7 @@ async function main() {
   log.info(
     {
       transport: env.transport,
-      readRpm: env.rateLimitReadRpm,
-      writeRpm: env.rateLimitWriteRpm,
+      httpPort: env.httpPort,
     },
     "MCP server starting",
   );

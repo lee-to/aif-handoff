@@ -6,6 +6,7 @@ import {
   validateCodexAgentApiConnection,
 } from "../adapters/codex/api.js";
 import { CodexRuntimeAdapterError } from "../adapters/codex/errors.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 function createRunInput(overrides: Record<string, unknown> = {}) {
   return {
@@ -18,6 +19,7 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     sessionId: "session-1",
     resume: false,
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

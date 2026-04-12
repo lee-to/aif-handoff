@@ -1,5 +1,7 @@
 import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, like, lte, min, or, sql } from "drizzle-orm";
 import {
+  AUTO_REVIEW_FINDING_SOURCES,
+  AUTO_REVIEW_STRATEGIES,
   generatePlanPath,
   getProjectConfig,
   logger as createLogger,
@@ -12,12 +14,14 @@ import {
   runtimeProfiles,
   chatSessions,
   chatMessages,
+  usageEvents,
   type CreateRuntimeProfileInput,
   type EffectiveRuntimeProfileSelection,
   type RuntimeProfile,
   type UpdateRuntimeProfileInput,
   type Task,
   type TaskStatus,
+  type AutoReviewState,
   type ChatSession,
   type ChatSessionMessage,
   type ChatSessionRow,
@@ -27,16 +31,21 @@ import {
 import { getDb } from "@aif/shared/server";
 
 const log = createLogger("data");
+const AUTO_REVIEW_STRATEGY_SET = new Set<string>(AUTO_REVIEW_STRATEGIES);
+const AUTO_REVIEW_FINDING_SOURCE_SET = new Set<string>(AUTO_REVIEW_FINDING_SOURCES);
 
 export type TaskRow = typeof tasks.$inferSelect;
 export type CommentRow = typeof taskComments.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 export type RuntimeProfileRow = typeof runtimeProfiles.$inferSelect;
+export type HydratedTaskRow = TaskRow & { autoReviewState?: AutoReviewState | null };
 
 export type CoordinatorStage = "planner" | "plan-checker" | "implementer" | "reviewer";
 
 /** DB-level patch: all mutable task columns with their storage types (attachments/tags as JSON strings). */
-export type TaskFieldsPatch = Partial<Omit<TaskRow, "id" | "projectId" | "createdAt">>;
+export type TaskFieldsPatch = Partial<Omit<TaskRow, "id" | "projectId" | "createdAt">> & {
+  autoReviewState?: AutoReviewState | null;
+};
 
 /** API-level update: domain types (attachments as array, tags as string[]). Serialization handled by data layer. */
 export type TaskFieldsUpdate = {
@@ -68,6 +77,8 @@ export type TaskFieldsUpdate = {
   reworkRequested?: boolean;
   reviewIterationCount?: number;
   maxReviewIterations?: number;
+  manualReviewRequired?: boolean;
+  autoReviewState?: AutoReviewState | null;
   paused?: boolean;
   lastHeartbeatAt?: string | null;
   runtimeProfileId?: string | null;
@@ -78,11 +89,12 @@ export type TaskFieldsUpdate = {
 
 
 export function toTaskResponse(task: TaskRow): Task {
-  const { attachments, tags, runtimeOptionsJson, ...rest } = task;
+  const { attachments, tags, runtimeOptionsJson, autoReviewStateJson, ...rest } = task;
   return {
     ...rest,
     attachments: parseAttachments(attachments),
     tags: parseTags(tags),
+    autoReviewState: parseAutoReviewState(autoReviewStateJson),
     runtimeOptions: parseRuntimeObject(runtimeOptionsJson),
   };
 }
@@ -105,6 +117,95 @@ function parseRuntimeObject(raw: string | null | undefined): Record<string, unkn
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
+    return null;
+  }
+}
+
+function parseAutoReviewState(raw: string | null | undefined): AutoReviewState | null {
+  if (!raw) return null;
+
+  const preview = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
+  const warnMalformed = (reason: string, extra: Record<string, unknown> = {}) => {
+    log.warn({ reason, raw: preview, ...extra }, "Malformed persisted auto-review payload");
+  };
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      warnMalformed("root_not_object");
+      return null;
+    }
+
+    const candidate = parsed as Record<string, unknown>;
+
+    const strategy =
+      typeof candidate.strategy === "string" &&
+      AUTO_REVIEW_STRATEGY_SET.has(candidate.strategy)
+        ? candidate.strategy
+        : null;
+    const iteration =
+      typeof candidate.iteration === "number" &&
+      Number.isFinite(candidate.iteration) &&
+      Number.isInteger(candidate.iteration) &&
+      candidate.iteration >= 0
+        ? candidate.iteration
+        : null;
+    const findings = Array.isArray(candidate.findings) ? candidate.findings : null;
+
+    if (!strategy || iteration == null || !findings) {
+      warnMalformed("missing_required_fields", {
+        hasStrategy: Boolean(strategy),
+        hasIteration: iteration != null,
+        hasFindings: Boolean(findings),
+      });
+      return null;
+    }
+
+    const normalizedFindings: AutoReviewState["findings"] = [];
+    for (const item of findings) {
+      if (!item || typeof item !== "object") {
+        warnMalformed("invalid_finding_shape");
+        return null;
+      }
+
+      const finding = item as Record<string, unknown>;
+      if (
+        typeof finding.id !== "string" ||
+        typeof finding.text !== "string" ||
+        typeof finding.source !== "string" ||
+        !AUTO_REVIEW_FINDING_SOURCE_SET.has(finding.source)
+      ) {
+        warnMalformed("invalid_finding_fields", {
+          findingId: finding.id,
+          findingSource: finding.source,
+        });
+        return null;
+      }
+
+      normalizedFindings.push({
+        id: finding.id,
+        text: finding.text,
+        source: finding.source as AutoReviewState["findings"][number]["source"],
+      });
+    }
+
+    if (normalizedFindings.length !== findings.length) {
+      warnMalformed("dropped_invalid_findings", {
+        expectedCount: findings.length,
+        actualCount: normalizedFindings.length,
+      });
+      return null;
+    }
+
+    return {
+      strategy: strategy as AutoReviewState["strategy"],
+      iteration,
+      findings: normalizedFindings,
+    };
+  } catch (error) {
+    warnMalformed("json_parse_failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }
@@ -141,8 +242,13 @@ export function toCommentResponse(comment: CommentRow) {
   };
 }
 
-export function findTaskById(id: string): TaskRow | undefined {
-  return getDb().select().from(tasks).where(eq(tasks.id, id)).get();
+export function findTaskById(id: string): HydratedTaskRow | undefined {
+  const row = getDb().select().from(tasks).where(eq(tasks.id, id)).get();
+  if (!row) return undefined;
+  return {
+    ...row,
+    autoReviewState: parseAutoReviewState(row.autoReviewStateJson),
+  };
 }
 
 export function listTasks(projectId?: string): TaskRow[] {
@@ -164,7 +270,7 @@ export type TaskSummaryRow = Pick<TaskRow,
   | "autoMode" | "isFix" | "paused" | "roadmapAlias" | "tags"
   | "runtimeProfileId" | "modelOverride"
   | "blockedReason" | "blockedFromStatus" | "retryCount"
-  | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations"
+  | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations" | "manualReviewRequired"
   | "tokenTotal" | "costUsd" | "lastSyncedAt" | "createdAt" | "updatedAt"
 >;
 
@@ -188,6 +294,7 @@ const SUMMARY_COLUMNS = {
   reworkRequested: tasks.reworkRequested,
   reviewIterationCount: tasks.reviewIterationCount,
   maxReviewIterations: tasks.maxReviewIterations,
+  manualReviewRequired: tasks.manualReviewRequired,
   tokenTotal: tasks.tokenTotal,
   costUsd: tasks.costUsd,
   lastSyncedAt: tasks.lastSyncedAt,
@@ -356,6 +463,7 @@ export function createTask(input: {
       roadmapAlias: input.roadmapAlias ?? null,
       tags: JSON.stringify(input.tags ?? []),
       reworkRequested: false,
+      manualReviewRequired: false,
       status: "backlog",
       position: (() => {
         const row = db
@@ -375,7 +483,7 @@ export function createTask(input: {
 }
 
 export function updateTask(id: string, fields: TaskFieldsUpdate): TaskRow | undefined {
-  const { attachments, tags, runtimeOptions, ...rest } = fields;
+  const { attachments, tags, runtimeOptions, autoReviewState, ...rest } = fields;
   const patch: TaskFieldsPatch = { ...rest, updatedAt: new Date().toISOString() };
   if (attachments !== undefined) {
     patch.attachments = JSON.stringify(attachments);
@@ -385,6 +493,10 @@ export function updateTask(id: string, fields: TaskFieldsUpdate): TaskRow | unde
   }
   if (runtimeOptions !== undefined) {
     patch.runtimeOptionsJson = runtimeOptions === null ? null : JSON.stringify(runtimeOptions);
+  }
+  if (autoReviewState !== undefined) {
+    patch.autoReviewStateJson =
+      autoReviewState === null ? null : JSON.stringify(autoReviewState);
   }
   if (fields.runtimeProfileId !== undefined || fields.modelOverride !== undefined) {
     log.debug(
@@ -401,7 +513,13 @@ export function updateTask(id: string, fields: TaskFieldsUpdate): TaskRow | unde
 }
 
 export function setTaskFields(id: string, fields: TaskFieldsPatch): void {
-  getDb().update(tasks).set(fields).where(eq(tasks.id, id)).run();
+  const { autoReviewState, ...rest } = fields;
+  const patch: Partial<TaskRow> & { autoReviewStateJson?: string | null } = { ...rest };
+  if (autoReviewState !== undefined) {
+    patch.autoReviewStateJson =
+      autoReviewState === null ? null : JSON.stringify(autoReviewState);
+  }
+  getDb().update(tasks).set(patch).where(eq(tasks.id, id)).run();
 }
 
 export function deleteTask(id: string): void {
@@ -807,6 +925,193 @@ export function incrementTaskTokenUsage(
     .run();
 
   return delta;
+}
+
+export function incrementProjectTokenUsage(
+  projectId: string,
+  usage: Record<string, unknown> | null | undefined,
+) {
+  const delta = parseTaskTokenUsage(usage);
+  if (delta.total === 0 && delta.costUsd === 0) return delta;
+
+  getDb()
+    .update(projects)
+    .set({
+      tokenInput: sql<number>`coalesce(${projects.tokenInput}, 0) + ${delta.input}`,
+      tokenOutput: sql<number>`coalesce(${projects.tokenOutput}, 0) + ${delta.output}`,
+      tokenTotal: sql<number>`coalesce(${projects.tokenTotal}, 0) + ${delta.total}`,
+      costUsd: sql<number>`coalesce(${projects.costUsd}, 0) + ${delta.costUsd}`,
+    })
+    .where(eq(projects.id, projectId))
+    .run();
+
+  return delta;
+}
+
+export function incrementChatSessionTokenUsage(
+  chatSessionId: string,
+  usage: Record<string, unknown> | null | undefined,
+) {
+  const delta = parseTaskTokenUsage(usage);
+  if (delta.total === 0 && delta.costUsd === 0) return delta;
+
+  getDb()
+    .update(chatSessions)
+    .set({
+      tokenInput: sql<number>`coalesce(${chatSessions.tokenInput}, 0) + ${delta.input}`,
+      tokenOutput: sql<number>`coalesce(${chatSessions.tokenOutput}, 0) + ${delta.output}`,
+      tokenTotal: sql<number>`coalesce(${chatSessions.tokenTotal}, 0) + ${delta.total}`,
+      costUsd: sql<number>`coalesce(${chatSessions.costUsd}, 0) + ${delta.costUsd}`,
+    })
+    .where(eq(chatSessions.id, chatSessionId))
+    .run();
+
+  return delta;
+}
+
+// ---------------------------------------------------------------------------
+// Usage event sink — structural type matching `@aif/runtime`'s RuntimeUsageSink
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural shape of a usage event. Mirrors `RuntimeUsageEvent` from
+ * `@aif/runtime/usageSink` without an import so `@aif/data` stays free of
+ * a dependency on `@aif/runtime` (runtime → shared → data is the intended
+ * direction; data must not know about the runtime layer).
+ *
+ * The host process (api or agent) passes `createDbUsageSink()` to
+ * `createRuntimeRegistry({ usageSink })`, where TypeScript's structural
+ * typing verifies that the returned object satisfies `RuntimeUsageSink`.
+ */
+export interface DbUsageEvent {
+  context: {
+    source: string;
+    projectId?: string | null;
+    taskId?: string | null;
+    chatSessionId?: string | null;
+  };
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+  transport?: string;
+  workflowKind?: string;
+  usageReporting: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd?: number;
+  };
+  recordedAt: Date;
+}
+
+export interface DbUsageSink {
+  record(event: DbUsageEvent): void;
+}
+
+/**
+ * Insert a `usage_events` row and roll the usage delta into whichever
+ * per-entity aggregate counters the event has scope for (task, project,
+ * chat-session). Any subset of scopes may be present — a chat turn has
+ * project + chat-session but no task; a subagent run has project + task
+ * but no chat-session; a commit run has only project.
+ *
+ * Runs all four writes in a single transaction so the append-only log and
+ * the rolled-up counters stay consistent.
+ */
+export function recordUsageEvent(event: DbUsageEvent): void {
+  const { usage, context } = event;
+  const db = getDb();
+
+  // Wrap insert + aggregate updates in a single transaction so the
+  // append-only log and rolled-up counters stay consistent. If any
+  // update fails the entire batch rolls back — no partial divergence.
+  db.transaction((tx) => {
+    tx.insert(usageEvents)
+      .values({
+        source: context.source,
+        projectId: context.projectId ?? null,
+        taskId: context.taskId ?? null,
+        chatSessionId: context.chatSessionId ?? null,
+        runtimeId: event.runtimeId,
+        providerId: event.providerId,
+        profileId: event.profileId ?? null,
+        transport: event.transport ?? null,
+        workflowKind: event.workflowKind ?? null,
+        usageReporting: event.usageReporting,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        costUsd: usage.costUsd ?? null,
+      })
+      .run();
+
+    // Use usage.totalTokens (the provider's authoritative total) for all
+    // aggregates — same source of truth as the usage_events row. Never
+    // recalculate as inputTokens + outputTokens: providers may include
+    // additional token categories (cache, reasoning, etc.) in their total.
+    const totalTokensDelta = usage.totalTokens;
+    const costDelta = usage.costUsd ?? 0;
+
+    if (context.taskId) {
+      tx.update(tasks)
+        .set({
+          tokenInput: sql<number>`coalesce(${tasks.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${tasks.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${tasks.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${tasks.costUsd}, 0) + ${costDelta}`,
+        })
+        .where(eq(tasks.id, context.taskId))
+        .run();
+    }
+    if (context.projectId) {
+      tx.update(projects)
+        .set({
+          tokenInput: sql<number>`coalesce(${projects.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${projects.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${projects.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${projects.costUsd}, 0) + ${costDelta}`,
+        })
+        .where(eq(projects.id, context.projectId))
+        .run();
+    }
+    if (context.chatSessionId) {
+      tx.update(chatSessions)
+        .set({
+          tokenInput: sql<number>`coalesce(${chatSessions.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${chatSessions.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${chatSessions.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${chatSessions.costUsd}, 0) + ${costDelta}`,
+        })
+        .where(eq(chatSessions.id, context.chatSessionId))
+        .run();
+    }
+  });
+}
+
+/**
+ * Build a `DbUsageSink` (structurally compatible with
+ * `@aif/runtime.RuntimeUsageSink`) that persists every event via
+ * `recordUsageEvent`. Sink methods are non-throwing: any DB error is logged
+ * and swallowed so a broken sink never breaks the caller mid-run.
+ */
+export function createDbUsageSink(): DbUsageSink {
+  return {
+    record(event) {
+      try {
+        recordUsageEvent(event);
+      } catch (err) {
+        log.error(
+          {
+            err,
+            runtimeId: event.runtimeId,
+            source: event.context.source,
+          },
+          "Failed to record usage event — dropping silently",
+        );
+      }
+    },
+  };
 }
 
 /**

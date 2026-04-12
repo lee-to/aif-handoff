@@ -50,15 +50,25 @@ The API exposes effective selection endpoints:
 
 ## Supported Runtimes
 
-| Runtime      | Provider     | Transports    | Resume         | Sessions       | Agent Defs    | Native Subagents | Isolated Fallback | Light Model         | Status                    |
-| ------------ | ------------ | ------------- | -------------- | -------------- | ------------- | ---------------- | ----------------- | ------------------- | ------------------------- |
-| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI)  | Yes (SDK/CLI)  | Yes (SDK/CLI) | No               | No                | `claude-haiku-3-5`  | Built-in                  |
-| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK only) | Yes (SDK only) | No            | SDK only         | SDK only          | default             | Built-in                  |
-| `opencode`   | `opencode`   | API           | Yes            | Yes            | No            | No               | No                | null (configurable) | Built-in                  |
-| `openrouter` | `openrouter` | API           | No             | No             | No            | No               | No                | null (configurable) | Built-in                  |
-| Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Configurable     | Configurable      | Configurable        | Via `AIF_RUNTIME_MODULES` |
+| Runtime      | Provider     | Transports    | Resume         | Sessions       | Agent Defs    | Native Subagents | Isolated Fallback | Usage Reporting               | Light Model         | Status                    |
+| ------------ | ------------ | ------------- | -------------- | -------------- | ------------- | ---------------- | ----------------- | ----------------------------- | ------------------- | ------------------------- |
+| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI)  | Yes (SDK/CLI)  | Yes (SDK/CLI) | No               | No                | `FULL` (all transports)       | `claude-haiku-3-5`  | Built-in                  |
+| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK only) | Yes (SDK only) | No            | SDK only         | SDK only          | `FULL` SDK/API, `PARTIAL` CLI | default             | Built-in                  |
+| `opencode`   | `opencode`   | API           | Yes            | Yes            | No            | No               | No                | `NONE`                        | null (configurable) | Built-in                  |
+| `openrouter` | `openrouter` | API           | No             | No             | No            | No               | No                | `FULL`                        | null (configurable) | Built-in                  |
+| Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Configurable     | Configurable      | Must declare                  | Configurable        | Via `AIF_RUNTIME_MODULES` |
 
 Capabilities are **transport-aware**: the same adapter may expose different capabilities depending on the selected transport. For example, the Codex adapter supports resume/sessions via SDK transport but not via CLI. Use `resolveAdapterCapabilities(adapter, transport)` to get the effective set.
+
+### Usage reporting contract
+
+Every adapter must declare a `usageReporting` value in its `RuntimeCapabilities`. The registry wrapper reads this field for every run and enforces the contract — a new adapter cannot silently skip token accounting:
+
+- **`FULL`** — adapter always populates `RuntimeRunResult.usage` on a successful run. If the wrapper observes a null `usage` while the capability says `FULL`, it logs an error (dev) or fires a metric (prod). The contract test in `bootstrap.test.ts` also fails the build if the field is missing.
+- **`PARTIAL`** — adapter returns usage when the provider gives it, but may return `null` on some transport/streaming paths (e.g. CLI early-termination). The wrapper accepts both and records only the non-null events.
+- **`NONE`** — transport fundamentally cannot report token counts (e.g. OpenCode message payload). The wrapper warns if usage unexpectedly appears, but this is an opt-out from the usage pipeline — dashboards will show zero traffic for runtimes in this tier.
+
+All successful runs that produce non-null usage flow through the registry's `usageSink`, which persists them to the `usage_events` table and rolls them up into per-task / per-project / per-chat-session aggregates. Sink wiring lives in `packages/api/src/services/runtime.ts` (API) and `packages/agent/src/index.ts` / `subagentQuery.ts` (agent) — both use `createDbUsageSink()` from `@aif/data`.
 
 ### Transport Types
 
@@ -152,6 +162,8 @@ SDK-specific options:
 
 > Migration note: older releases defaulted `codexSubagentStrategy` to `isolated`.
 > If you relied on the isolated skill-session path, set `codexSubagentStrategy: "isolated"` explicitly after upgrading.
+
+Invalid `options.approvalPolicy` / `options.sandboxMode` values are ignored with a runtime warning, and the adapter falls back to the effective default for that execution path.
 
 ### Codex (CLI transport)
 

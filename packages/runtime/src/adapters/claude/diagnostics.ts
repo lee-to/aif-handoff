@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { RuntimeDiagnoseErrorInput } from "../../types.js";
+import { RuntimeExecutionError } from "../../errors.js";
 
 function messageFromUnknown(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -8,10 +9,32 @@ function messageFromUnknown(err: unknown): string {
 function explainFailure(err: unknown, stderrTail: string): string {
   const baseMessage = messageFromUnknown(err);
   const stderr = stderrTail.trim();
+  const detail = stderr || baseMessage;
+
+  // Primary: dispatch on structured category when available
+  if (err instanceof RuntimeExecutionError && err.category !== "unknown") {
+    switch (err.category) {
+      case "auth":
+        return `Runtime not logged in or authentication failed. Run claude /login. ${detail}`;
+      case "rate_limit":
+        return `Runtime usage limit reached. ${detail}`;
+      case "stream":
+        return `Runtime stream interrupted during execution. ${detail}`;
+      case "timeout":
+        return `Runtime request timed out. ${detail}`;
+      case "permission":
+        return `Runtime permission denied. ${detail}`;
+      case "transport":
+        return `Runtime connection failed. ${detail}`;
+    }
+  }
+
+  // Fallback: string matching for unclassified errors or plain Error instances
+  // (e.g., CLI stderr output, non-RuntimeExecutionError exceptions)
   const combinedLower = `${baseMessage} ${stderr}`.toLowerCase();
 
   if (combinedLower.includes("not logged in") || combinedLower.includes("/login")) {
-    return `Runtime not logged in. Run claude /login. ${stderr || baseMessage}`;
+    return `Runtime not logged in. Run claude /login. ${detail}`;
   }
 
   if (
@@ -22,11 +45,11 @@ function explainFailure(err: unknown, stderrTail: string): string {
     combinedLower.includes("quota") ||
     combinedLower.includes("credits")
   ) {
-    return `Runtime usage limit reached. ${stderr || baseMessage}`;
+    return `Runtime usage limit reached. ${detail}`;
   }
 
   if (combinedLower.includes("stream closed") || combinedLower.includes("error in hook callback")) {
-    return `Runtime stream interrupted during execution. ${stderr || baseMessage}`;
+    return `Runtime stream interrupted during execution. ${detail}`;
   }
 
   if (stderr) {

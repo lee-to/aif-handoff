@@ -2,13 +2,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
 import { logger, getEnv, getProjectConfig, generatePlanPath } from "@aif/shared";
-import {
-  createTask,
-  findProjectById,
-  findTasksByRoadmapAlias,
-  incrementTaskTokenUsage,
-  listTasks,
-} from "@aif/data";
+import { createTask, findProjectById, findTasksByRoadmapAlias, listTasks } from "@aif/data";
+import { UsageSource } from "@aif/runtime";
 import { resolveApiLightModel, runApiRuntimeOneShot } from "./runtime.js";
 
 const log = logger("roadmap-generation");
@@ -115,6 +110,7 @@ export async function generateRoadmapFile(
       workflowKind: "roadmap-generate",
       systemPromptAppend:
         "Do not spawn subagents. Reply directly with the ROADMAP.md content in markdown format. No JSON, no code fences around the entire output.",
+      usageContext: { source: UsageSource.ROADMAP_GENERATE },
     });
     rawResult = (result.outputText ?? "").trim();
   } catch (err) {
@@ -245,16 +241,11 @@ export async function generateRoadmapTasks(
       modelOverride: lightModel,
       systemPromptAppend:
         "Do not spawn subagents. Reply directly with JSON only. No markdown fences, no explanatory text.",
+      usageContext: { source: UsageSource.ROADMAP_EXTRACT },
     });
 
-    if (trackingTaskId && result.usage) {
-      incrementTaskTokenUsage(trackingTaskId, {
-        input_tokens: result.usage.inputTokens,
-        output_tokens: result.usage.outputTokens,
-        total_tokens: result.usage.totalTokens,
-        total_cost_usd: result.usage.costUsd,
-      });
-    }
+    // Usage recorded automatically by the runtime registry wrapper via the DB
+    // sink (runApiRuntimeOneShot stamps projectId + taskId into usageContext).
 
     rawResult = (result.outputText ?? "").trim();
   } catch (err) {

@@ -90,6 +90,18 @@ describe("runImplementer rework behavior", () => {
         status: "implementing",
         plan: "## Plan\n- [x] Done",
         reworkRequested: true,
+        reviewComments: "## Blocking Findings\n- [finding-1] code_review | Fix the retry path",
+        autoReviewStateJson: JSON.stringify({
+          strategy: "closure_first",
+          iteration: 2,
+          findings: [
+            {
+              id: "finding-1",
+              source: "code_review",
+              text: "Fix the retry path",
+            },
+          ],
+        }),
       })
       .run();
     db.insert(taskComments)
@@ -134,7 +146,13 @@ describe("runImplementer rework behavior", () => {
     expect(call.prompt).toContain("REWORK REQUEST — THIS IS THE PRIMARY TASK");
     expect(call.prompt).toContain("<<<REWORK_COMMENT");
     expect(call.prompt).toContain("\nREWORK_COMMENT\n");
+    expect(call.prompt).toContain("<<<FULL_REVIEW_COMMENTS");
+    expect(call.prompt).toContain("## Blocking Findings");
+    expect(call.prompt).toContain("<<<BLOCKING_FINDINGS_SNAPSHOT");
+    expect(call.prompt).toContain("strategy: closure_first");
+    expect(call.prompt).toContain("- [finding-1] code_review | Fix the retry path");
     expect(call.prompt).toContain("Rework handling protocol:");
+    expect(call.prompt).toContain("blocking finding IDs from BLOCKING_FINDINGS_SNAPSHOT");
 
     // Coordinator lead line is still present further down the prompt
     expect(call.prompt).toContain("Implement the task using the provided plan.");
@@ -363,6 +381,18 @@ describe("runImplementer rework behavior", () => {
         reworkRequested: true,
         useSubagents: false,
         sessionId: "skill-old-session",
+        reviewComments: "## Blocking Findings\n- [finding-2] code_review | Fix skill mode rework",
+        autoReviewStateJson: JSON.stringify({
+          strategy: "full_re_review",
+          iteration: 1,
+          findings: [
+            {
+              id: "finding-2",
+              source: "code_review",
+              text: "Fix skill mode rework",
+            },
+          ],
+        }),
       })
       .run();
     db.insert(taskComments)
@@ -391,6 +421,8 @@ describe("runImplementer rework behavior", () => {
     // Rework header + comment + protocol are still injected into the body
     expect(call.prompt).toContain("REWORK REQUEST — THIS IS THE PRIMARY TASK");
     expect(call.prompt).toContain("<<<REWORK_COMMENT");
+    expect(call.prompt).toContain("<<<FULL_REVIEW_COMMENTS");
+    expect(call.prompt).toContain("<<<BLOCKING_FINDINGS_SNAPSHOT");
     expect(call.prompt).toContain("message: skill-rework-request");
     expect(call.prompt).toContain("Rework handling protocol:");
     expect(call.prompt).toContain("Rework mode: true");

@@ -73,6 +73,7 @@ const IMPORT_ROADMAP_TIMEOUT_MS = 300_000;
 export interface SettingsResponse {
   useSubagents: boolean;
   maxReviewIterations: number;
+  autoReviewStrategy: "full_re_review" | "closure_first";
   runtimeReadiness: {
     availableRuntimeCount: number;
     runtimeProfileCount: number;

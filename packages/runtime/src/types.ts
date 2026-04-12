@@ -11,6 +11,59 @@ export const RUNTIME_TRANSPORTS = _RUNTIME_TRANSPORTS;
 export const isRuntimeTransport = _isRuntimeTransport;
 
 /**
+ * Usage reporting contract — declares whether an adapter can populate
+ * `RuntimeRunResult.usage` after a successful run.
+ *
+ * - `FULL`    — adapter always returns a non-null `usage` on successful run.
+ *               The registry wrapper logs loudly on violation (production) or
+ *               fails the contract test (development).
+ * - `PARTIAL` — adapter returns `usage` when the provider reports it, but may
+ *               return `null` for some transports/streaming paths where the
+ *               provider doesn't emit a final token count.
+ * - `NONE`    — the transport fundamentally cannot report usage. The wrapper
+ *               warns if `usage` is non-null (unexpected) and skips sink.record.
+ *
+ * Defined as a const object (not a string union or TS enum) to match the
+ * `RuntimeTransport` convention in this codebase: callers reference
+ * `UsageReporting.FULL` instead of magic strings, the TS compiler catches
+ * typos, and adding a new variant requires editing one central file.
+ */
+export const UsageReporting = {
+  FULL: "full",
+  PARTIAL: "partial",
+  NONE: "none",
+} as const;
+export type UsageReporting = (typeof UsageReporting)[keyof typeof UsageReporting];
+
+/**
+ * Canonical set of usage-context sources. Every call site that invokes a
+ * runtime declares which logical flow it belongs to by picking one of these,
+ * so dashboards can group traffic and "unknown source" is impossible.
+ *
+ * Adding a new source is a deliberate one-line edit here — this is the
+ * single place the set of sources is defined across the whole monorepo.
+ */
+export const UsageSource = {
+  /** User-facing chat route (packages/api/src/routes/chat.ts). */
+  CHAT: "chat",
+  /** Fire-and-forget /aif-commit runner (services/commitGeneration.ts). */
+  COMMIT: "commit",
+  /** First roadmap pass that writes ROADMAP.md (services/roadmapGeneration.ts). */
+  ROADMAP_GENERATE: "roadmap-generate",
+  /** Second roadmap pass that extracts JSON tasks (services/roadmapGeneration.ts). */
+  ROADMAP_EXTRACT: "roadmap-extract",
+  /** Fast Fix on a task (services/fastFix.ts). */
+  FAST_FIX: "fast-fix",
+  /** Subagent execution from the agent coordinator (agent/subagentQuery.ts). */
+  SUBAGENT: "subagent",
+  /** Adapter-internal probe used by listModels() discovery flows. */
+  MODEL_DISCOVERY: "model-discovery",
+  /** Test fixtures — only valid inside vitest runs. */
+  TEST: "test",
+} as const;
+export type UsageSource = (typeof UsageSource)[keyof typeof UsageSource];
+
+/**
  * Capability flags declared by each adapter.
  * The system checks these before calling optional methods — if a flag is false,
  * the corresponding optional method on RuntimeAdapter will never be called.
@@ -40,6 +93,12 @@ export interface RuntimeCapabilities {
    * (for example, Codex custom agents + delegation in a single parent run).
    */
   supportsNativeSubagentWorkflows?: boolean;
+  /**
+   * Adapter's usage-reporting contract. Required so every new adapter makes an
+   * explicit decision — the registry wrapper uses this to enforce invariants
+   * on `RuntimeRunResult.usage`.
+   */
+  usageReporting: UsageReporting;
 }
 
 export const DEFAULT_RUNTIME_CAPABILITIES: RuntimeCapabilities = {
@@ -52,6 +111,7 @@ export const DEFAULT_RUNTIME_CAPABILITIES: RuntimeCapabilities = {
   supportsCustomEndpoint: false,
   supportsIsolatedSubagentWorkflows: false,
   supportsNativeSubagentWorkflows: false,
+  usageReporting: UsageReporting.NONE,
 };
 
 export interface RuntimeDescriptor {
@@ -137,6 +197,26 @@ export interface RuntimeExecutionIntent {
   hooks?: Record<string, unknown>;
 }
 
+/**
+ * Scope metadata attached to every run so the registry-level usage sink can
+ * record who/what/where consumed tokens. `source` is mandatory — the TypeScript
+ * compiler forces every call site to make a conscious decision about tagging.
+ *
+ * Optional scope fields (`projectId`, `taskId`, `chatSessionId`) let the sink
+ * aggregate usage per entity; callers pass whichever ones are known.
+ */
+export interface RuntimeUsageContext {
+  /**
+   * Logical source of the run. Must be one of the canonical `UsageSource`
+   * values — the enum is the single source of truth for where tokens are
+   * coming from, so dashboards can group traffic without freeform tags.
+   */
+  source: UsageSource;
+  projectId?: string | null;
+  taskId?: string | null;
+  chatSessionId?: string | null;
+}
+
 export interface RuntimeRunInput {
   runtimeId: string;
   providerId?: string;
@@ -155,6 +235,12 @@ export interface RuntimeRunInput {
   headers?: Record<string, string>;
   options?: Record<string, unknown>;
   execution?: RuntimeExecutionIntent;
+  /**
+   * Scope metadata for usage tracking. Required: the registry wrapper reads
+   * this to record every successful run to the usage sink. Call sites cannot
+   * omit it — new code that forgets scoping fails TypeScript compilation.
+   */
+  usageContext: RuntimeUsageContext;
 }
 
 export interface RuntimeEvent {
@@ -189,7 +275,14 @@ export interface RuntimeRunResult {
   sessionId?: string | null;
   session?: RuntimeSession | null;
   events?: RuntimeEvent[];
-  usage?: RuntimeUsage | null;
+  /**
+   * Token/cost usage for this run. REQUIRED: adapters must explicitly return
+   * either a `RuntimeUsage` object or `null`. `undefined` is not valid — it
+   * would silently hide a missing implementation. Adapters whose transport
+   * cannot report usage declare `capabilities.usageReporting = "none"` and
+   * return `null` here.
+   */
+  usage: RuntimeUsage | null;
   raw?: unknown;
 }
 

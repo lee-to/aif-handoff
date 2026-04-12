@@ -8,6 +8,7 @@ import {
   RUNTIME_TRUST_TOKEN,
   resolveAdapterCapabilities,
   RuntimeTransport,
+  UsageSource,
   type RuntimeAdapter,
   type RuntimeEvent,
   type RuntimeRunInput,
@@ -853,6 +854,12 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       projectRoot: project.rootPath,
       cwd: project.rootPath,
       headers: runtimeContext.resolvedProfile.headers,
+      usageContext: {
+        source: UsageSource.CHAT,
+        projectId: project.id,
+        chatSessionId: chatSessionId ?? null,
+        taskId: taskId ?? null,
+      },
       options: {
         ...runtimeContext.resolvedProfile.options,
         ...(runtimeContext.resolvedProfile.baseUrl
@@ -946,7 +953,14 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
 
     const doneEvent: WsEvent = {
       type: "chat:done",
-      payload: { conversationId: chatConversationId },
+      payload: {
+        conversationId: chatConversationId,
+        // Expose per-turn usage so the frontend can show token/cost spend
+        // without a round-trip to the usage_events table. Recording of the
+        // usage itself already happened inside the registry wrapper via the
+        // DB sink — this payload is purely for UI display.
+        usage: result.usage ?? null,
+      },
     };
     if (clientId) {
       sendToClient(clientId, doneEvent);
@@ -956,6 +970,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       conversationId: chatConversationId,
       sessionId: chatSessionId,
       assistantMessage: fullAssistantResponse || null,
+      usage: result.usage ?? null,
       runtime: {
         runtimeId,
         profileId: runtimeProfileId,

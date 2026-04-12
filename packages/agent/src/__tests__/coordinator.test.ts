@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { tasks, projects } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
+import { RuntimeExecutionError } from "@aif/runtime";
 import { eq } from "drizzle-orm";
 
 // Set up test db
@@ -34,7 +35,20 @@ vi.mock("../autoReviewHandler.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../autoReviewHandler.js")>();
   return {
     ...actual,
-    handleAutoReviewGate: vi.fn().mockResolvedValue("accepted"),
+    handleAutoReviewGate: vi.fn().mockResolvedValue({
+      status: "accepted",
+      currentIteration: 1,
+      metrics: {
+        strategy: "full_re_review",
+        iteration: 1,
+        previousBlockingCount: 0,
+        stillBlockingCount: 0,
+        newBlockingCount: 0,
+        totalBlockingCount: 0,
+        parserMode: "structured",
+      },
+      autoReviewState: null,
+    }),
   };
 });
 
@@ -210,7 +224,27 @@ describe("coordinator", () => {
       })
       .run();
 
-    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce("rework_requested");
+    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce({
+      status: "rework_requested",
+      currentIteration: 1,
+      metrics: {
+        strategy: "full_re_review",
+        iteration: 1,
+        previousBlockingCount: 0,
+        stillBlockingCount: 0,
+        newBlockingCount: 2,
+        totalBlockingCount: 2,
+        parserMode: "structured",
+      },
+      autoReviewState: {
+        strategy: "full_re_review",
+        iteration: 1,
+        findings: [
+          { id: "fix-a", source: "code_review", text: "fix issue A" },
+          { id: "fix-b", source: "code_review", text: "fix issue B" },
+        ],
+      },
+    });
 
     await pollAndProcess();
 
@@ -364,7 +398,7 @@ describe("coordinator", () => {
       .run();
 
     vi.mocked(runPlanner).mockRejectedValueOnce(
-      new Error("Claude Code process exited with code 1"),
+      new RuntimeExecutionError("Claude Code process exited with code 1", undefined, "timeout"),
     );
 
     await pollAndProcess();
@@ -452,7 +486,7 @@ describe("coordinator", () => {
       .run();
 
     vi.mocked(runImplementer).mockRejectedValueOnce(
-      new Error("Implementer blocked by permissions"),
+      new RuntimeExecutionError("Implementer blocked by permissions", undefined, "permission"),
     );
 
     await pollAndProcess();
@@ -588,7 +622,24 @@ describe("coordinator", () => {
       .run();
 
     // --- Cycle 1: reviewer completes, gate requests rework ---
-    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce("rework_requested");
+    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce({
+      status: "rework_requested",
+      currentIteration: 1,
+      metrics: {
+        strategy: "full_re_review",
+        iteration: 1,
+        previousBlockingCount: 0,
+        stillBlockingCount: 0,
+        newBlockingCount: 1,
+        totalBlockingCount: 1,
+        parserMode: "structured",
+      },
+      autoReviewState: {
+        strategy: "full_re_review",
+        iteration: 1,
+        findings: [{ id: "fix-a", source: "code_review", text: "fix issue A" }],
+      },
+    });
     await pollAndProcess();
 
     let task = db.select().from(tasks).where(eq(tasks.id, "task-rework-iter")).get();
@@ -598,7 +649,24 @@ describe("coordinator", () => {
 
     // --- Cycle 2: implementer completes, task moves to review (count must survive) ---
     vi.clearAllMocks();
-    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce("rework_requested");
+    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce({
+      status: "rework_requested",
+      currentIteration: 2,
+      metrics: {
+        strategy: "full_re_review",
+        iteration: 2,
+        previousBlockingCount: 1,
+        stillBlockingCount: 1,
+        newBlockingCount: 0,
+        totalBlockingCount: 1,
+        parserMode: "structured",
+      },
+      autoReviewState: {
+        strategy: "full_re_review",
+        iteration: 2,
+        findings: [{ id: "fix-a", source: "code_review", text: "fix issue A" }],
+      },
+    });
     await pollAndProcess();
 
     task = db.select().from(tasks).where(eq(tasks.id, "task-rework-iter")).get();
@@ -609,11 +677,32 @@ describe("coordinator", () => {
 
     // --- Cycle 3: implementer completes, reviewer runs, gate hits max iterations ---
     vi.clearAllMocks();
-    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce("max_iterations_reached");
+    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce({
+      status: "manual_review_required",
+      currentIteration: 3,
+      handoffReason: "max_iterations",
+      metrics: {
+        strategy: "full_re_review",
+        iteration: 3,
+        previousBlockingCount: 1,
+        stillBlockingCount: 1,
+        newBlockingCount: 0,
+        totalBlockingCount: 1,
+        parserMode: "structured",
+      },
+      autoReviewState: {
+        strategy: "full_re_review",
+        iteration: 3,
+        findings: [{ id: "fix-a", source: "code_review", text: "fix issue A" }],
+      },
+    });
     await pollAndProcess();
 
     task = db.select().from(tasks).where(eq(tasks.id, "task-rework-iter")).get();
     expect(task!.status).toBe("done");
+    expect(task!.manualReviewRequired).toBe(true);
+    expect(task!.reviewIterationCount).toBe(3);
+    expect(task!.autoReviewStateJson).toContain("fix-a");
   });
 
   it("should reset reviewIterationCount to 0 for non-implementer stage transitions", async () => {
@@ -649,7 +738,24 @@ describe("coordinator", () => {
       .run();
 
     // Cycle 1: reviewer → gate requests rework
-    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce("rework_requested");
+    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce({
+      status: "rework_requested",
+      currentIteration: 1,
+      metrics: {
+        strategy: "full_re_review",
+        iteration: 1,
+        previousBlockingCount: 0,
+        stillBlockingCount: 0,
+        newBlockingCount: 1,
+        totalBlockingCount: 1,
+        parserMode: "structured",
+      },
+      autoReviewState: {
+        strategy: "full_re_review",
+        iteration: 1,
+        findings: [{ id: "fix-a", source: "code_review", text: "fix issue A" }],
+      },
+    });
     await pollAndProcess();
 
     let task = db.select().from(tasks).where(eq(tasks.id, "task-rework-flag")).get();
@@ -662,7 +768,20 @@ describe("coordinator", () => {
       const t = db.select().from(tasks).where(eq(tasks.id, taskId)).get();
       reworkDuringExec = t?.reworkRequested;
     });
-    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce("accepted");
+    vi.mocked(handleAutoReviewGate).mockResolvedValueOnce({
+      status: "accepted",
+      currentIteration: 2,
+      metrics: {
+        strategy: "full_re_review",
+        iteration: 2,
+        previousBlockingCount: 1,
+        stillBlockingCount: 0,
+        newBlockingCount: 0,
+        totalBlockingCount: 0,
+        parserMode: "structured",
+      },
+      autoReviewState: null,
+    });
     await pollAndProcess();
 
     // Implementer must see reworkRequested=true during execution

@@ -3,6 +3,7 @@ import {
   createRuntimeWorkflowSpec,
   resolveRuntimePromptPolicy,
   transformSkillCommandPrefix,
+  UsageReporting,
   type RuntimeCapabilities,
 } from "../index.js";
 
@@ -16,6 +17,7 @@ const CODEX_CAPABILITIES: RuntimeCapabilities = {
   supportsCustomEndpoint: true,
   supportsIsolatedSubagentWorkflows: true,
   supportsNativeSubagentWorkflows: true,
+  usageReporting: UsageReporting.NONE,
 };
 
 const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
@@ -28,6 +30,7 @@ const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
   supportsCustomEndpoint: true,
   supportsIsolatedSubagentWorkflows: false,
   supportsNativeSubagentWorkflows: false,
+  usageReporting: UsageReporting.FULL,
 };
 
 describe("runtime workflow spec + prompt policy", () => {

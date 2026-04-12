@@ -285,7 +285,7 @@ describe("executeSubagentQuery query_start_timeout retry", () => {
       .mockImplementationOnce(makeDelayedSuccess(40, "late-1"))
       .mockImplementationOnce(makeDelayedSuccess(40, "late-2"));
 
-    await expect(executeSubagentQuery(baseOptions)).rejects.toThrow(/start timeout/i);
+    await expect(executeSubagentQuery(baseOptions)).rejects.toThrow(/timed out/i);
     expect(queryMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -770,7 +770,7 @@ describe("executeSubagentQuery first-activity watchdog", () => {
         prompt: "run",
         workflowKind: "implementer",
       }),
-    ).rejects.toThrow(/stalled|first_activity_timeout|timeout/i);
+    ).rejects.toThrow(/stalled|first_activity_timeout|timed out/i);
 
     // Should have been called 3 times (1 initial + 2 retries)
     expect(queryMock).toHaveBeenCalledTimes(3);

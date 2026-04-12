@@ -317,7 +317,10 @@ export async function runOpenRouterApi(
     const rawText = await response.text();
     if (!response.ok) {
       return Promise.reject(
-        classifyOpenRouterRuntimeError(new Error(`OpenRouter HTTP ${response.status}: ${rawText}`)),
+        classifyOpenRouterRuntimeError(
+          new Error(rawText || "OpenRouter request failed"),
+          response.status,
+        ),
       );
     }
 
@@ -369,7 +372,8 @@ async function runOpenRouterStreamingAttempt(
   if (!response.ok) {
     const rawText = await response.text();
     throw classifyOpenRouterRuntimeError(
-      new Error(`OpenRouter HTTP ${response.status}: ${rawText}`),
+      new Error(rawText || "OpenRouter streaming request failed"),
+      response.status,
     );
   }
 
@@ -572,9 +576,11 @@ export async function listOpenRouterApiModels(
       headers: buildHeaders(inputWithOptions),
     });
     if (!response.ok) {
+      const rawText = await response.text();
       return Promise.reject(
         classifyOpenRouterRuntimeError(
-          new Error(`OpenRouter model listing failed with status ${response.status}`),
+          new Error(rawText || "OpenRouter model listing failed"),
+          response.status,
         ),
       );
     }

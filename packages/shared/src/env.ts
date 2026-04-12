@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { logger } from "./logger.js";
+import { AUTO_REVIEW_STRATEGIES } from "./types.js";
 
 const log = logger("env");
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -101,6 +102,7 @@ const envSchema = z.object({
   COORDINATOR_MAX_CONCURRENT_TASKS: z.coerce.number().min(1).max(10).default(3),
   AGENT_CHAT_MAX_TURNS: z.coerce.number().min(1).default(50),
   AGENT_MAX_REVIEW_ITERATIONS: z.coerce.number().min(1).default(3),
+  AGENT_AUTO_REVIEW_STRATEGY: z.enum(AUTO_REVIEW_STRATEGIES).default("full_re_review"),
   AGENT_USE_SUBAGENTS: z
     .preprocess((value) => {
       if (typeof value === "string") {

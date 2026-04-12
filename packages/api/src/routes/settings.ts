@@ -4,7 +4,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import YAML from "yaml";
 import { findProjectById } from "@aif/data";
-import { logger, findMonorepoRoot, getEnv, clearProjectConfigCache } from "@aif/shared";
+import {
+  logger,
+  findMonorepoRoot,
+  getEnv,
+  clearProjectConfigCache,
+  parseMcpPortSetting,
+} from "@aif/shared";
 import type { RuntimeMcpInstallInput } from "@aif/runtime";
 import { getApiRuntimeRegistry } from "../services/runtime.js";
 
@@ -13,26 +19,15 @@ const log = logger("api:settings");
 const MCP_SERVER_NAME = "handoff";
 const MONOREPO_ROOT = findMonorepoRoot(import.meta.dirname);
 
-// Keep in sync with resolveMcpPort in scripts/dev.mjs.
-function resolveMcpPort(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const port = Number(trimmed);
-  return Number.isInteger(port) && port > 0 ? String(port) : null;
-}
-
 function buildMcpServerEntry(): RuntimeMcpInstallInput {
   const env = getEnv();
-  const mcpPort = resolveMcpPort(process.env.MCP_PORT);
+  const parsedPort = parseMcpPortSetting(process.env.MCP_PORT);
 
-  if (mcpPort) {
+  if (parsedPort.status === "valid") {
     return {
       serverName: MCP_SERVER_NAME,
       transport: "streamable_http",
-      url: `http://localhost:${mcpPort}/mcp`,
+      url: `http://localhost:${parsedPort.value}/mcp`,
     };
   }
 

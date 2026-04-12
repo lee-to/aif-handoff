@@ -40,9 +40,10 @@ const runtimeAdapter: RuntimeAdapter = {
       supportsModelDiscovery: true,
       supportsApprovals: true,
       supportsCustomEndpoint: true,
+      usageReporting: "full",
     },
   },
-  run: vi.fn(async () => ({ outputText: "" })),
+  run: vi.fn(async () => ({ outputText: "", usage: null })),
   listSessions: (...args) => mockListSessions(...args),
   getSession: (...args) => mockGetSession(...args),
   listSessionEvents: (...args) => mockListSessionEvents(...args),
@@ -64,6 +65,7 @@ vi.mock("@aif/data", () => ({
   updateChatSessionTimestamp: vi.fn(),
   findRuntimeProfileById: (id: string) => mockFindRuntimeProfileById(id),
   toRuntimeProfileResponse: (row: Record<string, unknown>) => mockToRuntimeProfileResponse(row),
+  createDbUsageSink: () => ({ record: vi.fn() }),
 }));
 
 vi.mock("../services/runtime.js", () => ({

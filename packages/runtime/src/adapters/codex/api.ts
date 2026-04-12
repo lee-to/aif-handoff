@@ -120,6 +120,12 @@ function isRetryableStatus(status: number): boolean {
   return status >= 500 && status < 600;
 }
 
+/**
+ * String matching is intentional here: Node's native `fetch` throws
+ * `TypeError("fetch failed")` with no structured cause or HTTP status.
+ * Network-level errors (ECONNRESET, ECONNREFUSED) are surfaced only
+ * in the error message string. No structured alternative exists.
+ */
 function isRetryableFetchError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
@@ -325,7 +331,10 @@ export async function runCodexAgentApi(
     const rawText = await response.text();
     if (!response.ok) {
       return Promise.reject(
-        classifyCodexRuntimeError(new Error(`OpenAI API HTTP ${response.status}: ${rawText}`)),
+        classifyCodexRuntimeError(
+          new Error(rawText || "Codex API request failed"),
+          response.status,
+        ),
       );
     }
 
@@ -387,7 +396,10 @@ async function runCodexStreamingAttempt(
 
   if (!response.ok) {
     const rawText = await response.text();
-    throw classifyCodexRuntimeError(new Error(`OpenAI API HTTP ${response.status}: ${rawText}`));
+    throw classifyCodexRuntimeError(
+      new Error(rawText || "Codex API streaming request failed"),
+      response.status,
+    );
   }
 
   if (!response.body) {
@@ -589,9 +601,11 @@ export async function listCodexAgentApiModels(
       headers: buildHeaders(inputWithOptions),
     });
     if (!response.ok) {
+      const rawText = await response.text();
       return Promise.reject(
         classifyCodexRuntimeError(
-          new Error(`OpenAI API model listing failed with status ${response.status}`),
+          new Error(rawText || "Codex API model listing failed"),
+          response.status,
         ),
       );
     }

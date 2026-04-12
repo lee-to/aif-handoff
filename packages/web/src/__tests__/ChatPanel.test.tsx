@@ -65,6 +65,9 @@ vi.mock("@/hooks/useRuntimeProfiles", () => ({
   useEffectiveChatRuntime: () => ({
     data: mockEffectiveChatRuntime,
   }),
+  useRuntimeProfiles: () => ({
+    data: [],
+  }),
 }));
 
 const { ChatPanel } = await import("@/components/chat/ChatPanel");
@@ -157,7 +160,7 @@ describe("ChatPanel", () => {
     const textarea = screen.getByPlaceholderText("Ask a question...");
     fireEvent.change(textarea, { target: { value: "test message" } });
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
-    expect(mockSendMessage).toHaveBeenCalledWith("test message", undefined);
+    expect(mockSendMessage).toHaveBeenCalledWith("test message", undefined, false);
   });
 
   it("does not send message on Shift+Enter", () => {
@@ -174,7 +177,7 @@ describe("ChatPanel", () => {
     fireEvent.change(textarea, { target: { value: "hello" } });
     const sendButton = screen.getByLabelText("Send message");
     fireEvent.click(sendButton);
-    expect(mockSendMessage).toHaveBeenCalledWith("hello", undefined);
+    expect(mockSendMessage).toHaveBeenCalledWith("hello", undefined, false);
   });
 
   it("shows Explore checkbox toggle", () => {

@@ -8,6 +8,7 @@ import {
   validateOpenCodeApiConnection,
 } from "../adapters/opencode/api.js";
 import { OpenCodeRuntimeAdapterError } from "../adapters/opencode/errors.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 function createRunInput(overrides: Record<string, unknown> = {}) {
   return {
@@ -18,6 +19,7 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     prompt: "Implement feature",
     model: "anthropic/claude-sonnet-4",
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

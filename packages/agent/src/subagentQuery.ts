@@ -1,7 +1,7 @@
 import {
+  createDbUsageSink,
   findTaskById,
   getTaskSessionId,
-  incrementTaskTokenUsage,
   renewTaskClaim,
   resolveEffectiveRuntimeProfile,
   saveTaskSessionId,
@@ -17,6 +17,7 @@ import {
   resolveRuntimeProfile,
   resolveRuntimePromptPolicy,
   RUNTIME_TRUST_TOKEN,
+  UsageSource,
   type RuntimeAdapter,
   type RuntimeCapabilities,
   type RuntimeCapabilityName,
@@ -37,10 +38,12 @@ const log = logger("subagent-query");
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
-const LOCK_RENEWAL_MS = Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
-
 const FIRST_ACTIVITY_TIMEOUT_ERROR = "first_activity_timeout";
 const FIRST_ACTIVITY_MAX_RETRIES = 2;
+
+function getLockRenewalMs(): number {
+  return Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
+}
 
 /**
  * First-activity watchdog: aborts the agent if no runtime activity
@@ -154,6 +157,9 @@ function createRuntimeRegistryLogger(): RuntimeRegistryLogger {
     warn(context, message) {
       log.warn({ ...context }, `WARN [runtime-module] ${message}`);
     },
+    error(context, message) {
+      log.error({ ...context }, `ERROR [runtime-registry] ${message}`);
+    },
   };
 }
 
@@ -163,6 +169,7 @@ async function getRuntimeRegistry(): Promise<RuntimeRegistry> {
   runtimeRegistryPromise = bootstrapRuntimeRegistry({
     logger: createRuntimeRegistryLogger(),
     runtimeModules: getEnv().AIF_RUNTIME_MODULES,
+    usageSink: createDbUsageSink(),
   }).catch((error) => {
     runtimeRegistryPromise = null;
     throw error;
@@ -564,6 +571,10 @@ export async function executeSubagentQuery(
         };
       }
 
+      // Look up project scope fresh per attempt so a retry that sees a
+      // re-parented task still records against the correct project.
+      const projectIdForUsage = findTaskById(taskId)?.projectId ?? null;
+
       const runInput = {
         runtimeId: context.runtimeId,
         providerId: context.providerId,
@@ -579,6 +590,11 @@ export async function executeSubagentQuery(
         headers: context.headers,
         options: context.options,
         execution: executionIntent,
+        usageContext: {
+          source: UsageSource.SUBAGENT,
+          projectId: projectIdForUsage,
+          taskId,
+        },
       } as const;
 
       try {
@@ -607,7 +623,7 @@ export async function executeSubagentQuery(
 
     if (!result) {
       throw new Error(
-        `${agentName}: all ${FIRST_ACTIVITY_MAX_RETRIES + 1} attempts stalled without tool activity`,
+        `${agentName}: all ${FIRST_ACTIVITY_MAX_RETRIES + 1} attempts stalled without runtime activity`,
       );
     }
 
@@ -627,14 +643,9 @@ export async function executeSubagentQuery(
       );
     }
 
-    if (result.usage) {
-      incrementTaskTokenUsage(taskId, {
-        input_tokens: result.usage.inputTokens,
-        output_tokens: result.usage.outputTokens,
-        total_tokens: result.usage.totalTokens,
-        total_cost_usd: result.usage.costUsd,
-      });
-    }
+    // Usage is recorded automatically by the registry wrapper via the DB
+    // usage sink (see packages/data createDbUsageSink + packages/runtime
+    // registry.wrapAdapter). No manual increment needed here.
 
     const resultText = result.outputText ?? "";
 
@@ -703,7 +714,7 @@ export function startHeartbeat(taskId: string): NodeJS.Timeout {
   return setInterval(() => {
     updateTaskHeartbeat(taskId);
     if (_coordinatorId) {
-      renewTaskClaim(taskId, _coordinatorId, LOCK_RENEWAL_MS);
+      renewTaskClaim(taskId, _coordinatorId, getLockRenewalMs());
     }
   }, HEARTBEAT_INTERVAL_MS);
 }

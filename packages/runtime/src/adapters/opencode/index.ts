@@ -1,5 +1,6 @@
 import {
   RuntimeTransport,
+  UsageReporting,
   type RuntimeAdapter,
   type RuntimeCapabilities,
   type RuntimeConnectionValidationInput,
@@ -25,6 +26,7 @@ import {
   type OpenCodeApiLogger,
 } from "./api.js";
 import { classifyOpenCodeRuntimeError } from "./errors.js";
+import { RuntimeExecutionError } from "../../errors.js";
 
 export type OpenCodeRuntimeAdapterLogger = OpenCodeApiLogger;
 
@@ -43,6 +45,11 @@ const API_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  // OpenCode server returns messages but does not surface token counts in its
+  // message payload. The run() path never populates RuntimeRunResult.usage,
+  // so declare the contract honestly as NONE — dashboards will show this
+  // provider as opted-out of usage tracking rather than showing phantom zeros.
+  usageReporting: UsageReporting.NONE,
 };
 
 const DEFAULT_OPENCODE_MODELS: RuntimeModel[] = [
@@ -77,6 +84,28 @@ function createFallbackLogger(): OpenCodeRuntimeAdapterLogger {
 
 function diagnoseErrorMessage(input: RuntimeDiagnoseErrorInput): string {
   const message = input.error instanceof Error ? input.error.message : String(input.error);
+
+  // Primary: dispatch on structured category when available
+  if (input.error instanceof RuntimeExecutionError && input.error.category !== "unknown") {
+    switch (input.error.category) {
+      case "auth":
+        return "OpenCode server authentication failed. Verify OPENCODE_SERVER_PASSWORD (and OPENCODE_SERVER_USERNAME if customized).";
+      case "rate_limit":
+        return "OpenCode request was rate-limited. Retry with backoff or reduce request frequency.";
+      case "timeout":
+        return "OpenCode request timed out. Increase timeoutMs or check server responsiveness.";
+      case "transport":
+        return "Cannot reach OpenCode server. Start opencode serve and verify baseUrl/port.";
+      case "model_not_found":
+        return "OpenCode provider/model is not available. Check GET /config/providers and use an exact providerID/modelID pair from that response.";
+      case "permission":
+        return `OpenCode permission denied. ${message}`;
+      case "stream":
+        return `OpenCode stream interrupted. ${message}`;
+    }
+  }
+
+  // Fallback: string matching for unclassified errors or plain Error instances
   const combined = `${message} ${input.stderrTail ?? ""}`.toLowerCase();
 
   if (
@@ -89,13 +118,6 @@ function diagnoseErrorMessage(input: RuntimeDiagnoseErrorInput): string {
   }
   if (combined.includes("rate") || combined.includes("429") || combined.includes("quota")) {
     return "OpenCode request was rate-limited. Retry with backoff or reduce request frequency.";
-  }
-  if (
-    combined.includes("timed out") ||
-    combined.includes("timeout") ||
-    combined.includes("aborted")
-  ) {
-    return "OpenCode request timed out. Increase timeoutMs or check server responsiveness.";
   }
   if (
     combined.includes("connection refused") ||

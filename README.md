@@ -6,7 +6,9 @@
 
 > This project was built using [AI Factory](https://github.com/lee-to/ai-factory) — an open-source framework for AI-driven development.
 
-Built on top of [AI Factory](https://github.com/lee-to/ai-factory) workflow and powered by runtime profiles through `@aif/runtime` (Claude and Codex adapters included). Tasks flow through stages automatically: **Backlog → Planning → Plan Ready → Implementing → Review → Done** — each stage orchestrated by specialized AI subagents following the AIF methodology. In auto mode, review feedback can also trigger an automatic rework loop: **Review → request_changes → Implementing**.
+Built on top of [AI Factory](https://github.com/lee-to/ai-factory) workflow and powered by runtime profiles through `@aif/runtime` (Claude and Codex adapters included). Tasks flow through stages automatically: **Backlog → Planning → Plan Ready → Implementing → Review → Done** — each stage orchestrated by specialized AI subagents following the AIF methodology. In auto mode, review feedback can also trigger an automatic rework loop: **Review → request_changes → Implementing**. When that loop stops converging, the task is handed off explicitly as **Done + manual review required** instead of silently passing.
+
+Auto-review is now convergence-aware. You can keep the default `full_re_review` loop or switch to `closure_first` via `AGENT_AUTO_REVIEW_STRATEGY`. When auto-review no longer converges, the task moves to `done` with `manualReviewRequired=true`, and the UI surfaces that explicit human handoff instead of silently treating the review as passed.
 
 ## Runtime Providers Out of the Box
 
@@ -45,7 +47,7 @@ npm run init
 npm run dev
 ```
 
-Set `MCP_PORT` in your shell or root `.env` before `npm run dev` if you also want the MCP HTTP server in local development.
+Set `MCP_PORT` in your shell or root `.env` before `npm run dev` if you also want the MCP HTTP server in local development. Use an integer port between `1` and `65535`; invalid values are ignored by the dev launcher and the settings install route falls back to the local `stdio` entry instead of writing an HTTP MCP endpoint.
 
 ### With Docker
 
@@ -55,7 +57,7 @@ cd aif-handoff
 docker compose up --build
 ```
 
-Development starts three services by default. If `MCP_PORT` is set, it starts a fourth service for MCP over HTTP. Docker starts all four services.
+Development starts three services by default. If `MCP_PORT` is set to a valid integer port, it starts a fourth service for MCP over HTTP. Docker starts all four services.
 
 | Service   | URL                               | Description                                  |
 | --------- | --------------------------------- | -------------------------------------------- |
@@ -116,11 +118,17 @@ Database access is centralized in `packages/data`. `api` and `agent` must use `@
 
 The coordinator polls every 30 seconds and delegates to `.claude/agents/` definitions:
 
-| Stage                                                   | Agent                                                                     | What it does                                                                                                      |
-| ------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Backlog → Planning → Plan Ready                         | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                     |
-| Plan Ready → Implementing → Review                      | `implement-coordinator`                                                   | Parallel task execution with worktrees + quality sidecars                                                         |
-| Review → Done / Review → request_changes → Implementing | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, detected fix items automatically restart implementation |
+| Stage                                                                                            | Agent                                                                     | What it does                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backlog → Planning → Plan Ready                                                                  | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                                                |
+| Plan Ready → Implementing → Review                                                               | `implement-coordinator`                                                   | Parallel task execution with worktrees + quality sidecars                                                                                    |
+| Review → Done / Review → request_changes → Implementing / Review → Done + manual review required | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, structured blocking findings drive rework until success or explicit manual handoff |
+
+### Auto-Review Convergence
+
+- `AGENT_AUTO_REVIEW_STRATEGY=full_re_review` keeps the broad re-review loop and is the default.
+- `AGENT_AUTO_REVIEW_STRATEGY=closure_first` only auto-reworks unresolved previous blockers; if new blockers appear after previous ones are resolved, the coordinator stops and asks for human review.
+- Hitting the review-iteration limit also stops automation at `done` with `manualReviewRequired=true`.
 
 ### Fault Tolerance
 
@@ -176,18 +184,18 @@ Authentication: set `ANTHROPIC_API_KEY` in `.env`, or log in via `docker compose
 
 Only ports 80/443 are exposed. API is bound to localhost only. Includes security hardening (no-new-privileges, resource limits), healthchecks, log rotation, and automatic SSL via Let's Encrypt (ACME).
 
-| Variable            | Default      | Description                            |
-| ------------------- | ------------ | -------------------------------------- |
-| `ANTHROPIC_API_KEY` | —            | API key (or use `claude login`)        |
-| `DOMAIN`            | `localhost`  | Domain for SSL certificate (ACME)      |
-| `PORT`              | `3009`       | Host port for API                      |
-| `MCP_PORT`          | `3100`       | Host port for MCP HTTP server          |
-| `WEB_PORT`          | `5180`       | Host port for Web UI (dev)             |
-| `WEB_HOST`          | `localhost`  | Web UI dev server host (Vite)          |
-| `HTTP_PORT`         | `80`         | Host port for Web UI (production)      |
-| `HTTPS_PORT`        | `443`        | HTTPS port (production)                |
-| `PROJECTS_DIR`      | `./projects` | Host directory for project files (dev) |
-| `PROJECTS_MOUNT`    | `/home/www`  | Project files path inside containers   |
+| Variable            | Default      | Description                               |
+| ------------------- | ------------ | ----------------------------------------- |
+| `ANTHROPIC_API_KEY` | —            | API key (or use `claude login`)           |
+| `DOMAIN`            | `localhost`  | Domain for SSL certificate (ACME)         |
+| `PORT`              | `3009`       | Host port for API                         |
+| `MCP_PORT`          | `3100`       | Host port for MCP HTTP server (`1-65535`) |
+| `WEB_PORT`          | `5180`       | Host port for Web UI (dev)                |
+| `WEB_HOST`          | `localhost`  | Web UI dev server host (Vite)             |
+| `HTTP_PORT`         | `80`         | Host port for Web UI (production)         |
+| `HTTPS_PORT`        | `443`        | HTTPS port (production)                   |
+| `PROJECTS_DIR`      | `./projects` | Host directory for project files (dev)    |
+| `PROJECTS_MOUNT`    | `/home/www`  | Project files path inside containers      |
 
 A `.devcontainer/` config is also included for JetBrains / VS Code.
 

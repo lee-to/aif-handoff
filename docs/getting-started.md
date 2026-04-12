@@ -93,25 +93,25 @@ cp .env.example .env
 
 `npm run dev`, `api`, and `agent` automatically read env from root `.env` (`.env.local` overrides when present), so no extra export step is required.
 
-| Variable                          | Default             | Description                                                                                   |
-| --------------------------------- | ------------------- | --------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`               | _(optional)_        | API key. Agent SDK uses `~/.claude/` auth by default                                          |
-| `PORT`                            | `3009`              | API server port                                                                               |
-| `MCP_PORT`                        | _(optional)_        | When set, `npm run dev` also starts the MCP HTTP server on this port                          |
-| `WEB_PORT`                        | `5180`              | Web UI dev server port                                                                        |
-| `WEB_HOST`                        | `localhost`         | Web UI dev server host                                                                        |
-| `POLL_INTERVAL_MS`                | `30000`             | Agent coordinator polling interval (ms)                                                       |
-| `AGENT_STAGE_STALE_TIMEOUT_MS`    | `5400000`           | Stale-stage watchdog timeout (ms) before auto-recovery                                        |
-| `AGENT_STAGE_STALE_MAX_RETRY`     | `3`                 | Max stale auto-recover attempts before quarantine in `blocked_external`                       |
-| `AGENT_STAGE_RUN_TIMEOUT_MS`      | `3600000`           | Per-stage timeout (ms) before coordinator marks run as failed                                 |
-| `AGENT_FIRST_ACTIVITY_TIMEOUT_MS` | `60000`             | First-activity watchdog: kill + restart agent if no tool call within this window after start  |
-| `API_RUNTIME_START_TIMEOUT_MS`    | `60000`             | Timeout waiting for first output from API one-shot runtime calls                              |
-| `API_RUNTIME_RUN_TIMEOUT_MS`      | `120000`            | Hard timeout for API one-shot runtime calls                                                   |
-| `AGENT_USE_SUBAGENTS`             | `true`              | Default for per-task "Use subagents" toggle. `true`: custom subagents, `false`: aif-\* skills |
-| `DATABASE_URL`                    | `./data/aif.sqlite` | SQLite database path                                                                          |
-| `AGENT_QUERY_AUDIT_ENABLED`       | `true`              | Enable/disable query audit logs in `logs/*.log`                                               |
-| `LOG_LEVEL`                       | `debug`             | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`                                 |
-| `ACTIVITY_LOG_MODE`               | `sync`              | Activity logging strategy: `sync` or `batch`                                                  |
+| Variable                          | Default             | Description                                                                                              |
+| --------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`               | _(optional)_        | API key. Agent SDK uses `~/.claude/` auth by default                                                     |
+| `PORT`                            | `3009`              | API server port                                                                                          |
+| `MCP_PORT`                        | _(optional)_        | When set to a valid integer port (`1-65535`), `npm run dev` also starts the MCP HTTP server on this port |
+| `WEB_PORT`                        | `5180`              | Web UI dev server port                                                                                   |
+| `WEB_HOST`                        | `localhost`         | Web UI dev server host                                                                                   |
+| `POLL_INTERVAL_MS`                | `30000`             | Agent coordinator polling interval (ms)                                                                  |
+| `AGENT_STAGE_STALE_TIMEOUT_MS`    | `5400000`           | Stale-stage watchdog timeout (ms) before auto-recovery                                                   |
+| `AGENT_STAGE_STALE_MAX_RETRY`     | `3`                 | Max stale auto-recover attempts before quarantine in `blocked_external`                                  |
+| `AGENT_STAGE_RUN_TIMEOUT_MS`      | `3600000`           | Per-stage timeout (ms) before coordinator marks run as failed                                            |
+| `AGENT_FIRST_ACTIVITY_TIMEOUT_MS` | `60000`             | First-activity watchdog: kill + restart agent if no tool call within this window after start             |
+| `API_RUNTIME_START_TIMEOUT_MS`    | `60000`             | Timeout waiting for first output from API one-shot runtime calls                                         |
+| `API_RUNTIME_RUN_TIMEOUT_MS`      | `120000`            | Hard timeout for API one-shot runtime calls                                                              |
+| `AGENT_USE_SUBAGENTS`             | `true`              | Default for per-task "Use subagents" toggle. `true`: custom subagents, `false`: aif-\* skills            |
+| `DATABASE_URL`                    | `./data/aif.sqlite` | SQLite database path                                                                                     |
+| `AGENT_QUERY_AUDIT_ENABLED`       | `true`              | Enable/disable query audit logs in `logs/*.log`                                                          |
+| `LOG_LEVEL`                       | `debug`             | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`                                            |
+| `ACTIVITY_LOG_MODE`               | `sync`              | Activity logging strategy: `sync` or `batch`                                                             |
 
 You can set planner/plan-checker/implementer/review budgets per project in the project edit dialog. Leave any budget field empty for unlimited.
 
@@ -125,7 +125,7 @@ Start all services with hot reload:
 npm run dev
 ```
 
-This runs three processes in parallel via Turborepo by default. If `MCP_PORT` is set, it starts a fourth process for MCP over HTTP.
+This runs three processes in parallel via Turborepo by default. If `MCP_PORT` is set to a valid integer port, it starts a fourth process for MCP over HTTP. Invalid values are ignored here and the local MCP install flow falls back to `stdio`.
 
 | Service   | URL                         | Description                                               |
 | --------- | --------------------------- | --------------------------------------------------------- |

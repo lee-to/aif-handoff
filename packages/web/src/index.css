@@ -27,8 +27,9 @@
   --text-2xs--line-height: 1rem;
   --text-3xs: 0.625rem; /* 10px */
   --text-3xs--line-height: 0.875rem;
-  --text-4xs: 0.5625rem; /* 9px */
-  --text-4xs--line-height: 0.75rem;
+  /* Accessibility floor: keep microcopy at or above 10px. */
+  --text-4xs: 0.625rem; /* 10px */
+  --text-4xs--line-height: 0.8125rem;
   /* Status colors */
   --color-status-backlog: #6b7280;
   --color-status-planning: #8b5cf6;

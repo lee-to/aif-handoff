@@ -62,11 +62,21 @@ export function TaskCard({ task, onClick, overlay, density = "comfortable" }: Ta
         >
           {task.title}
         </div>
-        {priority.label !== "None" && (
-          <Badge size={isCompact ? "xs" : "sm"} className={`shrink-0 ${priority.className}`}>
-            {priority.label}
-          </Badge>
-        )}
+        <div className="flex shrink-0 flex-wrap items-start justify-end gap-1">
+          {task.manualReviewRequired && (
+            <Badge
+              size={isCompact ? "xs" : "sm"}
+              className="border-amber-500/35 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+            >
+              Manual Review
+            </Badge>
+          )}
+          {priority.label !== "None" && (
+            <Badge size={isCompact ? "xs" : "sm"} className={priority.className}>
+              {priority.label}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {task.description && (
@@ -87,6 +97,12 @@ export function TaskCard({ task, onClick, overlay, density = "comfortable" }: Ta
       {task.status === "blocked_external" && task.blockedReason && (
         <div className="mt-2 ml-2 border border-red-500/30 bg-red-500/10 px-2 py-1 text-3xs text-red-300 line-clamp-2">
           {task.blockedReason}
+        </div>
+      )}
+
+      {task.manualReviewRequired && (
+        <div className="mt-2 ml-2 border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-3xs text-amber-700 dark:text-amber-300 line-clamp-2">
+          Auto-review stopped. Human review required.
         </div>
       )}
 

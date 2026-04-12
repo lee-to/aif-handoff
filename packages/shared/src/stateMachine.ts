@@ -8,6 +8,8 @@ type TransitionPatch = Pick<
   | "retryCount"
   | "reworkRequested"
   | "reviewIterationCount"
+  | "manualReviewRequired"
+  | "autoReviewState"
 > & { status: TaskStatus };
 
 type TransitionResult = { ok: true; patch: TransitionPatch } | { ok: false; error: string };
@@ -20,6 +22,8 @@ export const CLEAN_STATE_RESET = {
   retryCount: 0,
   reworkRequested: false,
   reviewIterationCount: 0,
+  manualReviewRequired: false,
+  autoReviewState: null,
 } as const satisfies Omit<TransitionPatch, "status">;
 
 export function applyHumanTaskEvent(
@@ -64,7 +68,10 @@ export function applyHumanTaskEvent(
       if (task.status !== "done") {
         return { ok: false, error: "approve_done is only allowed from done" };
       }
-      return { ok: true, patch: { status: "verified", retryCount: 0, reworkRequested: false } };
+      // Verified tasks are a terminal state: convergence flags must be cleared.
+      // The audit trail remains in task comments / activity log, not on the live
+      // task-state fields that drive future automation decisions.
+      return { ok: true, patch: { ...CLEAN_STATE_RESET, status: "verified" } };
     }
     case "request_changes": {
       if (task.status !== "done") {

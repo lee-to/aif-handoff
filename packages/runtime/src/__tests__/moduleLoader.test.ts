@@ -4,12 +4,12 @@ import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { unlink, writeFile } from "node:fs/promises";
 import {
-  createCodexRuntimeAdapter,
   createRuntimeRegistry,
   resolveRuntimeModuleRegistrar,
   DEFAULT_RUNTIME_CAPABILITIES,
   type RuntimeRegistry,
 } from "../index.js";
+import { createCodexRuntimeAdapter } from "../adapters/codex/index.js";
 
 describe("runtime module loader", () => {
   it("resolves registrar from default object export", () => {

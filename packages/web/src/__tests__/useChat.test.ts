@@ -299,8 +299,9 @@ describe("useChat", () => {
 
     const { result } = renderHook(() => useChat("p-1"));
 
-    const sendPromise = act(async () => {
-      await result.current.sendMessage("Hello");
+    let sendPromise: Promise<void>;
+    act(() => {
+      sendPromise = result.current.sendMessage("Hello");
     });
     await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(1));
 
@@ -314,8 +315,10 @@ describe("useChat", () => {
       );
     });
 
-    rejectSend!(new Error("Chat request failed"));
-    await sendPromise;
+    await act(async () => {
+      rejectSend!(new Error("Chat request failed"));
+      await sendPromise;
+    });
 
     const assistantErrors = result.current.messages.filter(
       (m) => m.role === "assistant" && m.content === "Chat request failed",

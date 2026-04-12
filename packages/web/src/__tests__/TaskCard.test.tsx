@@ -20,6 +20,8 @@ const mockTask: Task = {
   reworkRequested: false,
   reviewIterationCount: 0,
   maxReviewIterations: 3,
+  manualReviewRequired: false,
+  autoReviewState: null,
   paused: false,
   lastHeartbeatAt: null,
   lastSyncedAt: null,
@@ -73,5 +75,17 @@ describe("TaskCard", () => {
   it("should render overlay variant", () => {
     render(<TaskCard task={mockTask} onClick={vi.fn()} overlay />);
     expect(screen.getByText("Sample Task")).toBeDefined();
+  });
+
+  it("should render manual review indicators when human review is required", () => {
+    render(
+      <TaskCard
+        task={{ ...mockTask, manualReviewRequired: true, status: "done" }}
+        onClick={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Manual Review")).toBeDefined();
+    expect(screen.getByText("Auto-review stopped. Human review required.")).toBeDefined();
   });
 });

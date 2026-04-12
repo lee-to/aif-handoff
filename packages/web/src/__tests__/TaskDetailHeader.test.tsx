@@ -20,6 +20,8 @@ const baseTask: Task = {
   reworkRequested: false,
   reviewIterationCount: 0,
   maxReviewIterations: 3,
+  manualReviewRequired: false,
+  autoReviewState: null,
   paused: false,
   lastHeartbeatAt: null,
   lastSyncedAt: null,
@@ -227,6 +229,23 @@ describe("TaskDetailHeader", () => {
     );
     expect(screen.getByText("Pause")).toBeDefined();
     expect(screen.queryByText("Resume")).toBeNull();
+  });
+
+  it("should render manual review badge when human review is required", () => {
+    render(
+      <TaskDetailHeader
+        task={{ ...baseTask, status: "done", manualReviewRequired: true }}
+        activeTab="implementation"
+        onTabChange={vi.fn()}
+        onActionClick={vi.fn()}
+        onTogglePaused={vi.fn()}
+        isDisabled={false}
+        isCheckingStartAi={false}
+        planChangeSuccess={null}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("MANUAL REVIEW")).toBeDefined();
   });
 
   it("should render Resume button and PAUSED badge when task is paused", () => {

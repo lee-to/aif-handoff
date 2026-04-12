@@ -11,6 +11,30 @@ export const TASK_STATUSES = [
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
+export const AUTO_REVIEW_STRATEGIES = ["full_re_review", "closure_first"] as const;
+
+export type AutoReviewStrategy = (typeof AUTO_REVIEW_STRATEGIES)[number];
+
+export const AUTO_REVIEW_FINDING_SOURCES = [
+  "code_review",
+  "security_audit",
+  "review_gate",
+] as const;
+
+export type AutoReviewFindingSource = (typeof AUTO_REVIEW_FINDING_SOURCES)[number];
+
+export interface AutoReviewFinding {
+  id: string;
+  text: string;
+  source: AutoReviewFindingSource;
+}
+
+export interface AutoReviewState {
+  strategy: AutoReviewStrategy;
+  iteration: number;
+  findings: AutoReviewFinding[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -24,6 +48,11 @@ export interface Project {
   defaultPlanRuntimeProfileId?: string | null;
   defaultReviewRuntimeProfileId?: string | null;
   defaultChatRuntimeProfileId?: string | null;
+  /** Aggregate token/cost usage across ALL sources (tasks, chat, commit, roadmap). */
+  tokenInput?: number;
+  tokenOutput?: number;
+  tokenTotal?: number;
+  costUsd?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +115,8 @@ export interface Task {
   reworkRequested: boolean;
   reviewIterationCount: number;
   maxReviewIterations: number;
+  manualReviewRequired: boolean;
+  autoReviewState: AutoReviewState | null;
   paused: boolean;
   lastHeartbeatAt: string | null;
   lastSyncedAt: string | null;
@@ -166,6 +197,8 @@ export interface UpdateTaskInput {
   reworkRequested?: boolean;
   reviewIterationCount?: number;
   maxReviewIterations?: number;
+  manualReviewRequired?: boolean;
+  autoReviewState?: AutoReviewState | null;
   paused?: boolean;
   lastHeartbeatAt?: string | null;
   runtimeProfileId?: string | null;
@@ -430,8 +463,22 @@ export interface ChatStreamTokenPayload {
   token: string;
 }
 
+/**
+ * Per-turn token usage reported to the frontend alongside the `chat:done`
+ * event. Matches `RuntimeUsage` from `@aif/runtime` structurally, duplicated
+ * here to avoid forcing `@aif/shared` to depend on the runtime layer.
+ */
+export interface ChatDoneUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd?: number;
+}
+
 export interface ChatDonePayload {
   conversationId: string;
+  /** Null when the adapter/transport does not report usage for this turn. */
+  usage?: ChatDoneUsage | null;
 }
 
 export interface ChatErrorPayload {

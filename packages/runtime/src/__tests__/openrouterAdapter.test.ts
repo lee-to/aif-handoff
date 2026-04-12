@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenRouterRuntimeAdapterError } from "../adapters/openrouter/errors.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 const runOpenRouterApiMock = vi.fn();
 const runOpenRouterApiStreamingMock = vi.fn();
@@ -25,6 +26,7 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     prompt: "Implement feature",
     model: "anthropic/claude-sonnet-4",
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

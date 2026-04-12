@@ -1,5 +1,6 @@
-import { findTaskById, incrementTaskTokenUsage } from "@aif/data";
+import { findTaskById } from "@aif/data";
 import { parseAttachments } from "@aif/shared";
+import { UsageSource } from "@aif/runtime";
 import { resolveApiLightModel, runApiRuntimeOneShot } from "./runtime.js";
 
 interface FastFixComment {
@@ -132,16 +133,12 @@ ${
     systemPromptAppend: includeFileUpdateStep
       ? undefined
       : "Do not use tools or subagents. Reply directly with markdown only.",
+    usageContext: { source: UsageSource.FAST_FIX },
   });
 
-  if (result.usage) {
-    incrementTaskTokenUsage(input.taskId, {
-      input_tokens: result.usage.inputTokens,
-      output_tokens: result.usage.outputTokens,
-      total_tokens: result.usage.totalTokens,
-      total_cost_usd: result.usage.costUsd,
-    });
-  }
+  // Usage recorded automatically by the runtime registry wrapper via the DB
+  // sink (see packages/api/services/runtime.ts bootstrap). No manual
+  // incrementTaskTokenUsage needed here.
 
   const resultText = (result.outputText ?? "").trim();
   if (!resultText) {

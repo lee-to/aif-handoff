@@ -45,7 +45,7 @@
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.2",
-    "ai-factory": "^2.8.1",
+    "ai-factory": "^2.9.3",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "globals": "^17.4.0",

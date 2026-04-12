@@ -124,6 +124,8 @@ function resolveAiFactoryCommand(agentIds: string, useConfig: boolean): AiFactor
  *
  * `.ai-factory/` is created exclusively by `ai-factory init`. If the command
  * fails the directory stays missing so subsequent calls will retry.
+ * Existing `.ai-factory/` projects are intentionally not reinitialized here;
+ * runtime rollout guards must handle compatibility for older bootstrap state.
  *
  * Safe to call multiple times — skips if `.ai-factory/` already exists.
  *

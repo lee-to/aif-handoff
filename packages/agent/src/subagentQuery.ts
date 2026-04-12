@@ -304,6 +304,7 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
 
   const promptPolicy = resolveRuntimePromptPolicy({
     runtimeId: resolved.runtimeId,
+    projectRoot: options.projectRoot,
     capabilities,
     runtimeOptions: resolved.options,
     workflow,
@@ -342,6 +343,7 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
       usedFallbackSlashCommand: promptPolicy.usedFallbackSlashCommand,
       usedIsolatedSkillCommand: promptPolicy.usedIsolatedSkillCommand,
       usedNativeSubagentWorkflow: promptPolicy.usedNativeSubagentWorkflow,
+      nativeSubagentFallbackReason: promptPolicy.nativeSubagentFallbackReason ?? null,
       suppressModelFallback,
       canResume,
     },

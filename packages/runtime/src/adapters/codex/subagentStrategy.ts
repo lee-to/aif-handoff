@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { RuntimeWorkflowKind } from "../../workflowSpec.js";
 import { asRecord, readString } from "../../utils.js";
 
@@ -11,6 +13,23 @@ export const CODEX_SUBAGENT_STRATEGIES = {
 export type CodexSubagentStrategy =
   (typeof CODEX_SUBAGENT_STRATEGIES)[keyof typeof CODEX_SUBAGENT_STRATEGIES];
 
+const CODEX_NATIVE_AGENT_FILES = [
+  "best-practices-sidecar.toml",
+  "commit-preparer.toml",
+  "docs-auditor.toml",
+  "implement-coordinator.toml",
+  "implement-worker.toml",
+  "plan-coordinator.toml",
+  "plan-polisher.toml",
+  "review-sidecar.toml",
+  "security-sidecar.toml",
+] as const;
+
+export interface CodexNativeSubagentReadiness {
+  ready: boolean;
+  missingPaths: string[];
+}
+
 export function resolveCodexSubagentStrategy(
   runtimeId: string,
   runtimeOptions?: Record<string, unknown>,
@@ -20,6 +39,32 @@ export function resolveCodexSubagentStrategy(
   return configured === CODEX_SUBAGENT_STRATEGIES.isolated
     ? CODEX_SUBAGENT_STRATEGIES.isolated
     : CODEX_SUBAGENT_STRATEGIES.native;
+}
+
+export function resolveCodexNativeSubagentReadiness(
+  projectRoot?: string | null,
+): CodexNativeSubagentReadiness {
+  if (!projectRoot) {
+    return {
+      ready: false,
+      missingPaths: [".codex/config.toml", ".codex/agents/*.toml"],
+    };
+  }
+
+  const missingPaths = [
+    ...CODEX_NATIVE_AGENT_FILES.filter(
+      (fileName) => !existsSync(join(projectRoot, ".codex", "agents", fileName)),
+    ).map((fileName) => `.codex/agents/${fileName}`),
+  ];
+
+  if (!existsSync(join(projectRoot, ".codex", "config.toml"))) {
+    missingPaths.push(".codex/config.toml");
+  }
+
+  return {
+    ready: missingPaths.length === 0,
+    missingPaths,
+  };
 }
 
 const NATIVE_SUBAGENT_WORKFLOW_GUIDANCE: Partial<Record<RuntimeWorkflowKind, string>> = {

@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createRuntimeWorkflowSpec,
@@ -32,6 +35,30 @@ const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
   supportsNativeSubagentWorkflows: false,
   usageReporting: UsageReporting.FULL,
 };
+
+function createCodexNativeAssetsProjectRoot(): string {
+  const projectRoot = mkdtempSync(join(tmpdir(), "aif-codex-native-assets-"));
+  const agentsDir = join(projectRoot, ".codex", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+
+  for (const fileName of [
+    "best-practices-sidecar.toml",
+    "commit-preparer.toml",
+    "docs-auditor.toml",
+    "implement-coordinator.toml",
+    "implement-worker.toml",
+    "plan-coordinator.toml",
+    "plan-polisher.toml",
+    "review-sidecar.toml",
+    "security-sidecar.toml",
+  ]) {
+    writeFileSync(join(agentsDir, fileName), `name = "${fileName}"\n`, "utf8");
+  }
+
+  writeFileSync(join(projectRoot, ".codex", "config.toml"), "[agents]\nmax_threads = 6\n", "utf8");
+
+  return projectRoot;
+}
 
 describe("runtime workflow spec + prompt policy", () => {
   it("falls back to slash command when agent definitions are unavailable", () => {
@@ -100,6 +127,7 @@ describe("runtime workflow spec + prompt policy", () => {
   });
 
   it("uses native Codex subagents when runtime supports them", () => {
+    const projectRoot = createCodexNativeAssetsProjectRoot();
     const workflow = createRuntimeWorkflowSpec({
       workflowKind: "implementer",
       prompt: "Implement this feature",
@@ -112,6 +140,7 @@ describe("runtime workflow spec + prompt policy", () => {
 
     const resolved = resolveRuntimePromptPolicy({
       runtimeId: "codex",
+      projectRoot,
       capabilities: CODEX_CAPABILITIES,
       runtimeOptions: { codexSubagentStrategy: "native" },
       workflow,
@@ -151,6 +180,7 @@ describe("runtime workflow spec + prompt policy", () => {
   });
 
   it("defaults Codex native_subagents requests to native orchestration when no strategy override is set", () => {
+    const projectRoot = createCodexNativeAssetsProjectRoot();
     const workflow = createRuntimeWorkflowSpec({
       workflowKind: "implementer",
       prompt: "Implement this feature",
@@ -163,6 +193,7 @@ describe("runtime workflow spec + prompt policy", () => {
 
     const resolved = resolveRuntimePromptPolicy({
       runtimeId: "codex",
+      projectRoot,
       capabilities: CODEX_CAPABILITIES,
       runtimeOptions: {},
       workflow,
@@ -172,6 +203,33 @@ describe("runtime workflow spec + prompt policy", () => {
     expect(resolved.usedIsolatedSkillCommand).toBe(false);
     expect(resolved.usedFallbackSlashCommand).toBe(false);
     expect(resolved.prompt).toContain('Spawn the custom Codex agent "implement-coordinator"');
+  });
+
+  it("falls back to isolated skill-command mode when Codex native assets are missing on disk", () => {
+    const workflow = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this feature",
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement @.ai-factory/PLAN.md",
+      fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+    });
+
+    const resolved = resolveRuntimePromptPolicy({
+      runtimeId: "codex",
+      projectRoot: mkdtempSync(join(tmpdir(), "aif-codex-missing-assets-")),
+      capabilities: CODEX_CAPABILITIES,
+      runtimeOptions: {},
+      workflow,
+    });
+
+    expect(resolved.usedNativeSubagentWorkflow).toBe(false);
+    expect(resolved.usedIsolatedSkillCommand).toBe(true);
+    expect(resolved.usedFallbackSlashCommand).toBe(false);
+    expect(resolved.nativeSubagentFallbackReason).toBe("missing_native_assets");
+    expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
+    expect(resolved.prompt).not.toContain("Use Codex native subagents for this workflow.");
   });
 
   it("keeps Claude native agent-definition behavior unchanged when Codex strategy options are present", () => {

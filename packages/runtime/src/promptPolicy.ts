@@ -3,6 +3,7 @@ import type { RuntimeWorkflowSpec } from "./workflowSpec.js";
 import {
   CODEX_SUBAGENT_STRATEGIES,
   getNativeSubagentWorkflowGuidance,
+  resolveCodexNativeSubagentReadiness,
   resolveCodexSubagentStrategy,
 } from "./adapters/codex/subagentStrategy.js";
 
@@ -13,6 +14,7 @@ export interface RuntimePromptPolicyLogger {
 
 export interface RuntimePromptPolicyInput {
   runtimeId: string;
+  projectRoot?: string | null;
   capabilities: RuntimeCapabilities;
   runtimeOptions?: Record<string, unknown>;
   workflow: RuntimeWorkflowSpec;
@@ -26,6 +28,7 @@ export interface RuntimePromptPolicyResult {
   usedFallbackSlashCommand: boolean;
   usedIsolatedSkillCommand: boolean;
   usedNativeSubagentWorkflow: boolean;
+  nativeSubagentFallbackReason?: string;
 }
 
 const DEFAULT_SKILL_PREFIX = "/";
@@ -88,12 +91,15 @@ export function resolveRuntimePromptPolicy(
     input.runtimeId,
     input.runtimeOptions,
   );
+  const codexNativeReadiness =
+    input.runtimeId === "codex" ? resolveCodexNativeSubagentReadiness(input.projectRoot) : null;
   const supportsIsolatedSkillCommand = Boolean(
     input.capabilities.supportsIsolatedSubagentWorkflows,
   );
   const supportsNativeSubagentWorkflow =
     requestedCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.isolated &&
-    Boolean(input.capabilities.supportsNativeSubagentWorkflows);
+    Boolean(input.capabilities.supportsNativeSubagentWorkflows) &&
+    (input.runtimeId !== "codex" || codexNativeReadiness?.ready === true);
   const hasFallbackCommand = Boolean(input.workflow.promptInput.fallbackSlashCommand?.trim());
   const hasNativeAgentName = Boolean(input.workflow.agentDefinitionName?.trim());
   const useNativeSubagentWorkflow =
@@ -147,6 +153,22 @@ export function resolveRuntimePromptPolicy(
       "Native Codex subagents disabled via runtime option; falling back to isolated skill-session execution",
     );
   }
+  if (
+    wantsNativeSubagentWorkflow &&
+    input.runtimeId === "codex" &&
+    requestedCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.isolated &&
+    codexNativeReadiness &&
+    !codexNativeReadiness.ready
+  ) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+        missingPaths: codexNativeReadiness.missingPaths,
+      },
+      "Native Codex subagents requested but project is missing required AI Factory-managed .codex assets; falling back to isolated skill-session execution",
+    );
+  }
 
   if (wantsSlashFallback && !hasFallbackCommand) {
     input.logger?.warn?.(
@@ -157,7 +179,16 @@ export function resolveRuntimePromptPolicy(
       "Workflow requested slash fallback but no fallback slash command was provided",
     );
   }
-  if (wantsNativeSubagentWorkflow && !supportsNativeSubagentWorkflow) {
+  if (
+    wantsNativeSubagentWorkflow &&
+    !supportsNativeSubagentWorkflow &&
+    !(
+      input.runtimeId === "codex" &&
+      requestedCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.isolated &&
+      codexNativeReadiness &&
+      !codexNativeReadiness.ready
+    )
+  ) {
     input.logger?.warn?.(
       {
         runtimeId: input.runtimeId,
@@ -214,6 +245,14 @@ export function resolveRuntimePromptPolicy(
       usedFallbackSlashCommand: useSlashFallback,
       usedIsolatedSkillCommand: useIsolatedSkillCommand,
       usedNativeSubagentWorkflow: useNativeSubagentWorkflow,
+      nativeSubagentFallbackReason:
+        input.runtimeId === "codex" &&
+        wantsNativeSubagentWorkflow &&
+        !useNativeSubagentWorkflow &&
+        codexNativeReadiness &&
+        !codexNativeReadiness.ready
+          ? "missing_native_assets"
+          : null,
       agentDefinitionName: agentDefinitionName ?? null,
       systemPromptAppendLength: systemPromptAppend.length,
     },
@@ -227,5 +266,13 @@ export function resolveRuntimePromptPolicy(
     usedFallbackSlashCommand: useSlashFallback,
     usedIsolatedSkillCommand: useIsolatedSkillCommand,
     usedNativeSubagentWorkflow: useNativeSubagentWorkflow,
+    nativeSubagentFallbackReason:
+      input.runtimeId === "codex" &&
+      wantsNativeSubagentWorkflow &&
+      !useNativeSubagentWorkflow &&
+      codexNativeReadiness &&
+      !codexNativeReadiness.ready
+        ? "missing_native_assets"
+        : undefined,
   };
 }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
+import { UsageReporting } from "../types.js";
 
 const runCodexCliMock = vi.fn();
 const runCodexAgentApiMock = vi.fn();
@@ -79,6 +80,7 @@ describe("Codex runtime adapter", () => {
     expect(adapter.descriptor.capabilities.supportsAgentDefinitions).toBe(false);
     expect(adapter.descriptor.capabilities.supportsIsolatedSubagentWorkflows).toBe(false);
     expect(adapter.descriptor.capabilities.supportsNativeSubagentWorkflows).toBe(false);
+    expect(adapter.descriptor.capabilities.usageReporting).toBe(UsageReporting.PARTIAL);
     expect(adapter.descriptor.capabilities.supportsSessionList).toBe(false);
     expect(adapter.descriptor.skillCommandPrefix).toBe("$");
     expect(adapter.descriptor.supportsProjectInit).toBe(true);
@@ -88,10 +90,13 @@ describe("Codex runtime adapter", () => {
     const adapter = createCodexRuntimeAdapter();
     expect(adapter.getEffectiveCapabilities!("sdk").supportsIsolatedSubagentWorkflows).toBe(true);
     expect(adapter.getEffectiveCapabilities!("sdk").supportsNativeSubagentWorkflows).toBe(true);
+    expect(adapter.getEffectiveCapabilities!("sdk").usageReporting).toBe(UsageReporting.FULL);
     expect(adapter.getEffectiveCapabilities!("cli").supportsIsolatedSubagentWorkflows).toBe(false);
     expect(adapter.getEffectiveCapabilities!("cli").supportsNativeSubagentWorkflows).toBe(false);
+    expect(adapter.getEffectiveCapabilities!("cli").usageReporting).toBe(UsageReporting.PARTIAL);
     expect(adapter.getEffectiveCapabilities!("api").supportsIsolatedSubagentWorkflows).toBe(false);
     expect(adapter.getEffectiveCapabilities!("api").supportsNativeSubagentWorkflows).toBe(false);
+    expect(adapter.getEffectiveCapabilities!("api").usageReporting).toBe(UsageReporting.FULL);
   });
 
   it("runs via CLI transport by default", async () => {

@@ -1,3 +1,5 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const queryMock = vi.fn();
@@ -177,6 +179,30 @@ function makeSuccessWithSession(sessionId: string, result: string) {
       total_cost_usd: 0,
     };
   };
+}
+
+function createCodexNativeAssetsProjectRoot(): string {
+  const projectRoot = mkdtempSync("/tmp/aif-codex-native-assets-");
+  const agentsDir = join(projectRoot, ".codex", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+
+  for (const fileName of [
+    "best-practices-sidecar.toml",
+    "commit-preparer.toml",
+    "docs-auditor.toml",
+    "implement-coordinator.toml",
+    "implement-worker.toml",
+    "plan-coordinator.toml",
+    "plan-polisher.toml",
+    "review-sidecar.toml",
+    "security-sidecar.toml",
+  ]) {
+    writeFileSync(join(agentsDir, fileName), `name = "${fileName}"\n`, "utf8");
+  }
+
+  writeFileSync(join(projectRoot, ".codex", "config.toml"), "[agents]\nmax_threads = 6\n", "utf8");
+
+  return projectRoot;
 }
 
 describe("executeSubagentQuery attribution", () => {
@@ -573,6 +599,7 @@ describe("executeSubagentQuery codex native subagent mode", () => {
   });
 
   it("uses native Codex orchestration prompt by default and skips session persistence", async () => {
+    const projectRoot = createCodexNativeAssetsProjectRoot();
     getTaskSessionIdMock.mockReturnValue("persisted-session");
     findTaskByIdMock.mockReturnValue({
       id: "task-codex-native-1",
@@ -623,7 +650,7 @@ describe("executeSubagentQuery codex native subagent mode", () => {
 
     await executeSubagentQuery({
       taskId: "task-codex-native-1",
-      projectRoot: "/tmp/project",
+      projectRoot,
       agentName: "implement-coordinator",
       prompt: "Implement this task",
       workflowSpec,
@@ -692,6 +719,70 @@ describe("executeSubagentQuery codex native subagent mode", () => {
     await executeSubagentQuery({
       taskId: "task-codex-native-2",
       projectRoot: "/tmp/project",
+      agentName: "implement-coordinator",
+      prompt: "Implement this task",
+      workflowSpec,
+      workflowKind: "implementer",
+    });
+
+    expect(runStreamedMock).toHaveBeenCalledTimes(1);
+    const [firstRunStreamedCall] = runStreamedMock.mock.calls;
+    const passedPrompt = firstRunStreamedCall[0];
+    expect(passedPrompt).toContain("$aif-implement @.ai-factory/PLAN.md");
+    expect(passedPrompt).not.toContain("Use Codex native subagents for this workflow.");
+  });
+
+  it("falls back to isolated Codex skill-session mode when native assets are missing", async () => {
+    findTaskByIdMock.mockReturnValue({
+      id: "task-codex-native-missing-assets",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+    });
+    resolveEffectiveRuntimeProfileMock.mockReturnValue({
+      source: "project_default",
+      profile: {
+        id: "profile-codex",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        defaultModel: "gpt-5.4",
+        options: {},
+      },
+      taskRuntimeProfileId: null,
+      projectRuntimeProfileId: "profile-codex",
+      systemRuntimeProfileId: null,
+    });
+
+    const runStreamedMock = vi.fn<
+      (prompt: string, turnOptions?: unknown) => Promise<{ events: AsyncIterable<unknown> }>
+    >(async () => ({
+      events: (async function* () {
+        yield { type: "thread.started", thread_id: "thread-isolated-missing-assets" };
+        yield { type: "item.completed", item: { type: "agent_message", text: "done" } };
+        yield { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } };
+      })(),
+    }));
+
+    codexStartThreadMock.mockReturnValue({
+      id: "thread-isolated-missing-assets",
+      runStreamed: runStreamedMock,
+    });
+
+    const workflowSpec = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this task",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement @.ai-factory/PLAN.md",
+      fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
+      sessionReusePolicy: "resume_if_available",
+    });
+
+    await executeSubagentQuery({
+      taskId: "task-codex-native-missing-assets",
+      projectRoot: mkdtempSync("/tmp/aif-codex-missing-assets-"),
       agentName: "implement-coordinator",
       prompt: "Implement this task",
       workflowSpec,

@@ -157,11 +157,12 @@ SDK-specific options:
 - `sandboxMode` — one of `read-only`, `workspace-write`, `danger-full-access`
 - `approvalPolicy` — one of `untrusted`, `on-failure`, `on-request`, `never`
 - `modelReasoningEffort` — one of `minimal`, `low`, `medium`, `high`, `xhigh`
-- `codexSubagentStrategy` — `native` (default) or `isolated`; use `isolated` as an escape hatch when you need the legacy fresh-session skill workflow instead of native Codex agents
+- `codexSubagentStrategy` — `native` (default when required `.codex` assets are present) or `isolated`; use `isolated` as an escape hatch when you need the legacy fresh-session skill workflow instead of native Codex agents
 - `skipGitRepoCheck` — bypass the Codex guard that refuses to run outside a git repo (both SDK and CLI)
 
 > Migration note: older releases defaulted `codexSubagentStrategy` to `isolated`.
 > If you relied on the isolated skill-session path, set `codexSubagentStrategy: "isolated"` explicitly after upgrading.
+> If the project was bootstrapped before AI Factory `2.9.3`, Handoff now checks for materialized `.codex/agents/*.toml` and `.codex/config.toml` before using the native path and automatically falls back to `isolated` until `ai-factory init --agents claude,codex` is re-run.
 
 Invalid `options.approvalPolicy` / `options.sandboxMode` values are ignored with a runtime warning, and the adapter falls back to the effective default for that execution path.
 

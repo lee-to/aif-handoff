@@ -13,7 +13,6 @@ import {
 } from "./reviewGate.js";
 
 const log = logger("auto-review-handler");
-const env = getEnv();
 
 export type AutoReviewHandlerHandoffReason = ReviewGateManualHandoffReason | "max_iterations";
 
@@ -116,6 +115,7 @@ function buildActivityMessage(input: {
 export async function handleAutoReviewGate(
   input: AutoReviewInput,
 ): Promise<ReviewGateOutcome | null> {
+  const env = getEnv();
   const refreshedTask = findTaskById(input.taskId);
   if (!refreshedTask?.autoMode) {
     return null;

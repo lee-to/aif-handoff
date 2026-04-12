@@ -20,6 +20,8 @@ const baseTask: Task = {
   reworkRequested: false,
   reviewIterationCount: 0,
   maxReviewIterations: 3,
+  manualReviewRequired: false,
+  autoReviewState: null,
   paused: false,
   lastHeartbeatAt: null,
   lastSyncedAt: null,

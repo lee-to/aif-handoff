@@ -10,7 +10,6 @@ import {
 } from "../reviewContract.js";
 
 const log = logger("reviewer");
-const env = getEnv();
 
 async function runSidecar(
   prompt: string,
@@ -38,6 +37,7 @@ async function runSidecar(
 }
 
 export async function runReviewer(taskId: string, projectRoot: string): Promise<void> {
+  const env = getEnv();
   const task = findTaskById(taskId);
 
   if (!task) {

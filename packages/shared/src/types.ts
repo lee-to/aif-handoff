@@ -115,8 +115,8 @@ export interface Task {
   reworkRequested: boolean;
   reviewIterationCount: number;
   maxReviewIterations: number;
-  manualReviewRequired?: boolean;
-  autoReviewState?: AutoReviewState | null;
+  manualReviewRequired: boolean;
+  autoReviewState: AutoReviewState | null;
   paused: boolean;
   lastHeartbeatAt: string | null;
   lastSyncedAt: string | null;

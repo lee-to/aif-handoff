@@ -335,6 +335,13 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE chat_sessions ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
     `,
   },
+  // IMPORTANT: version 10 intentionally rewrites upstream's old "backfill-only"
+  // migration because a diverged feature branch previously used version 9 for
+  // the manual-review schema. DBs that already ran upstream v9/v10 are safe:
+  // they already have usage_events and token aggregate columns, so skipping
+  // this rewritten v10 is harmless. DBs that reached the diverged feature
+  // branch v9 need this reconciliation step before version 11 can land
+  // cleanly after the histories merge.
   {
     version: 10,
     description:

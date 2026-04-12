@@ -230,6 +230,10 @@ function buildFallbackDecision(
   input: ReviewGateInput,
   fallbackFindings: AutoReviewFinding[],
 ): ReviewGateResult {
+  // Structured output is the only path that can prove a previous blocker was
+  // actually resolved. Once we drop to legacy fallback after prior iterations,
+  // preserve all previous blockers and escalate to manual review instead of
+  // guessing that malformed output means the loop converged.
   const mergedFindings =
     input.previousFindings.length > 0
       ? mergeFindings(input.previousFindings, fallbackFindings)

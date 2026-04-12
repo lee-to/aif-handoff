@@ -68,6 +68,9 @@ export function applyHumanTaskEvent(
       if (task.status !== "done") {
         return { ok: false, error: "approve_done is only allowed from done" };
       }
+      // Verified tasks are a terminal state: convergence flags must be cleared.
+      // The audit trail remains in task comments / activity log, not on the live
+      // task-state fields that drive future automation decisions.
       return { ok: true, patch: { ...CLEAN_STATE_RESET, status: "verified" } };
     }
     case "request_changes": {

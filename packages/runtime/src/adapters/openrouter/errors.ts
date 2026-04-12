@@ -59,6 +59,9 @@ export function classifyOpenRouterRuntimeError(
   error: unknown,
   httpStatus?: number,
 ): OpenRouterRuntimeAdapterError {
+  if (error instanceof OpenRouterRuntimeAdapterError) {
+    return error;
+  }
   const message = messageFromUnknown(error);
   const { adapterCode, category } = classify(message, httpStatus);
   return new OpenRouterRuntimeAdapterError(message, adapterCode, category, error);

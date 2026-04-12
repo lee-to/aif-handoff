@@ -11,7 +11,7 @@ import type {
   RuntimeSessionGetInput,
   RuntimeSessionListInput,
 } from "../../types.js";
-import { classifyOpenCodeRuntimeError } from "./errors.js";
+import { classifyOpenCodeRuntimeError, OpenCodeRuntimeAdapterError } from "./errors.js";
 
 export interface OpenCodeApiLogger {
   debug?(context: Record<string, unknown>, message: string): void;
@@ -307,11 +307,20 @@ async function requestJson<T>(
 
     if (!response.ok) {
       const bodyText = await response.text();
-      throw new Error(`OpenCode HTTP ${response.status} at ${options.path}: ${bodyText}`);
+      throw classifyOpenCodeRuntimeError(
+        new Error(bodyText || `OpenCode request failed at ${options.path}`),
+        response.status,
+      );
     }
 
     return parseJsonResponse<T>(response);
   } catch (error) {
+    if (error instanceof OpenCodeRuntimeAdapterError) throw error;
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw classifyOpenCodeRuntimeError(
+        new Error(`OpenCode request timed out after ${timeoutMs}ms at ${options.path}`),
+      );
+    }
     throw classifyOpenCodeRuntimeError(error);
   } finally {
     clearTimeout(timeout);
@@ -516,8 +525,14 @@ export async function getOpenCodeSession(
 
     return mapSession(payload, input.profileId, input.runtimeId, input.providerId ?? "opencode");
   } catch (error) {
-    const classified = classifyOpenCodeRuntimeError(error);
-    if (classified.adapterCode === "OPENCODE_SESSION_ERROR") {
+    const classified =
+      error instanceof OpenCodeRuntimeAdapterError ? error : classifyOpenCodeRuntimeError(error);
+    // Treat session-specific errors and generic "not found" as session-not-found
+    // (a 404 on /session/:id means the session doesn't exist)
+    const isSessionNotFound =
+      classified.adapterCode === "OPENCODE_SESSION_ERROR" ||
+      classified.message.toLowerCase().includes("not found");
+    if (isSessionNotFound) {
       logger?.warn?.(
         {
           runtimeId: input.runtimeId,

@@ -15,7 +15,6 @@ describe("classifyByHttpStatus", () => {
     [429, "rate_limit"],
     [408, "timeout"],
     [504, "timeout"],
-    [404, "model_not_found"],
     [413, "context_length"],
     [451, "content_filter"],
   ] as Array<[number, RuntimeErrorCategory]>)("maps status %d → %s", (status, expected) => {
@@ -36,6 +35,10 @@ describe("classifyByHttpStatus", () => {
 
   it("returns null for 400 (bad request, not in map)", () => {
     expect(classifyByHttpStatus(400)).toBeNull();
+  });
+
+  it("returns null for 404 (too broad for shared mapping)", () => {
+    expect(classifyByHttpStatus(404)).toBeNull();
   });
 
   it("returns null for 0", () => {

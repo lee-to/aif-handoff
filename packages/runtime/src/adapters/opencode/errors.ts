@@ -69,6 +69,9 @@ export function classifyOpenCodeRuntimeError(
   error: unknown,
   httpStatus?: number,
 ): OpenCodeRuntimeAdapterError {
+  if (error instanceof OpenCodeRuntimeAdapterError) {
+    return error;
+  }
   const message = messageFromUnknown(error);
   const { adapterCode, category } = classify(message, httpStatus);
   return new OpenCodeRuntimeAdapterError(message, adapterCode, category, error);

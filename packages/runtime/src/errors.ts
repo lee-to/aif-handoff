@@ -88,7 +88,9 @@ const HTTP_STATUS_CATEGORY_MAP: ReadonlyMap<number, RuntimeErrorCategory> = new 
   [429, "rate_limit"],
   [408, "timeout"],
   [504, "timeout"],
-  [404, "model_not_found"],
+  // 404 intentionally omitted — too broad for a shared mapping. A 404 on
+  // /models means "model not found", but on /chat/completions it means bad
+  // baseUrl / route config. Adapters should classify 404 per-endpoint.
   [413, "context_length"],
   [451, "content_filter"],
 ]);
@@ -163,6 +165,7 @@ const SHARED_FALLBACK_PATTERNS: ReadonlyArray<{
       "timed out",
       "timeout",
       "etimedout",
+      "aborted",
       "query_start_timeout",
       "first_activity_timeout",
     ],

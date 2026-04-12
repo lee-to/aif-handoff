@@ -19,6 +19,16 @@ describe("classifyOpenRouterRuntimeError", () => {
     expect(classified.cause).toBe(original);
   });
 
+  it("does not re-wrap existing OpenRouterRuntimeAdapterError", () => {
+    const original = new OpenRouterRuntimeAdapterError(
+      "rate limit",
+      "OPENROUTER_RATE_LIMIT",
+      "rate_limit",
+    );
+    const classified = classifyOpenRouterRuntimeError(original);
+    expect(classified).toBe(original);
+  });
+
   it("handles non-Error values", () => {
     const classified = classifyOpenRouterRuntimeError("string error");
     expect(classified.message).toBe("string error");
@@ -146,10 +156,15 @@ describe("classifyOpenRouterRuntimeError", () => {
     expect(err.category).toBe("auth");
   });
 
-  it("classifies by HTTP status 404 as model_not_found", () => {
-    const err = classifyOpenRouterRuntimeError(new Error("some response body"), 404);
+  it("falls through to message fallback for HTTP 404 (not in shared status map)", () => {
+    const err = classifyOpenRouterRuntimeError(new Error("model not found"), 404);
     expect(err.adapterCode).toBe("OPENROUTER_MODEL_NOT_FOUND");
     expect(err.category).toBe("model_not_found");
+  });
+
+  it("classifies HTTP 404 with generic body as unknown", () => {
+    const err = classifyOpenRouterRuntimeError(new Error("some response body"), 404);
+    expect(err.category).toBe("unknown");
   });
 
   it("classifies by HTTP status 500 as transport", () => {

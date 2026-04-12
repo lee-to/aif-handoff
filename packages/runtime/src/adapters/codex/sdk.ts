@@ -80,6 +80,12 @@ const ALLOWED_ENV_PREFIXES = [
   "XDG_",
   "FORCE_COLOR",
   "NO_COLOR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
 ];
 
 function buildCuratedEnv(

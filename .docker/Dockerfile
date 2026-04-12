@@ -1,6 +1,17 @@
 # ---- Base ----
 FROM node:22-slim AS base
 WORKDIR /app
+# Proxy (optional) — propagated to all downstream stages via ENV,
+# so apt-get / npm / npx all pick it up during build.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
 
 # ---- Dependencies ----
 FROM base AS deps
@@ -38,6 +49,16 @@ CMD ["npx", "tsx", "packages/api/src/index.ts"]
 
 # ---- Web (Angie reverse proxy + static) ----
 FROM docker.angie.software/angie:1.11.4-alpine AS web
+# Proxy (optional) — separate ARGs because this stage does NOT inherit from `base`.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
 RUN apk add --no-cache gettext
 COPY --from=build /app/packages/web/dist /usr/share/angie/html
 COPY .docker/angie.conf /etc/angie/http.d/default.conf

@@ -585,7 +585,7 @@ export async function executeSubagentQuery(
 
     if (!result) {
       throw new Error(
-        `${agentName}: all ${FIRST_ACTIVITY_MAX_RETRIES + 1} attempts stalled without tool activity`,
+        `${agentName}: all ${FIRST_ACTIVITY_MAX_RETRIES + 1} attempts stalled without runtime activity`,
       );
     }
 

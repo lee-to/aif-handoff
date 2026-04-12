@@ -39,6 +39,28 @@ function formatReworkCommentForPrompt(
   ].join("\n");
 }
 
+function formatAutoReviewStateForPrompt(
+  state:
+    | {
+        strategy: string;
+        iteration: number;
+        findings: Array<{ id: string; text: string; source: string }>;
+      }
+    | null
+    | undefined,
+): string {
+  if (!state || state.findings.length === 0) {
+    return "No persisted blocking findings snapshot.";
+  }
+
+  return [
+    `strategy: ${state.strategy}`,
+    `iteration: ${state.iteration}`,
+    "findings:",
+    ...state.findings.map((finding) => `- [${finding.id}] ${finding.source} | ${finding.text}`),
+  ].join("\n");
+}
+
 function isBlockedImplementationResult(resultText: string): boolean {
   const normalized = resultText.toLowerCase();
   return (
@@ -170,6 +192,9 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   const latestReworkComment = task.reworkRequested
     ? (getLatestReworkComment(taskId) ?? null)
     : null;
+  const blockingFindingsSnapshot = task.reworkRequested
+    ? formatAutoReviewStateForPrompt(task.autoReviewState)
+    : "No persisted blocking findings snapshot.";
 
   if (selectedPlan && parsedTaskCount > 0 && pendingTaskCount === 0 && !task.reworkRequested) {
     const nowIso = new Date().toISOString();
@@ -214,6 +239,14 @@ You are addressing a REWORK REQUEST on a previously-completed task. The rework c
 ${formatReworkCommentForPrompt(latestReworkComment)}
 REWORK_COMMENT
 
+<<<FULL_REVIEW_COMMENTS
+${task.reviewComments ?? "No review comments available."}
+FULL_REVIEW_COMMENTS
+
+<<<BLOCKING_FINDINGS_SNAPSHOT
+${blockingFindingsSnapshot}
+BLOCKING_FINDINGS_SNAPSHOT
+
 ================================================
 `
     : "";
@@ -226,7 +259,8 @@ Rework handling protocol:
 2) Identify which files in the codebase and/or plan items need to change to satisfy the request.
 3) Make the minimal set of changes required. Do NOT refactor unrelated code.
 4) If the rework request cannot be satisfied (e.g. it asks for something impossible or contradicts an earlier decision), say so EXPLICITLY in the final result text — do not silently skip it or claim "already done".
-5) If the plan checklist shows all items completed, do not interpret that as "nothing to do" — the rework comment is the source of truth for this run.`
+5) If the plan checklist shows all items completed, do not interpret that as "nothing to do" — the rework comment is the source of truth for this run.
+6) In the final result text, explicitly list which blocking finding IDs from BLOCKING_FINDINGS_SNAPSHOT were addressed and which IDs remain unresolved.`
     : "";
 
   const reworkSystemAppend = isRework

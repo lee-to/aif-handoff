@@ -32,6 +32,8 @@ function makeTask(status: Task["status"]): Task {
     reworkRequested: false,
     reviewIterationCount: 0,
     maxReviewIterations: 3,
+    manualReviewRequired: false,
+    autoReviewState: null,
     paused: false,
     lastHeartbeatAt: null,
     lastSyncedAt: null,
@@ -63,6 +65,9 @@ describe("task state machine", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.patch.status).toBe("plan_ready");
+      expect(result.patch.reviewIterationCount).toBe(0);
+      expect(result.patch.manualReviewRequired).toBe(false);
+      expect(result.patch.autoReviewState).toBeNull();
     }
   });
 
@@ -72,20 +77,44 @@ describe("task state machine", () => {
   });
 
   it("allows approve_done from done", () => {
-    const result = applyHumanTaskEvent(makeTask("done"), "approve_done");
+    const task = makeTask("done");
+    task.reviewIterationCount = 2;
+    task.manualReviewRequired = true;
+    task.autoReviewState = {
+      strategy: "closure_first",
+      iteration: 2,
+      findings: [{ id: "finding-1", source: "code_review", text: "Manual review needed" }],
+    };
+
+    const result = applyHumanTaskEvent(task, "approve_done");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.patch.status).toBe("verified");
+      expect(result.patch.reviewIterationCount).toBe(0);
+      expect(result.patch.manualReviewRequired).toBe(false);
+      expect(result.patch.autoReviewState).toBeNull();
     }
   });
 
   it("allows request_changes from done", () => {
-    const result = applyHumanTaskEvent(makeTask("done"), "request_changes");
+    const task = makeTask("done");
+    task.reviewIterationCount = 3;
+    task.manualReviewRequired = true;
+    task.autoReviewState = {
+      strategy: "closure_first",
+      iteration: 3,
+      findings: [{ id: "finding-2", source: "review_gate", text: "Retry review loop" }],
+    };
+
+    const result = applyHumanTaskEvent(task, "request_changes");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.patch.status).toBe("implementing");
       expect(result.patch.retryCount).toBe(0);
       expect(result.patch.reworkRequested).toBe(true);
+      expect(result.patch.reviewIterationCount).toBe(0);
+      expect(result.patch.manualReviewRequired).toBe(false);
+      expect(result.patch.autoReviewState).toBeNull();
     }
   });
 

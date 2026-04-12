@@ -57,6 +57,15 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                 onClose={onClose}
               />
 
+              {task.manualReviewRequired && (
+                <div className="px-4 pt-4">
+                  <AlertBox variant="warning" className="text-xs">
+                    Auto-review stopped and human review is required. Inspect the review comments,
+                    then use Approve or Request changes to resolve the task.
+                  </AlertBox>
+                </div>
+              )}
+
               <div className="grid flex-1 gap-4 overflow-hidden p-4 md:grid-cols-2">
                 {/* Left column */}
                 <div className="space-y-4 overflow-y-auto pr-1">

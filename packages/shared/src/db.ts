@@ -92,6 +92,8 @@ function ensureTables(sqlite: Database.Database): void {
       rework_requested INTEGER NOT NULL DEFAULT 0,
       review_iteration_count INTEGER NOT NULL DEFAULT 0,
       max_review_iterations INTEGER NOT NULL DEFAULT 3,
+      manual_review_required INTEGER NOT NULL DEFAULT 0,
+      auto_review_state_json TEXT,
       paused INTEGER NOT NULL DEFAULT 0,
       last_heartbeat_at TEXT,
       last_synced_at TEXT,
@@ -335,8 +337,35 @@ const MIGRATIONS: Migration[] = [
   },
   {
     version: 10,
-    description: "Backfill project token aggregates from existing task-level usage",
+    description:
+      "Reconcile usage-event schema for diverged version-9 histories and backfill project token aggregates",
     sql: `
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        project_id TEXT,
+        task_id TEXT,
+        chat_session_id TEXT,
+        runtime_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        profile_id TEXT,
+        transport TEXT,
+        workflow_kind TEXT,
+        usage_reporting TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      ALTER TABLE projects ADD COLUMN token_input INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN token_output INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN token_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN token_input INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN token_output INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN token_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
       UPDATE projects
       SET
         token_input  = token_input  + coalesce((SELECT sum(token_input)  FROM tasks WHERE tasks.project_id = projects.id), 0),
@@ -344,6 +373,14 @@ const MIGRATIONS: Migration[] = [
         token_total  = token_total  + coalesce((SELECT sum(token_total)  FROM tasks WHERE tasks.project_id = projects.id), 0),
         cost_usd     = cost_usd     + coalesce((SELECT sum(cost_usd)     FROM tasks WHERE tasks.project_id = projects.id), 0)
       WHERE EXISTS (SELECT 1 FROM tasks WHERE tasks.project_id = projects.id AND tasks.token_total > 0)
+    `,
+  },
+  {
+    version: 11,
+    description: "Add auto review manual handoff and state snapshot columns to tasks",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN manual_review_required INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN auto_review_state_json TEXT;
     `,
   },
 ];
@@ -485,6 +522,22 @@ function runRuntimeBackfills(sqlite: Database.Database): void {
     log.info(
       { backfilledRows: enabledBackfill.changes },
       "Backfilled runtime profile enabled defaults",
+    );
+  }
+
+  if (hasColumn(sqlite, "tasks", "manual_review_required")) {
+    const manualReviewBackfill = sqlite
+      .prepare(
+        `
+        UPDATE tasks
+        SET manual_review_required = 0
+        WHERE manual_review_required IS NULL
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: manualReviewBackfill.changes },
+      "Backfilled task manual_review_required defaults",
     );
   }
 }

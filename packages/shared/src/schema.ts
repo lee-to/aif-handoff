@@ -68,6 +68,10 @@ export const tasks = sqliteTable("tasks", {
   reworkRequested: integer("rework_requested", { mode: "boolean" }).notNull().default(false),
   reviewIterationCount: integer("review_iteration_count").notNull().default(0),
   maxReviewIterations: integer("max_review_iterations").notNull().default(3),
+  manualReviewRequired: integer("manual_review_required", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  autoReviewStateJson: text("auto_review_state_json"),
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   lastHeartbeatAt: text("last_heartbeat_at"),
   lastSyncedAt: text("last_synced_at"),

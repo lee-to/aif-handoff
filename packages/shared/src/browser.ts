@@ -3,6 +3,12 @@
 export {
   TASK_STATUSES,
   type TaskStatus,
+  AUTO_REVIEW_STRATEGIES,
+  type AutoReviewStrategy,
+  AUTO_REVIEW_FINDING_SOURCES,
+  type AutoReviewFindingSource,
+  type AutoReviewFinding,
+  type AutoReviewState,
   type Project,
   type CreateProjectInput,
   type Task,

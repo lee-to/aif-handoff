@@ -26,6 +26,8 @@ export function useUpdateProject() {
       api.updateProject(id, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
+      queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
     },
   });
 }

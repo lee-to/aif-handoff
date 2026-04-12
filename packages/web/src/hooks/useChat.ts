@@ -241,7 +241,7 @@ export function useChat(
   }, [clearAllConversationTimers, clearConversationTimers]);
 
   const sendMessage = useCallback(
-    async (text: string, attachments?: ChatAttachment[]) => {
+    async (text: string, attachments?: ChatAttachment[], forceNewSession?: boolean) => {
       if (!projectId || !text.trim() || isStreaming) return;
 
       const clientId = await waitForWsClientId();
@@ -249,8 +249,15 @@ export function useChat(
         console.debug("[useChat] No clientId available, proceeding with HTTP fallback");
       }
 
+      // When runtime changed, force a new session instead of resuming the old one
+      if (forceNewSession) {
+        currentSessionIdRef.current = null;
+      }
+
       const newConversationId = crypto.randomUUID();
-      const effectiveSessionId = sessionId ?? currentSessionIdRef.current;
+      const effectiveSessionId = forceNewSession
+        ? null
+        : (sessionId ?? currentSessionIdRef.current);
       // Use sessionId or conversationId as stream key (for sessions not yet created)
       const streamKey = effectiveSessionId ?? newConversationId;
 
@@ -264,7 +271,8 @@ export function useChat(
         content: text.trim(),
         ...(messageAttachments?.length ? { attachments: messageAttachments } : {}),
       };
-      const newMessages = [...messages, userMessage];
+      // When forcing a new session, start fresh — don't carry over old messages
+      const newMessages = forceNewSession ? [userMessage] : [...messages, userMessage];
 
       // Register active stream
       if (!effectiveSessionId) {

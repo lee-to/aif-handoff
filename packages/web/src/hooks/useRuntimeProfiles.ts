@@ -40,6 +40,8 @@ export function useUpdateRuntimeProfile() {
       api.updateRuntimeProfile(id, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runtimeProfiles"] });
+      queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
+      queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
     },
   });
 }
@@ -50,6 +52,8 @@ export function useDeleteRuntimeProfile() {
     mutationFn: (id: string) => api.deleteRuntimeProfile(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runtimeProfiles"] });
+      queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
+      queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
     },
   });
 }

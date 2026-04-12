@@ -17,6 +17,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +28,7 @@ import { AttachmentChip } from "@/components/ui/attachment-chip";
 import { useChat } from "@/hooks/useChat";
 import { useChatSessions } from "@/hooks/useChatSessions";
 import { useTask } from "@/hooks/useTasks";
-import { useEffectiveChatRuntime } from "@/hooks/useRuntimeProfiles";
+import { useEffectiveChatRuntime, useRuntimeProfiles } from "@/hooks/useRuntimeProfiles";
 import { toAttachmentPayload } from "@/components/task/useTaskDetailActions";
 import { SessionList } from "./SessionList";
 import { MessageBubble } from "./MessageBubble";
@@ -76,6 +77,7 @@ export function ChatPanel({
 
   const { data: currentTask } = useTask(taskId);
   const { data: effectiveChatRuntime } = useEffectiveChatRuntime(projectId);
+  const { data: runtimeProfiles } = useRuntimeProfiles(projectId, true);
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<ChatAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -103,9 +105,12 @@ export function ChatPanel({
 
   const handleSend = () => {
     if (!input.trim() || isStreaming) return;
-    pinActiveSession();
+    const forceNew = runtimeMismatch;
+    if (!forceNew) {
+      pinActiveSession();
+    }
     const files = pendingFiles.length > 0 ? pendingFiles : undefined;
-    void sendMessage(input, files);
+    void sendMessage(input, files, forceNew);
     setInput("");
     setPendingFiles([]);
   };
@@ -164,16 +169,31 @@ export function ChatPanel({
 
   // Find active session title
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // Detect runtime mismatch: session was created with a different runtime profile
+  const currentProfileId = effectiveChatRuntime?.profile?.id ?? null;
+  const sessionProfileId = activeSession?.runtimeProfileId ?? null;
+  const runtimeMismatch =
+    Boolean(activeSession) &&
+    Boolean(sessionProfileId) &&
+    Boolean(currentProfileId) &&
+    sessionProfileId !== currentProfileId;
+
+  // Show the session's own runtime when it has one, otherwise show the project effective runtime
+  const sessionProfile = sessionProfileId
+    ? runtimeProfiles?.find((p) => p.id === sessionProfileId)
+    : null;
+  const displayProfile = sessionProfile ?? effectiveChatRuntime?.profile ?? null;
   const activeRuntimeProfileName =
-    effectiveChatRuntime?.profile?.name ??
+    displayProfile?.name ??
     (effectiveChatRuntime?.source === "none" ? "Default runtime" : "Unnamed profile");
-  const activeRuntimeEngine = effectiveChatRuntime?.resolved
-    ? `${effectiveChatRuntime.resolved.runtimeId}/${effectiveChatRuntime.resolved.providerId}`
-    : effectiveChatRuntime?.profile
-      ? `${effectiveChatRuntime.profile.runtimeId}/${effectiveChatRuntime.profile.providerId}`
+  const activeRuntimeEngine = displayProfile
+    ? `${displayProfile.runtimeId}/${displayProfile.providerId}`
+    : effectiveChatRuntime?.resolved
+      ? `${effectiveChatRuntime.resolved.runtimeId}/${effectiveChatRuntime.resolved.providerId}`
       : "n/a";
   const activeRuntimeModel =
-    effectiveChatRuntime?.resolved?.model ?? effectiveChatRuntime?.profile?.defaultModel ?? "auto";
+    displayProfile?.defaultModel ?? effectiveChatRuntime?.resolved?.model ?? "auto";
 
   const content = (
     <div
@@ -288,6 +308,16 @@ export function ChatPanel({
 
         {/* Messages area */}
         <div className="flex-1 overflow-y-auto overscroll-contain py-2">
+          {runtimeMismatch && (
+            <div className="px-3 pb-2">
+              <div className="flex items-center gap-1.5 rounded border border-amber-500/50 bg-amber-500/15 px-2.5 py-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span className="text-xs text-amber-700/90 dark:text-amber-200/90">
+                  Runtime changed — next message will start a new session
+                </span>
+              </div>
+            </div>
+          )}
           {chatErrorCode === "CHAT_USAGE_LIMIT" && (
             <div className="px-3 pb-2">
               <div className="rounded border border-amber-500/50 bg-amber-500/15 p-2">

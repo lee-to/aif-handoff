@@ -35,14 +35,14 @@ FROM base AS api
 ENV NODE_ENV=production HOME=/home/node
 RUN apt-get update && apt-get install -y --no-install-recommends gosu git && rm -rf /var/lib/apt/lists/* \
     && npm i -g @anthropic-ai/claude-code @openai/codex
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=build /app/packages/shared ./packages/shared
-COPY --from=build /app/packages/data ./packages/data
-COPY --from=build /app/packages/runtime ./packages/runtime
-COPY --from=build /app/packages/api ./packages/api
-COPY package.json .
+COPY --chown=node:node --from=deps /app/node_modules ./node_modules
+COPY --chown=node:node --from=build /app/packages/shared ./packages/shared
+COPY --chown=node:node --from=build /app/packages/data ./packages/data
+COPY --chown=node:node --from=build /app/packages/runtime ./packages/runtime
+COPY --chown=node:node --from=build /app/packages/api ./packages/api
+COPY --chown=node:node package.json .
 COPY .docker/docker-entrypoint.sh /usr/local/bin/
-RUN mkdir -p /data /home/www && chown -R node:node /app /data /home/www
+RUN mkdir -p /data /home/www && chown node:node /data /home/www /app
 EXPOSE 3009
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npx", "tsx", "packages/api/src/index.ts"]
@@ -70,14 +70,14 @@ FROM base AS agent
 ENV NODE_ENV=production HOME=/home/node
 RUN apt-get update && apt-get install -y --no-install-recommends gosu git && rm -rf /var/lib/apt/lists/* \
     && npm i -g @anthropic-ai/claude-code @openai/codex
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=build /app/packages/shared ./packages/shared
-COPY --from=build /app/packages/data ./packages/data
-COPY --from=build /app/packages/runtime ./packages/runtime
-COPY --from=build /app/packages/agent ./packages/agent
-COPY package.json .
+COPY --chown=node:node --from=deps /app/node_modules ./node_modules
+COPY --chown=node:node --from=build /app/packages/shared ./packages/shared
+COPY --chown=node:node --from=build /app/packages/data ./packages/data
+COPY --chown=node:node --from=build /app/packages/runtime ./packages/runtime
+COPY --chown=node:node --from=build /app/packages/agent ./packages/agent
+COPY --chown=node:node package.json .
 COPY .docker/docker-entrypoint.sh /usr/local/bin/
-RUN mkdir -p /data /home/www && chown -R node:node /app /data /home/www
+RUN mkdir -p /data /home/www && chown node:node /data /home/www /app
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npx", "tsx", "packages/agent/src/index.ts"]
 
@@ -85,14 +85,14 @@ CMD ["npx", "tsx", "packages/agent/src/index.ts"]
 FROM base AS mcp
 ENV NODE_ENV=production HOME=/home/node
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=build /app/packages/shared ./packages/shared
-COPY --from=build /app/packages/data ./packages/data
-COPY --from=build /app/packages/runtime ./packages/runtime
-COPY --from=build /app/packages/mcp ./packages/mcp
-COPY package.json .
+COPY --chown=node:node --from=deps /app/node_modules ./node_modules
+COPY --chown=node:node --from=build /app/packages/shared ./packages/shared
+COPY --chown=node:node --from=build /app/packages/data ./packages/data
+COPY --chown=node:node --from=build /app/packages/runtime ./packages/runtime
+COPY --chown=node:node --from=build /app/packages/mcp ./packages/mcp
+COPY --chown=node:node package.json .
 COPY .docker/docker-entrypoint.sh /usr/local/bin/
-RUN mkdir -p /data /home/www && chown -R node:node /app /data /home/www
+RUN mkdir -p /data /home/www && chown node:node /data /home/www /app
 EXPOSE 3100
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npx", "tsx", "packages/mcp/src/index.ts"]

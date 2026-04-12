@@ -19,7 +19,7 @@ export interface McpEnv {
   rateLimitWriteBurst: number;
 }
 
-function resolveMcpPort(value: string | undefined): number {
+function resolveMcpPort(value: string | undefined, transport: McpEnv["transport"]): number {
   const trimmed = value?.trim();
   if (!trimmed) {
     return 3100;
@@ -28,6 +28,18 @@ function resolveMcpPort(value: string | undefined): number {
   const port = Number(trimmed);
   if (Number.isInteger(port) && port > 0 && port <= 65_535) {
     return port;
+  }
+
+  if (transport === "stdio") {
+    log.warn(
+      {
+        transport,
+        invalidValue: trimmed,
+        fallbackPort: 3100,
+      },
+      "[FIX] Ignoring invalid MCP_PORT because MCP transport is stdio",
+    );
+    return 3100;
   }
 
   throw new Error(`Invalid MCP_PORT: ${trimmed}. Must be an integer between 1 and 65535.`);
@@ -49,7 +61,7 @@ export function loadMcpEnv(): McpEnv {
   const env: McpEnv = {
     apiUrl: sharedEnv.API_BASE_URL,
     transport,
-    httpPort: resolveMcpPort(process.env.MCP_PORT),
+    httpPort: resolveMcpPort(process.env.MCP_PORT, transport),
     rateLimitReadRpm: parseInt(process.env.MCP_RATE_LIMIT_READ_RPM || "120", 10),
     rateLimitWriteRpm: parseInt(process.env.MCP_RATE_LIMIT_WRITE_RPM || "30", 10),
     rateLimitReadBurst: parseInt(process.env.MCP_RATE_LIMIT_READ_BURST || "10", 10),

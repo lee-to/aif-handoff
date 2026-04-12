@@ -6,6 +6,10 @@ export function useProjects() {
   return useQuery<Project[]>({
     queryKey: ["projects"],
     queryFn: api.listProjects,
+    // Projects are critical bootstrap data — keep retrying until the API is reachable.
+    // Prevents empty UI when the page loads before the API is fully ready (e.g. docker restart).
+    retry: true,
+    retryDelay: (attempt) => Math.min(2000 * 2 ** attempt, 15_000),
   });
 }
 

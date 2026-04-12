@@ -228,6 +228,78 @@ describe("settings API — config routes", () => {
       expect(codexToml).not.toContain('command = "npx"');
     });
 
+    it("POST /settings/mcp/install falls back to stdio when MCP_PORT is invalid", async () => {
+      process.env.MCP_PORT = "3100abc";
+      writeFileSync(claudeConfigPath, "{}");
+
+      const res = await app.request("/settings/mcp/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+
+      const claudeConfig = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
+      expect(claudeConfig.mcpServers.handoff).toEqual({
+        type: "stdio",
+        command: "npx",
+        args: ["tsx", join(tempRoot, "packages/mcp/src/index.ts")],
+        cwd: tempRoot,
+        env: {
+          DATABASE_URL: join(tempRoot, "data", "aif.sqlite"),
+          LOG_DESTINATION: "stderr",
+          LOG_LEVEL: "info",
+          MCP_TRANSPORT: "stdio",
+          PROJECTS_DIR: join(tempRoot, ".projects"),
+        },
+      });
+
+      const codexToml = readFileSync(codexConfigPath, "utf-8");
+      expect(codexToml).toContain("[mcp_servers.handoff]");
+      expect(codexToml).toContain('command = "npx"');
+      expect(codexToml).not.toContain('url = "http://localhost:3100/mcp"');
+    });
+
+    it("POST /settings/mcp/install reports partial runtime failures", async () => {
+      writeFileSync(claudeConfigPath, "{}");
+      writeFileSync(join(fakeHome, ".codex"), "not-a-directory");
+
+      const res = await app.request("/settings/mcp/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(false);
+      expect(body.runtimes).toEqual(
+        expect.arrayContaining([
+          { runtimeId: "claude", success: true },
+          expect.objectContaining({
+            runtimeId: "codex",
+            success: false,
+          }),
+        ]),
+      );
+
+      const claudeConfig = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
+      expect(claudeConfig.mcpServers.handoff).toEqual({
+        type: "stdio",
+        command: "npx",
+        args: ["tsx", join(tempRoot, "packages/mcp/src/index.ts")],
+        cwd: tempRoot,
+        env: {
+          DATABASE_URL: join(tempRoot, "data", "aif.sqlite"),
+          LOG_DESTINATION: "stderr",
+          LOG_LEVEL: "info",
+          MCP_TRANSPORT: "stdio",
+          PROJECTS_DIR: join(tempRoot, ".projects"),
+        },
+      });
+    });
+
     it("DELETE /settings/mcp removes handoff server", async () => {
       writeFileSync(
         claudeConfigPath,

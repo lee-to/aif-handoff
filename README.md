@@ -47,7 +47,7 @@ npm run init
 npm run dev
 ```
 
-Set `MCP_PORT` in your shell or root `.env` before `npm run dev` if you also want the MCP HTTP server in local development.
+Set `MCP_PORT` in your shell or root `.env` before `npm run dev` if you also want the MCP HTTP server in local development. Use an integer port between `1` and `65535`; invalid values are ignored by the dev launcher and the settings install route falls back to the local `stdio` entry instead of writing an HTTP MCP endpoint.
 
 ### With Docker
 
@@ -57,7 +57,7 @@ cd aif-handoff
 docker compose up --build
 ```
 
-Development starts three services by default. If `MCP_PORT` is set, it starts a fourth service for MCP over HTTP. Docker starts all four services.
+Development starts three services by default. If `MCP_PORT` is set to a valid integer port, it starts a fourth service for MCP over HTTP. Docker starts all four services.
 
 | Service   | URL                               | Description                                  |
 | --------- | --------------------------------- | -------------------------------------------- |
@@ -184,18 +184,18 @@ Authentication: set `ANTHROPIC_API_KEY` in `.env`, or log in via `docker compose
 
 Only ports 80/443 are exposed. API is bound to localhost only. Includes security hardening (no-new-privileges, resource limits), healthchecks, log rotation, and automatic SSL via Let's Encrypt (ACME).
 
-| Variable            | Default      | Description                            |
-| ------------------- | ------------ | -------------------------------------- |
-| `ANTHROPIC_API_KEY` | —            | API key (or use `claude login`)        |
-| `DOMAIN`            | `localhost`  | Domain for SSL certificate (ACME)      |
-| `PORT`              | `3009`       | Host port for API                      |
-| `MCP_PORT`          | `3100`       | Host port for MCP HTTP server          |
-| `WEB_PORT`          | `5180`       | Host port for Web UI (dev)             |
-| `WEB_HOST`          | `localhost`  | Web UI dev server host (Vite)          |
-| `HTTP_PORT`         | `80`         | Host port for Web UI (production)      |
-| `HTTPS_PORT`        | `443`        | HTTPS port (production)                |
-| `PROJECTS_DIR`      | `./projects` | Host directory for project files (dev) |
-| `PROJECTS_MOUNT`    | `/home/www`  | Project files path inside containers   |
+| Variable            | Default      | Description                               |
+| ------------------- | ------------ | ----------------------------------------- |
+| `ANTHROPIC_API_KEY` | —            | API key (or use `claude login`)           |
+| `DOMAIN`            | `localhost`  | Domain for SSL certificate (ACME)         |
+| `PORT`              | `3009`       | Host port for API                         |
+| `MCP_PORT`          | `3100`       | Host port for MCP HTTP server (`1-65535`) |
+| `WEB_PORT`          | `5180`       | Host port for Web UI (dev)                |
+| `WEB_HOST`          | `localhost`  | Web UI dev server host (Vite)             |
+| `HTTP_PORT`         | `80`         | Host port for Web UI (production)         |
+| `HTTPS_PORT`        | `443`        | HTTPS port (production)                   |
+| `PROJECTS_DIR`      | `./projects` | Host directory for project files (dev)    |
+| `PROJECTS_MOUNT`    | `/home/www`  | Project files path inside containers      |
 
 A `.devcontainer/` config is also included for JetBrains / VS Code.
 

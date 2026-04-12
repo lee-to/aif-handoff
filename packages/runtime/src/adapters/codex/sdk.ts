@@ -21,6 +21,11 @@ import {
   withStreamTimeouts,
 } from "../../timeouts.js";
 import { classifyCodexRuntimeError } from "./errors.js";
+import {
+  normalizeCodexApprovalPolicy,
+  normalizeCodexSandboxMode,
+  warnOnInvalidCodexPermissionOverride,
+} from "./permissions.js";
 
 export interface CodexSdkLogger {
   debug?(context: Record<string, unknown>, message: string): void;
@@ -186,7 +191,7 @@ function buildCodexOptions(input: RuntimeRunInput, logger?: CodexSdkLogger): Cod
   return codexOpts;
 }
 
-function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
+function buildThreadOptions(input: RuntimeRunInput, logger?: CodexSdkLogger): ThreadOptions {
   const cwd = input.cwd ?? input.projectRoot;
   const options = asRecord(input.options);
   const execution = input.execution;
@@ -212,14 +217,21 @@ function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
   // to the bypass-permissions refactor these defaults were set by a
   // Codex-specific hook factory in the API layer; the logic now lives inside
   // the adapter so api/agent/runtime all see the same contract.
-  const explicitApproval = readString(options.approvalPolicy) ?? readString(hooks.approvalPolicy);
-  if (
-    explicitApproval === "never" ||
-    explicitApproval === "on-request" ||
-    explicitApproval === "on-failure" ||
-    explicitApproval === "untrusted"
-  ) {
-    threadOpts.approvalPolicy = explicitApproval;
+  const rawApprovalOption = readString(options.approvalPolicy);
+  const rawApprovalHook = readString(hooks.approvalPolicy);
+  const explicitApproval = rawApprovalOption ?? rawApprovalHook;
+  const normalizedApproval = normalizeCodexApprovalPolicy(explicitApproval);
+  warnOnInvalidCodexPermissionOverride({
+    logger,
+    runtimeId: input.runtimeId,
+    transport: "sdk",
+    field: "approvalPolicy",
+    source: rawApprovalOption ? "options" : "hooks",
+    rawValue: explicitApproval,
+    normalizedValue: normalizedApproval,
+  });
+  if (normalizedApproval) {
+    threadOpts.approvalPolicy = normalizedApproval;
   } else if (execution?.bypassPermissions) {
     threadOpts.approvalPolicy = "never";
   } else {
@@ -231,13 +243,21 @@ function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
     threadOpts.skipGitRepoCheck = true;
   }
 
-  const explicitSandbox = readString(options.sandboxMode) ?? readString(hooks.sandboxMode);
-  if (
-    explicitSandbox === "read-only" ||
-    explicitSandbox === "workspace-write" ||
-    explicitSandbox === "danger-full-access"
-  ) {
-    threadOpts.sandboxMode = explicitSandbox;
+  const rawSandboxOption = readString(options.sandboxMode);
+  const rawSandboxHook = readString(hooks.sandboxMode);
+  const explicitSandbox = rawSandboxOption ?? rawSandboxHook;
+  const normalizedSandbox = normalizeCodexSandboxMode(explicitSandbox);
+  warnOnInvalidCodexPermissionOverride({
+    logger,
+    runtimeId: input.runtimeId,
+    transport: "sdk",
+    field: "sandboxMode",
+    source: rawSandboxOption ? "options" : "hooks",
+    rawValue: explicitSandbox,
+    normalizedValue: normalizedSandbox,
+  });
+  if (normalizedSandbox) {
+    threadOpts.sandboxMode = normalizedSandbox;
   } else if (execution?.bypassPermissions) {
     threadOpts.sandboxMode = "danger-full-access";
   } else {
@@ -265,6 +285,33 @@ function buildThreadOptions(input: RuntimeRunInput): ThreadOptions {
   ) {
     threadOpts.modelReasoningEffort = effort;
   }
+
+  logger?.debug?.(
+    {
+      runtimeId: input.runtimeId,
+      transport: "sdk",
+      approvalPolicy: threadOpts.approvalPolicy ?? null,
+      sandboxMode: threadOpts.sandboxMode ?? null,
+      approvalSource:
+        rawApprovalOption != null
+          ? "options"
+          : rawApprovalHook != null
+            ? "hooks"
+            : execution?.bypassPermissions
+              ? "bypass-default"
+              : "default",
+      sandboxSource:
+        rawSandboxOption != null
+          ? "options"
+          : rawSandboxHook != null
+            ? "hooks"
+            : execution?.bypassPermissions
+              ? "bypass-default"
+              : "default",
+      bypassPermissions: execution?.bypassPermissions === true,
+    },
+    "Resolved Codex SDK approval and sandbox settings",
+  );
 
   return threadOpts;
 }
@@ -423,7 +470,7 @@ async function runCodexSdkAttempt(
   logger?: CodexSdkLogger,
 ): Promise<RuntimeRunResult> {
   const codexOpts = buildCodexOptions(input, logger);
-  const threadOpts = buildThreadOptions(input);
+  const threadOpts = buildThreadOptions(input, logger);
   const turnOpts = buildTurnOptions(input.execution);
   const execution = input.execution;
 

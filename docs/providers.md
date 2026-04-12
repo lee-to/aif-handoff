@@ -159,6 +159,8 @@ SDK-specific options:
 - `modelReasoningEffort` — one of `minimal`, `low`, `medium`, `high`, `xhigh`
 - `skipGitRepoCheck` — bypass the Codex guard that refuses to run outside a git repo (both SDK and CLI)
 
+Invalid `options.approvalPolicy` / `options.sandboxMode` values are ignored with a runtime warning, and the adapter falls back to the effective default for that execution path.
+
 ### Codex (CLI transport)
 
 ```json

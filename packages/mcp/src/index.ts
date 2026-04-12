@@ -103,8 +103,7 @@ async function main() {
   log.info(
     {
       transport: env.transport,
-      readRpm: env.rateLimitReadRpm,
-      writeRpm: env.rateLimitWriteRpm,
+      httpPort: env.httpPort,
     },
     "MCP server starting",
   );

@@ -47,7 +47,7 @@ Claude Code auto-discovers the Handoff MCP server from `.mcp.json` — no build 
 
 #### HTTP — Docker / remote
 
-When running in Docker, or in local development with `MCP_PORT` set, the MCP server uses Streamable HTTP transport and listens on `MCP_PORT` (default `3100`):
+When running in Docker, or in local development with `MCP_PORT` set to a valid integer port (`1-65535`), the MCP server uses Streamable HTTP transport and listens on `MCP_PORT` (default `3100`):
 
 ```json
 {
@@ -61,20 +61,20 @@ When running in Docker, or in local development with `MCP_PORT` set, the MCP ser
 
 The HTTP mode also exposes a `/health` endpoint for Docker healthchecks.
 
-When the web settings UI calls `POST /settings/mcp/install`, the API installs this HTTP URL form automatically whenever `MCP_PORT` is set. If `MCP_PORT` is not set, it falls back to the local `stdio`/`npx tsx packages/mcp/src/index.ts` entry.
+When the web settings UI calls `POST /settings/mcp/install`, the API installs this HTTP URL form automatically whenever `MCP_PORT` is a valid integer port. If `MCP_PORT` is missing or invalid, it falls back to the local `stdio`/`npx tsx packages/mcp/src/index.ts` entry. Direct MCP HTTP startup (`packages/mcp`) is stricter: invalid `MCP_PORT` values fail fast during startup instead of silently coercing the port.
 
 ### Environment Variables
 
 The MCP server uses the shared monorepo environment (`packages/shared/src/env.ts`) for database and API configuration. MCP-specific variables:
 
-| Variable                     | Default | Description                                     |
-| ---------------------------- | ------- | ----------------------------------------------- |
-| `MCP_TRANSPORT`              | `stdio` | Transport mode: `stdio` or `http`               |
-| `MCP_PORT`                   | `3100`  | HTTP port (only used when `MCP_TRANSPORT=http`) |
-| `MCP_RATE_LIMIT_READ_RPM`    | `120`   | Read tool rate limit (requests/minute)          |
-| `MCP_RATE_LIMIT_READ_BURST`  | `10`    | Read tool burst capacity                        |
-| `MCP_RATE_LIMIT_WRITE_RPM`   | `30`    | Write tool rate limit (requests/minute)         |
-| `MCP_RATE_LIMIT_WRITE_BURST` | `5`     | Write tool burst capacity                       |
+| Variable                     | Default | Description                                                |
+| ---------------------------- | ------- | ---------------------------------------------------------- |
+| `MCP_TRANSPORT`              | `stdio` | Transport mode: `stdio` or `http`                          |
+| `MCP_PORT`                   | `3100`  | HTTP port (`1-65535`, only used when `MCP_TRANSPORT=http`) |
+| `MCP_RATE_LIMIT_READ_RPM`    | `120`   | Read tool rate limit (requests/minute)                     |
+| `MCP_RATE_LIMIT_READ_BURST`  | `10`    | Read tool burst capacity                                   |
+| `MCP_RATE_LIMIT_WRITE_RPM`   | `30`    | Write tool rate limit (requests/minute)                    |
+| `MCP_RATE_LIMIT_WRITE_BURST` | `5`     | Write tool burst capacity                                  |
 
 Shared variables (from `@aif/shared`):
 

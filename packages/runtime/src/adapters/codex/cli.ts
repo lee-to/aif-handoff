@@ -8,6 +8,13 @@ import {
   withProcessTimeouts,
 } from "../../timeouts.js";
 import { classifyCodexRuntimeError } from "./errors.js";
+import {
+  normalizeCodexApprovalPolicy,
+  normalizeCodexSandboxMode,
+  warnOnInvalidCodexPermissionOverride,
+  type CodexApprovalPolicy,
+  type CodexSandboxMode,
+} from "./permissions.js";
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -42,39 +49,6 @@ function normalizeCodexCliEffort(value: unknown): CodexCliEffortLevel | null {
   return null;
 }
 
-const CODEX_APPROVAL_POLICIES = new Set([
-  "untrusted",
-  "on-failure",
-  "on-request",
-  "never",
-] as const);
-
-type CodexApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
-
-function normalizeCodexApprovalPolicy(value: unknown): CodexApprovalPolicy | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return CODEX_APPROVAL_POLICIES.has(trimmed as CodexApprovalPolicy)
-    ? (trimmed as CodexApprovalPolicy)
-    : null;
-}
-
-const CODEX_SANDBOX_MODES = new Set([
-  "read-only",
-  "workspace-write",
-  "danger-full-access",
-] as const);
-
-type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-
-function normalizeCodexSandboxMode(value: unknown): CodexSandboxMode | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return CODEX_SANDBOX_MODES.has(trimmed as CodexSandboxMode)
-    ? (trimmed as CodexSandboxMode)
-    : null;
-}
-
 /**
  * Resolve the effective approval policy and sandbox mode for a Codex CLI run.
  *
@@ -95,19 +69,56 @@ function normalizeCodexSandboxMode(value: unknown): CodexSandboxMode | null {
  * `--dangerously-bypass-approvals-and-sandbox` flag is required because the
  * `codex exec resume` subcommand rejects `--sandbox` outright.
  */
-function resolveCodexPermissionOverrides(input: RuntimeRunInput): {
+function resolveCodexPermissionOverrides(
+  input: RuntimeRunInput,
+  logger?: CodexCliLogger,
+): {
   approvalPolicy: CodexApprovalPolicy;
   sandboxMode: CodexSandboxMode;
 } {
   const options = asRecord(input.options);
-  const explicitApproval = normalizeCodexApprovalPolicy(options.approvalPolicy);
-  const explicitSandbox = normalizeCodexSandboxMode(options.sandboxMode);
+  const rawApproval = readString(options.approvalPolicy);
+  const rawSandbox = readString(options.sandboxMode);
+  const explicitApproval = normalizeCodexApprovalPolicy(rawApproval);
+  const explicitSandbox = normalizeCodexSandboxMode(rawSandbox);
   const bypass = input.execution?.bypassPermissions === true;
 
-  return {
+  warnOnInvalidCodexPermissionOverride({
+    logger,
+    runtimeId: input.runtimeId,
+    transport: "cli",
+    field: "approvalPolicy",
+    rawValue: rawApproval,
+    normalizedValue: explicitApproval,
+  });
+  warnOnInvalidCodexPermissionOverride({
+    logger,
+    runtimeId: input.runtimeId,
+    transport: "cli",
+    field: "sandboxMode",
+    rawValue: rawSandbox,
+    normalizedValue: explicitSandbox,
+  });
+
+  const resolved = {
     approvalPolicy: explicitApproval ?? (bypass ? "never" : "on-request"),
     sandboxMode: explicitSandbox ?? (bypass ? "danger-full-access" : "workspace-write"),
   };
+
+  logger?.debug?.(
+    {
+      runtimeId: input.runtimeId,
+      transport: "cli",
+      approvalPolicy: resolved.approvalPolicy,
+      sandboxMode: resolved.sandboxMode,
+      approvalSource: explicitApproval ? "options" : bypass ? "bypass-default" : "default",
+      sandboxSource: explicitSandbox ? "options" : bypass ? "bypass-default" : "default",
+      bypassPermissions: bypass,
+    },
+    "Resolved Codex CLI approval and sandbox settings",
+  );
+
+  return resolved;
 }
 
 function readStringArray(value: unknown): string[] | null {
@@ -116,7 +127,7 @@ function readStringArray(value: unknown): string[] | null {
   return parsed.length > 0 ? parsed : null;
 }
 
-function normalizeCliArgs(input: RuntimeRunInput): string[] {
+function normalizeCliArgs(input: RuntimeRunInput, logger?: CodexCliLogger): string[] {
   const options = asRecord(input.options);
   const configured = readStringArray(options.codexCliArgs);
 
@@ -161,7 +172,7 @@ function normalizeCliArgs(input: RuntimeRunInput): string[] {
   // `--dangerously-bypass-approvals-and-sandbox` flag — `codex exec resume`
   // rejects `--sandbox`, and `-c` overrides work uniformly across both the
   // fresh exec and resume paths.
-  const { approvalPolicy, sandboxMode } = resolveCodexPermissionOverrides(input);
+  const { approvalPolicy, sandboxMode } = resolveCodexPermissionOverrides(input, logger);
   args.push("-c", `approval_policy="${approvalPolicy}"`);
   args.push("-c", `sandbox_mode="${sandboxMode}"`);
 
@@ -752,7 +763,7 @@ export async function runCodexCli(
   logger?: CodexCliLogger,
 ): Promise<RuntimeRunResult> {
   const cliPath = resolveCliPath(input);
-  const args = normalizeCliArgs(input);
+  const args = normalizeCliArgs(input, logger);
   const options = asRecord(input.options);
   const apiKeyEnvVar =
     typeof options.apiKeyEnvVar === "string" ? options.apiKeyEnvVar : "OPENAI_API_KEY";

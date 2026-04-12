@@ -264,6 +264,59 @@ describe("codex cli transport", () => {
     await runPromise;
   });
 
+  it("warns and falls back to defaults when permission overrides are invalid", async () => {
+    const child = createMockChildProcess();
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        options: { approvalPolicy: "bad-policy", sandboxMode: "bad-sandbox" },
+      }),
+      logger,
+    );
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toContain('approval_policy="on-request"');
+    expect(args).toContain('sandbox_mode="workspace-write"');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: "codex",
+        transport: "cli",
+        field: "approvalPolicy",
+        invalidValue: "bad-policy",
+      }),
+      "Ignoring invalid Codex approvalPolicy override",
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: "codex",
+        transport: "cli",
+        field: "sandboxMode",
+        invalidValue: "bad-sandbox",
+      }),
+      "Ignoring invalid Codex sandboxMode override",
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeId: "codex",
+        transport: "cli",
+        approvalPolicy: "on-request",
+        sandboxMode: "workspace-write",
+      }),
+      "Resolved Codex CLI approval and sandbox settings",
+    );
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+    await runPromise;
+  });
+
   it("custom codexCliArgs is a full escape hatch — adapter-managed flags are NOT injected", async () => {
     const child = createMockChildProcess();
     spawnMock.mockReturnValueOnce(child);

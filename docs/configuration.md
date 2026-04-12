@@ -92,6 +92,7 @@ Optional runtime defaults:
 - `CODEX_CLI_PATH` for CLI transport adapters
 - `AIF_RUNTIME_MODULES` for loading additional runtime modules at startup (`registerRuntimeModule(registry)`)
 - `API_RUNTIME_START_TIMEOUT_MS` / `API_RUNTIME_RUN_TIMEOUT_MS` for API one-shot runtime calls
+- `MCP_PORT` must be a valid integer port (`1-65535`) anywhere HTTP MCP mode is enabled. `npm run dev` and `POST /settings/mcp/install` ignore invalid values and fall back to non-HTTP behavior; the standalone MCP HTTP server fails fast on invalid configuration.
 
 ### Runtime Readiness Check
 

@@ -18,7 +18,7 @@ function createAdapter(
       displayName: "Test",
       capabilities,
     },
-    run: async () => ({ outputText: "" }),
+    run: async () => ({ outputText: "", usage: null }),
     ...(getEffective ? { getEffectiveCapabilities: getEffective } : {}),
   };
 }

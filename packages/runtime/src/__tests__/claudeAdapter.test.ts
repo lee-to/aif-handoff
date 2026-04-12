@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 const queryMock = vi.fn();
 const listSessionsMock = vi.fn();
@@ -40,6 +41,7 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
       startTimeoutMs: 10,
       startRetryDelayMs: 0,
     },
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

@@ -1,5 +1,6 @@
 import {
   RuntimeTransport,
+  UsageReporting,
   type RuntimeAdapter,
   type RuntimeCapabilities,
   type RuntimeConnectionValidationInput,
@@ -44,6 +45,7 @@ const API_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  usageReporting: UsageReporting.FULL,
 };
 
 function createFallbackLogger(): OpenRouterAdapterLogger {

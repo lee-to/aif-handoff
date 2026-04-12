@@ -4,6 +4,7 @@ import {
   createRuntimeRegistry,
   createRuntimeMemoryCache,
   RuntimeValidationError,
+  UsageReporting,
   type RuntimeAdapter,
   type RuntimeConnectionValidationResult,
   type RuntimeModel,
@@ -53,9 +54,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       listModels: listModelsMock,
       validateConnection: async () => ({ ok: true }),
     };
@@ -111,9 +113,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       listModels: listModelsMock,
       validateConnection: async () => ({ ok: true }),
     };
@@ -158,9 +161,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       listModels: listModelsMock,
       validateConnection: async () => ({ ok: true }),
     };
@@ -210,9 +214,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: true,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       listModels: listModelsMock,
       validateConnection: async () => ({ ok: true }),
     };
@@ -250,9 +255,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: false,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
     };
 
     const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
@@ -276,9 +282,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       listModels: async () => {
         throw new Error("network down");
       },
@@ -307,6 +314,7 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: false,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
       getEffectiveCapabilities: (transport) => ({
@@ -317,8 +325,9 @@ describe("runtime model discovery service", () => {
         supportsModelDiscovery: transport === "api",
         supportsApprovals: false,
         supportsCustomEndpoint: true,
+        usageReporting: UsageReporting.NONE,
       }),
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       listModels: listModelsMock,
     };
 
@@ -376,9 +385,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       listModels: listModelsMock,
       validateConnection: async () => ({ ok: true }),
     };
@@ -412,9 +422,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       validateConnection: validateConnectionMock,
     };
 
@@ -448,9 +459,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: true,
           supportsApprovals: false,
           supportsCustomEndpoint: true,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       validateConnection: validateConnectionMock,
     };
 
@@ -487,9 +499,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: false,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
     };
 
     const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
@@ -524,9 +537,10 @@ describe("runtime model discovery service", () => {
           supportsModelDiscovery: false,
           supportsApprovals: false,
           supportsCustomEndpoint: false,
+          usageReporting: UsageReporting.NONE,
         },
       },
-      run: async () => ({ outputText: "ok" }),
+      run: async () => ({ outputText: "ok", usage: null }),
       validateConnection: async () => {
         throw new Error("validation transport failure");
       },

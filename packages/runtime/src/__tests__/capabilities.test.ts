@@ -3,6 +3,7 @@ import {
   assertRuntimeCapabilities,
   checkRuntimeCapabilities,
   RuntimeCapabilityError,
+  UsageReporting,
 } from "../index.js";
 
 describe("runtime capability checks", () => {
@@ -14,6 +15,7 @@ describe("runtime capability checks", () => {
     supportsModelDiscovery: false,
     supportsApprovals: true,
     supportsCustomEndpoint: true,
+    usageReporting: UsageReporting.NONE,
   };
 
   it("returns ok when all required capabilities are present", () => {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeRunInput } from "../types.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 // Mock the Codex SDK
 const mockRunStreamed = vi.fn();
@@ -32,6 +33,7 @@ function createRunInput(overrides: Partial<RuntimeRunInput> = {}): RuntimeRunInp
     providerId: "openai",
     prompt: "Implement the feature",
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

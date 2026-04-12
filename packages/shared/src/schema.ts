@@ -17,6 +17,10 @@ export const projects = sqliteTable("projects", {
   defaultPlanRuntimeProfileId: text("default_plan_runtime_profile_id"),
   defaultReviewRuntimeProfileId: text("default_review_runtime_profile_id"),
   defaultChatRuntimeProfileId: text("default_chat_runtime_profile_id"),
+  tokenInput: integer("token_input").notNull().default(0),
+  tokenOutput: integer("token_output").notNull().default(0),
+  tokenTotal: integer("token_total").notNull().default(0),
+  costUsd: real("cost_usd").notNull().default(0),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
@@ -135,6 +139,10 @@ export const chatSessions = sqliteTable("chat_sessions", {
   agentSessionId: text("agent_session_id"),
   runtimeProfileId: text("runtime_profile_id"),
   runtimeSessionId: text("runtime_session_id"),
+  tokenInput: integer("token_input").notNull().default(0),
+  tokenOutput: integer("token_output").notNull().default(0),
+  tokenTotal: integer("token_total").notNull().default(0),
+  costUsd: real("cost_usd").notNull().default(0),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
@@ -161,3 +169,38 @@ export const chatMessages = sqliteTable("chat_messages", {
 
 export type ChatMessageRow = typeof chatMessages.$inferSelect;
 export type NewChatMessageRow = typeof chatMessages.$inferInsert;
+
+/**
+ * Append-only token usage log. Every successful LLM call that flows through
+ * the runtime registry wrapper produces one row here. Per-entity aggregate
+ * counters (on tasks / projects / chat_sessions) are updated in the same
+ * transaction so reads stay cheap, but this table is the source of truth for
+ * auditing and per-source breakdowns. Scope fields are nullable — a chat run
+ * has a `chat_session_id` but no `task_id`, a subagent run has `task_id` but
+ * no `chat_session_id`, a commit run has only `project_id`, and so on.
+ */
+export const usageEvents = sqliteTable("usage_events", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  source: text("source").notNull(),
+  projectId: text("project_id"),
+  taskId: text("task_id"),
+  chatSessionId: text("chat_session_id"),
+  runtimeId: text("runtime_id").notNull(),
+  providerId: text("provider_id").notNull(),
+  profileId: text("profile_id"),
+  transport: text("transport"),
+  workflowKind: text("workflow_kind"),
+  usageReporting: text("usage_reporting").notNull(),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  totalTokens: integer("total_tokens").notNull().default(0),
+  costUsd: real("cost_usd"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type UsageEventRow = typeof usageEvents.$inferSelect;
+export type NewUsageEventRow = typeof usageEvents.$inferInsert;

@@ -13,8 +13,13 @@ import {
   createRuntimeRegistry,
   DEFAULT_RUNTIME_CAPABILITIES,
   resolveRuntimeModuleRegistrar,
+  UsageReporting,
+  UsageSource,
   type RuntimeAdapter,
+  type RuntimeUsageEvent,
+  type RuntimeUsageSink,
 } from "../index.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 function createAdapter(runtimeId: string, providerId = "provider"): RuntimeAdapter {
   return {
@@ -25,7 +30,7 @@ function createAdapter(runtimeId: string, providerId = "provider"): RuntimeAdapt
       capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
     },
     async run() {
-      return { outputText: "ok" };
+      return { outputText: "ok", usage: null };
     },
   };
 }
@@ -251,6 +256,7 @@ describe("skill command prefix decorator", () => {
     await resolved.run({
       runtimeId: "codex",
       prompt: "/aif-plan fast @PLAN.md\n\nAlso /aif-review",
+      usageContext: TEST_USAGE_CONTEXT,
     });
 
     expect(runMock).toHaveBeenCalledTimes(1);
@@ -279,6 +285,7 @@ describe("skill command prefix decorator", () => {
     await resolved.run({
       runtimeId: "claude",
       prompt: "/aif-plan fast",
+      usageContext: TEST_USAGE_CONTEXT,
     });
 
     expect(runMock.mock.calls[0][0].prompt).toBe("/aif-plan fast");
@@ -305,6 +312,7 @@ describe("skill command prefix decorator", () => {
       runtimeId: "codex",
       prompt: "/aif-implement @PLAN.md",
       sessionId: "session-1",
+      usageContext: TEST_USAGE_CONTEXT,
     });
 
     expect(resumeMock.mock.calls[0][0].prompt).toBe("$aif-implement @PLAN.md");
@@ -367,6 +375,7 @@ describe("skill command prefix decorator", () => {
     await resolved.run({
       runtimeId: "codex",
       prompt: "/aif-commit",
+      usageContext: TEST_USAGE_CONTEXT,
     });
 
     expect(runMock.mock.calls[0][0].prompt).toBe("$aif-commit");
@@ -391,11 +400,171 @@ describe("skill command prefix decorator", () => {
     await resolved.run({
       runtimeId: "codex",
       prompt: "Check /etc/config\n/aif-plan fast",
+      usageContext: TEST_USAGE_CONTEXT,
     });
 
     const passedPrompt = runMock.mock.calls[0][0].prompt;
     expect(passedPrompt).toContain("/etc/config");
     expect(passedPrompt).toContain("$aif-plan fast");
+  });
+});
+
+describe("registry usage pipeline", () => {
+  function createCapturingSink(): RuntimeUsageSink & { events: RuntimeUsageEvent[] } {
+    const events: RuntimeUsageEvent[] = [];
+    return {
+      events,
+      record(event) {
+        events.push(event);
+      },
+    };
+  }
+
+  function createFakeAdapter(options: {
+    runtimeId?: string;
+    usageReporting: (typeof UsageReporting)[keyof typeof UsageReporting];
+    returnedUsage: RuntimeUsageEvent["usage"] | null;
+  }): RuntimeAdapter {
+    return {
+      descriptor: {
+        id: options.runtimeId ?? "fake",
+        providerId: "fake-provider",
+        displayName: "Fake",
+        capabilities: {
+          ...DEFAULT_RUNTIME_CAPABILITIES,
+          usageReporting: options.usageReporting,
+        },
+      },
+      async run() {
+        return { outputText: "ok", usage: options.returnedUsage };
+      },
+    };
+  }
+
+  const sampleUsage = { inputTokens: 10, outputTokens: 20, totalTokens: 30, costUsd: 0.0042 };
+
+  it("forwards usage to the sink when adapter returns non-null usage", async () => {
+    const sink = createCapturingSink();
+    const registry = createRuntimeRegistry({
+      usageSink: sink,
+      builtInAdapters: [
+        createFakeAdapter({ usageReporting: UsageReporting.FULL, returnedUsage: sampleUsage }),
+      ],
+    });
+    const adapter = registry.resolveRuntime("fake");
+
+    await adapter.run({
+      runtimeId: "fake",
+      prompt: "hello",
+      workflowKind: "test",
+      usageContext: { source: UsageSource.TEST, projectId: "p-1", taskId: "t-1" },
+    });
+
+    expect(sink.events).toHaveLength(1);
+    const event = sink.events[0];
+    expect(event.usage).toEqual(sampleUsage);
+    expect(event.context.source).toBe(UsageSource.TEST);
+    expect(event.context.projectId).toBe("p-1");
+    expect(event.context.taskId).toBe("t-1");
+    expect(event.runtimeId).toBe("fake");
+    expect(event.usageReporting).toBe(UsageReporting.FULL);
+    expect(event.recordedAt).toBeInstanceOf(Date);
+  });
+
+  it("does not call sink when adapter returns null usage", async () => {
+    const sink = createCapturingSink();
+    const registry = createRuntimeRegistry({
+      usageSink: sink,
+      builtInAdapters: [
+        createFakeAdapter({ usageReporting: UsageReporting.PARTIAL, returnedUsage: null }),
+      ],
+    });
+    const adapter = registry.resolveRuntime("fake");
+
+    await adapter.run({
+      runtimeId: "fake",
+      prompt: "hello",
+      usageContext: { source: UsageSource.TEST },
+    });
+
+    expect(sink.events).toHaveLength(0);
+  });
+
+  it("logs error when adapter declared FULL but returns null usage", async () => {
+    const sink = createCapturingSink();
+    const error = vi.fn();
+    const registry = createRuntimeRegistry({
+      usageSink: sink,
+      logger: { debug: vi.fn(), warn: vi.fn(), error },
+      builtInAdapters: [
+        createFakeAdapter({ usageReporting: UsageReporting.FULL, returnedUsage: null }),
+      ],
+    });
+    const adapter = registry.resolveRuntime("fake");
+
+    await adapter.run({
+      runtimeId: "fake",
+      prompt: "hello",
+      usageContext: { source: UsageSource.TEST },
+    });
+
+    expect(sink.events).toHaveLength(0);
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ usageReporting: UsageReporting.FULL }),
+      expect.stringContaining("FULL"),
+    );
+  });
+
+  it("warns when adapter declared NONE but returns non-null usage", async () => {
+    const sink = createCapturingSink();
+    const warn = vi.fn();
+    const registry = createRuntimeRegistry({
+      usageSink: sink,
+      logger: { debug: vi.fn(), warn, error: vi.fn() },
+      builtInAdapters: [
+        createFakeAdapter({ usageReporting: UsageReporting.NONE, returnedUsage: sampleUsage }),
+      ],
+    });
+    const adapter = registry.resolveRuntime("fake");
+
+    await adapter.run({
+      runtimeId: "fake",
+      prompt: "hello",
+      usageContext: { source: UsageSource.TEST },
+    });
+
+    // Still records the event — we take the data when we get it — but warns.
+    expect(sink.events).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ usageReporting: UsageReporting.NONE }),
+      expect.stringContaining("NONE"),
+    );
+  });
+
+  it("swallows sink errors without breaking the caller", async () => {
+    const error = vi.fn();
+    const throwingSink: RuntimeUsageSink = {
+      record() {
+        throw new Error("sink exploded");
+      },
+    };
+    const registry = createRuntimeRegistry({
+      usageSink: throwingSink,
+      logger: { debug: vi.fn(), warn: vi.fn(), error },
+      builtInAdapters: [
+        createFakeAdapter({ usageReporting: UsageReporting.FULL, returnedUsage: sampleUsage }),
+      ],
+    });
+    const adapter = registry.resolveRuntime("fake");
+
+    const result = await adapter.run({
+      runtimeId: "fake",
+      prompt: "hello",
+      usageContext: { source: UsageSource.TEST },
+    });
+
+    expect(result.outputText).toBe("ok");
+    expect(error).toHaveBeenCalled();
   });
 });
 

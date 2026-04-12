@@ -6,11 +6,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { TaskMetricsSummary } from "@/lib/taskMetrics";
+import type { Project } from "@aif/shared/browser";
 
 interface MetricsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   taskMetrics: TaskMetricsSummary;
+  project: Project | null;
 }
 
 const integerFmt = new Intl.NumberFormat("en-US");
@@ -25,13 +27,20 @@ const fmtInt = (v: number) => integerFmt.format(Math.round(v));
 const fmtUsd = (v: number) => usdFmt.format(v);
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
 
-export function MetricsDialog({ open, onOpenChange, taskMetrics }: MetricsDialogProps) {
+export function MetricsDialog({ open, onOpenChange, taskMetrics, project }: MetricsDialogProps) {
+  // Project-level totals include ALL sources (tasks + chat + commit + roadmap).
+  // Fall back to task-only totals when no project is selected.
+  const projectTokenTotal = project?.tokenTotal ?? taskMetrics.totalTokenTotal;
+  const projectTokenInput = project?.tokenInput ?? taskMetrics.totalTokenInput;
+  const projectTokenOutput = project?.tokenOutput ?? taskMetrics.totalTokenOutput;
+  const projectCostUsd = project?.costUsd ?? taskMetrics.totalCostUsd;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogClose onClose={() => onOpenChange(false)} />
         <DialogHeader>
-          <DialogTitle>Task Metrics</DialogTitle>
+          <DialogTitle>Metrics</DialogTitle>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="border border-border bg-card/50 px-3 py-2">
@@ -43,16 +52,16 @@ export function MetricsDialog({ open, onOpenChange, taskMetrics }: MetricsDialog
           </div>
           <div className="border border-border bg-card/50 px-3 py-2">
             <p className="text-xs text-muted-foreground">Total token usage</p>
-            <p className="text-lg font-semibold">{fmtInt(taskMetrics.totalTokenTotal)}</p>
+            <p className="text-lg font-semibold">{fmtInt(projectTokenTotal)}</p>
             <p className="text-xs text-muted-foreground">
-              in {fmtInt(taskMetrics.totalTokenInput)} / out {fmtInt(taskMetrics.totalTokenOutput)}
+              in {fmtInt(projectTokenInput)} / out {fmtInt(projectTokenOutput)}
             </p>
           </div>
           <div className="border border-border bg-card/50 px-3 py-2">
             <p className="text-xs text-muted-foreground">Total cost</p>
-            <p className="text-lg font-semibold">{fmtUsd(taskMetrics.totalCostUsd)}</p>
+            <p className="text-lg font-semibold">{fmtUsd(projectCostUsd)}</p>
             <p className="text-xs text-muted-foreground">
-              avg {fmtUsd(taskMetrics.averageCostPerTaskUsd)} per task
+              tasks: {fmtUsd(taskMetrics.totalCostUsd)}
             </p>
           </div>
           <div className="border border-border bg-card/50 px-3 py-2">

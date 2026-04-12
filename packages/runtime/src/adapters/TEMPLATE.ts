@@ -241,12 +241,31 @@ export function createExampleRuntimeAdapter(
         // supportsStreaming: true,
         // supportsModelDiscovery: true,
         // supportsCustomEndpoint: true,
+        //
+        // REQUIRED: declare your usage-reporting contract. DEFAULT_RUNTIME_CAPABILITIES
+        // sets this to UsageReporting.NONE — override it if your transport can surface
+        // token counts. Options:
+        //   - UsageReporting.FULL    — always returns non-null `usage` on success.
+        //                              The registry wrapper asserts this invariant.
+        //   - UsageReporting.PARTIAL — returns `usage` when the provider reports it,
+        //                              may return null on some paths.
+        //   - UsageReporting.NONE    — transport fundamentally cannot report usage.
+        //
+        // Contract tests in bootstrap.test.ts will fail the build if this field is
+        // missing. See docs/providers.md → "Usage reporting contract" for details.
+        // usageReporting: UsageReporting.FULL,
       },
     },
 
     async run(input: RuntimeRunInput): Promise<RuntimeRunResult> {
       // Implement your runtime execution here.
       // See "Reading execution options in run()" in the JSDoc above.
+      //
+      // IMPORTANT: RuntimeRunResult.usage is REQUIRED. Return either a non-null
+      // `RuntimeUsage` object (when the provider reports token counts) or `null`
+      // (when it does not). Returning `undefined` is a type error. The registry
+      // wrapper reads this field and forwards it to the usage sink for every
+      // successful run — your adapter does not need to persist usage itself.
       void input;
       throw new Error(`${runtimeId} adapter: run() not implemented`);
     },

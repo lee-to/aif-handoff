@@ -3,6 +3,7 @@ import { getCodexMcpStatus, installCodexMcpServer, uninstallCodexMcpServer } fro
 import { initCodexProject } from "./project.js";
 import {
   RuntimeTransport,
+  UsageReporting,
   type RuntimeAdapter,
   type RuntimeCapabilities,
   type RuntimeConnectionValidationInput,
@@ -87,6 +88,10 @@ const CLI_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  // CLI stream emits token_count events when the turn completes, but some
+  // early-termination paths (timeout, non-zero exit) may return before the
+  // event is seen — declare PARTIAL so the wrapper tolerates null usage.
+  usageReporting: UsageReporting.PARTIAL,
 };
 
 const SDK_CAPABILITIES: RuntimeCapabilities = {
@@ -97,6 +102,7 @@ const SDK_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  usageReporting: UsageReporting.FULL,
 };
 
 const API_CAPABILITIES: RuntimeCapabilities = {
@@ -107,6 +113,7 @@ const API_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  usageReporting: UsageReporting.FULL,
 };
 
 function resolveTransport(input: {

@@ -75,6 +75,7 @@ vi.mock("@aif/data", () => ({
   findTaskById: mockFindTaskById,
   resolveEffectiveRuntimeProfile: mockResolveEffectiveRuntimeProfile,
   toRuntimeProfileResponse: mockToRuntimeProfileResponse,
+  createDbUsageSink: () => ({ record: vi.fn() }),
 }));
 
 function createAdapter() {
@@ -370,6 +371,7 @@ describe("runtime service", () => {
       prompt: "summarize",
       includePartialMessages: true,
       maxTurns: 4,
+      usageContext: { source: "test" },
     });
 
     expect(result.result.outputText).toBe("ok");
@@ -426,6 +428,7 @@ describe("runtime service", () => {
       projectRoot: "/tmp/project",
       prompt: "generate roadmap",
       workflowKind: "roadmap-generate",
+      usageContext: { source: "test" },
     });
 
     expect(adapter.run).toHaveBeenCalledWith(
@@ -455,6 +458,7 @@ describe("runtime service", () => {
       prompt: "do work",
       workflowKind: "commit",
       systemPromptAppend: "extra",
+      usageContext: { source: "test" },
     });
 
     expect(adapter.run).toHaveBeenCalledWith(
@@ -486,6 +490,7 @@ describe("runtime service", () => {
       projectRoot: "/tmp/project",
       prompt: "do work",
       workflowKind: "commit",
+      usageContext: { source: "test" },
     });
 
     expect(adapter.run).toHaveBeenCalledWith(

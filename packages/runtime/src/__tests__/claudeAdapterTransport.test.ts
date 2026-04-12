@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeTransport } from "../types.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 const runClaudeRuntimeMock = vi.fn();
 const runClaudeCliMock = vi.fn();
@@ -30,6 +31,7 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     providerId: "anthropic",
     prompt: "Implement feature",
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

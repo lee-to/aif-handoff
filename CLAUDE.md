@@ -185,10 +185,11 @@ data/                    # SQLite database files (gitignored)
 ## Runtime Adapter Sync Rule
 
 - **Docs must stay in sync when adding or modifying runtime adapters.** When a new adapter is added to `packages/runtime/src/adapters/` or an existing adapter's capabilities change:
-  - `docs/providers.md` — update the "Supported Runtimes" table with the new adapter's capabilities, transports, and light model.
+  - `docs/providers.md` — update the "Supported Runtimes" table with the new adapter's capabilities (including the `Usage Reporting` column), transports, and light model.
   - `packages/runtime/src/adapters/TEMPLATE.ts` — verify the template still reflects current conventions.
   - `packages/runtime/src/bootstrap.ts` — register the new built-in adapter (or document `AIF_RUNTIME_MODULES` loading).
   - `.docker/Dockerfile` — add any new system-level dependencies the adapter needs.
+  - **Usage reporting contract** — every adapter must declare `capabilities.usageReporting` (`FULL` / `PARTIAL` / `NONE`) and return `RuntimeRunResult.usage` as a concrete value (including explicit `null`). The discovery test in `packages/runtime/src/__tests__/bootstrap.test.ts` fails the build if a new adapter ships without a valid `usageReporting` value. See `docs/providers.md` → "Usage reporting contract".
 
 ## Project Rules
 

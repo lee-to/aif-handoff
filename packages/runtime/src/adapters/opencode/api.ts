@@ -458,6 +458,7 @@ export async function runOpenCodeApi(
     sessionId: activeSession.id,
     session: activeSession,
     events: outputText.length > 0 ? [event] : [],
+    usage: null,
     raw: messagePayload,
   };
 }

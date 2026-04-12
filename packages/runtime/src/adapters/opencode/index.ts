@@ -1,5 +1,6 @@
 import {
   RuntimeTransport,
+  UsageReporting,
   type RuntimeAdapter,
   type RuntimeCapabilities,
   type RuntimeConnectionValidationInput,
@@ -43,6 +44,11 @@ const API_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  // OpenCode server returns messages but does not surface token counts in its
+  // message payload. The run() path never populates RuntimeRunResult.usage,
+  // so declare the contract honestly as NONE — dashboards will show this
+  // provider as opted-out of usage tracking rather than showing phantom zeros.
+  usageReporting: UsageReporting.NONE,
 };
 
 const DEFAULT_OPENCODE_MODELS: RuntimeModel[] = [

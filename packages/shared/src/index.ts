@@ -6,6 +6,7 @@ export {
   runtimeProfiles,
   chatSessions,
   chatMessages,
+  usageEvents,
 } from "./schema.js";
 export type {
   ProjectRow,
@@ -20,6 +21,8 @@ export type {
   NewChatSessionRow,
   ChatMessageRow,
   NewChatMessageRow,
+  UsageEventRow,
+  NewUsageEventRow,
 } from "./schema.js";
 
 // Types

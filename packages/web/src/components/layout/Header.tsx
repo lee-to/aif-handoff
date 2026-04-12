@@ -224,7 +224,12 @@ export function Header({
       </div>
 
       <NotificationsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-      <MetricsDialog open={metricsOpen} onOpenChange={setMetricsOpen} taskMetrics={taskMetrics} />
+      <MetricsDialog
+        open={metricsOpen}
+        onOpenChange={setMetricsOpen}
+        taskMetrics={taskMetrics}
+        project={selectedProject}
+      />
       <RoadmapDialog
         open={roadmapOpen}
         onOpenChange={setRoadmapOpen}

@@ -12,6 +12,7 @@ import {
   runtimeProfiles,
   chatSessions,
   chatMessages,
+  usageEvents,
   type CreateRuntimeProfileInput,
   type EffectiveRuntimeProfileSelection,
   type RuntimeProfile,
@@ -807,6 +808,193 @@ export function incrementTaskTokenUsage(
     .run();
 
   return delta;
+}
+
+export function incrementProjectTokenUsage(
+  projectId: string,
+  usage: Record<string, unknown> | null | undefined,
+) {
+  const delta = parseTaskTokenUsage(usage);
+  if (delta.total === 0 && delta.costUsd === 0) return delta;
+
+  getDb()
+    .update(projects)
+    .set({
+      tokenInput: sql<number>`coalesce(${projects.tokenInput}, 0) + ${delta.input}`,
+      tokenOutput: sql<number>`coalesce(${projects.tokenOutput}, 0) + ${delta.output}`,
+      tokenTotal: sql<number>`coalesce(${projects.tokenTotal}, 0) + ${delta.total}`,
+      costUsd: sql<number>`coalesce(${projects.costUsd}, 0) + ${delta.costUsd}`,
+    })
+    .where(eq(projects.id, projectId))
+    .run();
+
+  return delta;
+}
+
+export function incrementChatSessionTokenUsage(
+  chatSessionId: string,
+  usage: Record<string, unknown> | null | undefined,
+) {
+  const delta = parseTaskTokenUsage(usage);
+  if (delta.total === 0 && delta.costUsd === 0) return delta;
+
+  getDb()
+    .update(chatSessions)
+    .set({
+      tokenInput: sql<number>`coalesce(${chatSessions.tokenInput}, 0) + ${delta.input}`,
+      tokenOutput: sql<number>`coalesce(${chatSessions.tokenOutput}, 0) + ${delta.output}`,
+      tokenTotal: sql<number>`coalesce(${chatSessions.tokenTotal}, 0) + ${delta.total}`,
+      costUsd: sql<number>`coalesce(${chatSessions.costUsd}, 0) + ${delta.costUsd}`,
+    })
+    .where(eq(chatSessions.id, chatSessionId))
+    .run();
+
+  return delta;
+}
+
+// ---------------------------------------------------------------------------
+// Usage event sink — structural type matching `@aif/runtime`'s RuntimeUsageSink
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural shape of a usage event. Mirrors `RuntimeUsageEvent` from
+ * `@aif/runtime/usageSink` without an import so `@aif/data` stays free of
+ * a dependency on `@aif/runtime` (runtime → shared → data is the intended
+ * direction; data must not know about the runtime layer).
+ *
+ * The host process (api or agent) passes `createDbUsageSink()` to
+ * `createRuntimeRegistry({ usageSink })`, where TypeScript's structural
+ * typing verifies that the returned object satisfies `RuntimeUsageSink`.
+ */
+export interface DbUsageEvent {
+  context: {
+    source: string;
+    projectId?: string | null;
+    taskId?: string | null;
+    chatSessionId?: string | null;
+  };
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+  transport?: string;
+  workflowKind?: string;
+  usageReporting: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd?: number;
+  };
+  recordedAt: Date;
+}
+
+export interface DbUsageSink {
+  record(event: DbUsageEvent): void;
+}
+
+/**
+ * Insert a `usage_events` row and roll the usage delta into whichever
+ * per-entity aggregate counters the event has scope for (task, project,
+ * chat-session). Any subset of scopes may be present — a chat turn has
+ * project + chat-session but no task; a subagent run has project + task
+ * but no chat-session; a commit run has only project.
+ *
+ * Runs all four writes in a single transaction so the append-only log and
+ * the rolled-up counters stay consistent.
+ */
+export function recordUsageEvent(event: DbUsageEvent): void {
+  const { usage, context } = event;
+  const db = getDb();
+
+  // Wrap insert + aggregate updates in a single transaction so the
+  // append-only log and rolled-up counters stay consistent. If any
+  // update fails the entire batch rolls back — no partial divergence.
+  db.transaction((tx) => {
+    tx.insert(usageEvents)
+      .values({
+        source: context.source,
+        projectId: context.projectId ?? null,
+        taskId: context.taskId ?? null,
+        chatSessionId: context.chatSessionId ?? null,
+        runtimeId: event.runtimeId,
+        providerId: event.providerId,
+        profileId: event.profileId ?? null,
+        transport: event.transport ?? null,
+        workflowKind: event.workflowKind ?? null,
+        usageReporting: event.usageReporting,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        costUsd: usage.costUsd ?? null,
+      })
+      .run();
+
+    // Use usage.totalTokens (the provider's authoritative total) for all
+    // aggregates — same source of truth as the usage_events row. Never
+    // recalculate as inputTokens + outputTokens: providers may include
+    // additional token categories (cache, reasoning, etc.) in their total.
+    const totalTokensDelta = usage.totalTokens;
+    const costDelta = usage.costUsd ?? 0;
+
+    if (context.taskId) {
+      tx.update(tasks)
+        .set({
+          tokenInput: sql<number>`coalesce(${tasks.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${tasks.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${tasks.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${tasks.costUsd}, 0) + ${costDelta}`,
+        })
+        .where(eq(tasks.id, context.taskId))
+        .run();
+    }
+    if (context.projectId) {
+      tx.update(projects)
+        .set({
+          tokenInput: sql<number>`coalesce(${projects.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${projects.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${projects.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${projects.costUsd}, 0) + ${costDelta}`,
+        })
+        .where(eq(projects.id, context.projectId))
+        .run();
+    }
+    if (context.chatSessionId) {
+      tx.update(chatSessions)
+        .set({
+          tokenInput: sql<number>`coalesce(${chatSessions.tokenInput}, 0) + ${usage.inputTokens}`,
+          tokenOutput: sql<number>`coalesce(${chatSessions.tokenOutput}, 0) + ${usage.outputTokens}`,
+          tokenTotal: sql<number>`coalesce(${chatSessions.tokenTotal}, 0) + ${totalTokensDelta}`,
+          costUsd: sql<number>`coalesce(${chatSessions.costUsd}, 0) + ${costDelta}`,
+        })
+        .where(eq(chatSessions.id, context.chatSessionId))
+        .run();
+    }
+  });
+}
+
+/**
+ * Build a `DbUsageSink` (structurally compatible with
+ * `@aif/runtime.RuntimeUsageSink`) that persists every event via
+ * `recordUsageEvent`. Sink methods are non-throwing: any DB error is logged
+ * and swallowed so a broken sink never breaks the caller mid-run.
+ */
+export function createDbUsageSink(): DbUsageSink {
+  return {
+    record(event) {
+      try {
+        recordUsageEvent(event);
+      } catch (err) {
+        log.error(
+          {
+            err,
+            runtimeId: event.runtimeId,
+            source: event.context.source,
+          },
+          "Failed to record usage event — dropping silently",
+        );
+      }
+    },
+  };
 }
 
 /**

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCliSpawnInvocation } from "./helpers/cliSpawn.js";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 const spawnMock = vi.fn();
 
@@ -47,6 +48,7 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     model: "gpt-5.4",
     sessionId: "session-1",
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

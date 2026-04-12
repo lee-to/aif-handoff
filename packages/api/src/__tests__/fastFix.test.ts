@@ -48,7 +48,7 @@ describe("fastFix service", () => {
     });
   });
 
-  it("returns plan text on success and records usage", async () => {
+  it("returns plan text on success and passes fast-fix usageContext to runtime", async () => {
     mockRunApiRuntimeOneShot.mockResolvedValue(
       runtimeResult("## Plan\n- Updated", {
         inputTokens: 10,
@@ -75,10 +75,18 @@ describe("fastFix service", () => {
 
     expect(updated).toBe("## Plan\n- Updated");
     expect(mockRunApiRuntimeOneShot).toHaveBeenCalledTimes(1);
-    expect(incrementTaskTokenUsage).toHaveBeenCalledWith(
-      "task-1",
-      expect.objectContaining({ total_tokens: 30, total_cost_usd: 0.002 }),
+    // Usage is now persisted by the runtime registry wrapper via createDbUsageSink,
+    // so the only thing we verify at the service layer is that the call site
+    // tagged the run with the correct source — the sink test in the runtime
+    // package covers the recording path end-to-end.
+    expect(mockRunApiRuntimeOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-1",
+        workflowKind: "fast-fix",
+        usageContext: expect.objectContaining({ source: "fast-fix" }),
+      }),
     );
+    expect(incrementTaskTokenUsage).not.toHaveBeenCalled();
   });
 
   it("uses fallback prompt mode when file update is disabled", async () => {

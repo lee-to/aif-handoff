@@ -155,6 +155,26 @@ function ensureTables(sqlite: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
   `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      project_id TEXT,
+      task_id TEXT,
+      chat_session_id TEXT,
+      runtime_id TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      profile_id TEXT,
+      transport TEXT,
+      workflow_kind TEXT,
+      usage_reporting TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
 
   runMigrations(sqlite);
   ensureTriggers(sqlite);
@@ -279,6 +299,51 @@ const MIGRATIONS: Migration[] = [
     sql: `
       ALTER TABLE projects ADD COLUMN default_plan_runtime_profile_id TEXT;
       ALTER TABLE projects ADD COLUMN default_review_runtime_profile_id TEXT;
+    `,
+  },
+  {
+    version: 9,
+    description: "Add usage_events table and per-entity token aggregates (projects, chat_sessions)",
+    sql: `
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        project_id TEXT,
+        task_id TEXT,
+        chat_session_id TEXT,
+        runtime_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        profile_id TEXT,
+        transport TEXT,
+        workflow_kind TEXT,
+        usage_reporting TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      ALTER TABLE projects ADD COLUMN token_input INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN token_output INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN token_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN token_input INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN token_output INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN token_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE chat_sessions ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    version: 10,
+    description: "Backfill project token aggregates from existing task-level usage",
+    sql: `
+      UPDATE projects
+      SET
+        token_input  = token_input  + coalesce((SELECT sum(token_input)  FROM tasks WHERE tasks.project_id = projects.id), 0),
+        token_output = token_output + coalesce((SELECT sum(token_output) FROM tasks WHERE tasks.project_id = projects.id), 0),
+        token_total  = token_total  + coalesce((SELECT sum(token_total)  FROM tasks WHERE tasks.project_id = projects.id), 0),
+        cost_usd     = cost_usd     + coalesce((SELECT sum(cost_usd)     FROM tasks WHERE tasks.project_id = projects.id), 0)
+      WHERE EXISTS (SELECT 1 FROM tasks WHERE tasks.project_id = projects.id AND tasks.token_total > 0)
     `,
   },
 ];
@@ -465,6 +530,12 @@ function ensureIndexes(sqlite: Database.Database): void {
     "CREATE INDEX IF NOT EXISTS idx_tasks_runtime_profile_id ON tasks(runtime_profile_id)",
     // Runtime profile lookups for chat sessions
     "CREATE INDEX IF NOT EXISTS idx_chat_sessions_runtime_profile_id ON chat_sessions(runtime_profile_id)",
+    // Usage event scope lookups for per-entity aggregation queries and dashboards
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_project ON usage_events(project_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_task ON usage_events(task_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_chat_session ON usage_events(chat_session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_source ON usage_events(source, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_runtime ON usage_events(runtime_id, provider_id, created_at)",
   ];
 
   for (const ddl of indexDefs) {

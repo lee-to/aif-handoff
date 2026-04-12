@@ -24,6 +24,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
 vi.mock("@aif/data", () => ({
   findProjectById: (id: string) =>
     id === TEST_PROJECT_ID ? { id, rootPath: tempRoot } : undefined,
+  createDbUsageSink: () => ({ record: vi.fn() }),
 }));
 
 vi.mock("node:os", async (importOriginal) => {

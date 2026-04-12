@@ -1,4 +1,5 @@
 import {
+  RuntimeExecutionError,
   RuntimeModuleLoadError,
   RuntimeModuleValidationError,
   RuntimeRegistrationError,
@@ -6,11 +7,20 @@ import {
 } from "./errors.js";
 import { resolveRuntimeModuleRegistrar } from "./module.js";
 import { transformSkillCommandPrefix } from "./promptPolicy.js";
-import type { RuntimeAdapter, RuntimeDescriptor, RuntimeRunInput } from "./types.js";
+import {
+  resolveAdapterCapabilities,
+  UsageReporting,
+  type RuntimeAdapter,
+  type RuntimeDescriptor,
+  type RuntimeRunInput,
+  type RuntimeRunResult,
+} from "./types.js";
+import { createNoopUsageSink, type RuntimeUsageSink } from "./usageSink.js";
 
 export interface RuntimeRegistryLogger {
   debug(context: Record<string, unknown>, message: string): void;
   warn(context: Record<string, unknown>, message: string): void;
+  error?(context: Record<string, unknown>, message: string): void;
 }
 
 export interface RegisterRuntimeOptions {
@@ -21,6 +31,13 @@ export interface RegisterRuntimeOptions {
 export interface RuntimeRegistryOptions {
   logger?: RuntimeRegistryLogger;
   builtInAdapters?: RuntimeAdapter[];
+  /**
+   * Sink that receives a `RuntimeUsageEvent` for every successful run whose
+   * adapter returned a non-null `usage`. Defaults to a no-op sink. The API and
+   * agent processes pass a DB-backed sink from `@aif/data` so every LLM call
+   * is recorded to `usage_events` and rolled up into task/project aggregates.
+   */
+  usageSink?: RuntimeUsageSink;
 }
 
 function createFallbackLogger(): RuntimeRegistryLogger {
@@ -31,6 +48,9 @@ function createFallbackLogger(): RuntimeRegistryLogger {
     warn(context, message) {
       console.warn("WARN [runtime-module]", message, context);
     },
+    error(context, message) {
+      console.error("ERROR [runtime-registry]", message, context);
+    },
   };
 }
 
@@ -39,38 +59,146 @@ function normalizeRuntimeId(runtimeId: string): string {
 }
 
 /**
- * Wrap an adapter so that `run()` and `resume()` automatically transform
- * skill command prefixes in the prompt before forwarding to the real adapter.
+ * Wrap an adapter so that `run()` and `resume()` get two cross-cutting concerns
+ * applied in the single place every call site flows through:
  *
- * This is the single place where cross-cutting prompt transforms are applied,
- * so callers never need to remember to transform manually.
+ * 1. **Prompt transforms** — rewrite skill-command prefixes so callers don't
+ *    need to know per-runtime conventions (e.g. `/aif-plan` → `$aif-plan`).
+ * 2. **Usage pipeline** — read `result.usage` after every successful run and
+ *    forward it to the configured `RuntimeUsageSink`, while asserting the
+ *    adapter's declared `usageReporting` contract. This is what makes usage
+ *    tracking impossible to forget at the call site: any new caller that
+ *    provides a `usageContext` automatically gets its tokens recorded, and
+ *    the TypeScript compiler refuses to compile calls without it.
  */
-function wrapAdapterWithTransforms(adapter: RuntimeAdapter): RuntimeAdapter {
+function wrapAdapter(
+  adapter: RuntimeAdapter,
+  usageSink: RuntimeUsageSink,
+  log: RuntimeRegistryLogger,
+): RuntimeAdapter {
   const prefix = adapter.descriptor.skillCommandPrefix;
-  if (!prefix || prefix === "/") return adapter;
+  const needsPromptTransform = Boolean(prefix) && prefix !== "/";
 
   function transformPrompt(input: RuntimeRunInput): RuntimeRunInput {
+    if (!needsPromptTransform) return input;
     return { ...input, prompt: transformSkillCommandPrefix(input.prompt, prefix!) };
+  }
+
+  function recordUsage(input: RuntimeRunInput, result: RuntimeRunResult): void {
+    // Resolve per-transport capability so multi-transport adapters (e.g. codex
+    // with SDK/CLI/API) can declare different usage-reporting contracts per
+    // transport. Falls back to descriptor default when transport is unknown.
+    const effectiveCaps = resolveAdapterCapabilities(adapter, input.transport);
+    const reporting = effectiveCaps.usageReporting;
+
+    // TypeScript enforces `usage: RuntimeUsage | null`, but external/JS
+    // adapters may return `undefined` if they forget the field entirely.
+    // Treat null and undefined identically for the contract check.
+    if (result.usage == null) {
+      if (reporting === UsageReporting.FULL) {
+        // Level C runtime assert: the adapter promised FULL but returned
+        // null/undefined. Throwing here would break the caller mid-run even
+        // though the provider actually responded, so we log loudly and move
+        // on. A metric/alert on this log is the production-side safety net;
+        // dev still catches it via the contract test harness.
+        log.error?.(
+          {
+            runtimeId: adapter.descriptor.id,
+            providerId: adapter.descriptor.providerId,
+            usageReporting: reporting,
+          },
+          "adapter declared usageReporting=FULL but returned null/undefined usage — likely bug in adapter",
+        );
+      }
+      return;
+    }
+
+    if (reporting === UsageReporting.NONE) {
+      log.warn(
+        {
+          runtimeId: adapter.descriptor.id,
+          providerId: adapter.descriptor.providerId,
+          usageReporting: reporting,
+        },
+        "adapter declared usageReporting=NONE but returned non-null usage — descriptor may be stale",
+      );
+    }
+
+    // Level 3 runtime assert: caller provided usageContext at the type level,
+    // but a cast could still wash it out. Guard the sink against garbage.
+    const context = input.usageContext;
+    if (!context || typeof context.source !== "string" || context.source.length === 0) {
+      log.error?.(
+        {
+          runtimeId: adapter.descriptor.id,
+          providerId: adapter.descriptor.providerId,
+        },
+        "RuntimeRunInput.usageContext.source is required but was missing — usage event dropped",
+      );
+      return;
+    }
+
+    try {
+      usageSink.record({
+        context,
+        runtimeId: adapter.descriptor.id,
+        providerId: adapter.descriptor.providerId,
+        profileId: input.profileId ?? null,
+        transport: input.transport,
+        workflowKind: input.workflowKind,
+        usageReporting: reporting,
+        usage: result.usage,
+        recordedAt: new Date(),
+      });
+    } catch (sinkError) {
+      // Sink contract says it must not throw, but defense in depth: an error
+      // here must never surface to the caller, which already got its result.
+      log.error?.(
+        {
+          runtimeId: adapter.descriptor.id,
+          error: sinkError instanceof Error ? sinkError.message : String(sinkError),
+        },
+        "usageSink.record threw — dropping event",
+      );
+    }
+  }
+
+  async function wrappedRun(input: RuntimeRunInput): Promise<RuntimeRunResult> {
+    const transformed = transformPrompt(input);
+    const result = await adapter.run(transformed);
+    recordUsage(transformed, result);
+    return result;
+  }
+
+  async function wrappedResume(
+    input: RuntimeRunInput & { sessionId: string },
+  ): Promise<RuntimeRunResult> {
+    if (!adapter.resume) {
+      throw new RuntimeExecutionError(
+        `Runtime "${adapter.descriptor.id}" does not implement resume()`,
+      );
+    }
+    const transformed = transformPrompt(input) as RuntimeRunInput & { sessionId: string };
+    const result = await adapter.resume(transformed);
+    recordUsage(transformed, result);
+    return result;
   }
 
   return {
     ...adapter,
-    run(input) {
-      return adapter.run(transformPrompt(input));
-    },
-    resume: adapter.resume
-      ? (input) =>
-          adapter.resume!(transformPrompt(input) as RuntimeRunInput & { sessionId: string })
-      : undefined,
+    run: wrappedRun,
+    resume: adapter.resume ? wrappedResume : undefined,
   };
 }
 
 export class RuntimeRegistry {
   private readonly adapters = new Map<string, RuntimeAdapter>();
   private readonly log: RuntimeRegistryLogger;
+  private readonly usageSink: RuntimeUsageSink;
 
   constructor(options: RuntimeRegistryOptions = {}) {
     this.log = options.logger ?? createFallbackLogger();
+    this.usageSink = options.usageSink ?? createNoopUsageSink();
 
     if (options.builtInAdapters?.length) {
       this.registerBuiltInRuntimes(options.builtInAdapters);
@@ -119,7 +247,7 @@ export class RuntimeRegistry {
     }
 
     this.log.debug({ runtimeId: normalizedRuntimeId }, "Resolved runtime adapter");
-    return wrapAdapterWithTransforms(adapter);
+    return wrapAdapter(adapter, this.usageSink, this.log);
   }
 
   tryResolveRuntime(runtimeId: string): RuntimeAdapter | null {
@@ -130,7 +258,7 @@ export class RuntimeRegistry {
       this.log.debug({ runtimeId: normalizedRuntimeId }, "Resolved runtime adapter");
     }
 
-    return adapter ? wrapAdapterWithTransforms(adapter) : null;
+    return adapter ? wrapAdapter(adapter, this.usageSink, this.log) : null;
   }
 
   hasRuntime(runtimeId: string): boolean {

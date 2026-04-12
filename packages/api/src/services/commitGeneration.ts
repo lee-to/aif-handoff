@@ -1,5 +1,6 @@
 import { logger } from "@aif/shared";
 import { findProjectById } from "@aif/data";
+import { UsageSource } from "@aif/runtime";
 import { runApiRuntimeOneShot } from "./runtime.js";
 
 const log = logger("commit-generation");
@@ -32,6 +33,7 @@ export async function runCommitQuery(projectId: string): Promise<void> {
       prompt: "/aif-commit",
       workflowKind: "commit",
       systemPromptAppend: PROJECT_SCOPE_APPEND,
+      usageContext: { source: UsageSource.COMMIT },
     });
     log.info({ projectId }, "/aif-commit completed successfully");
   } catch (err) {

@@ -7,10 +7,18 @@ import {
   type RuntimeRegistry,
   type RuntimeRegistryLogger,
 } from "./registry.js";
+import type { RuntimeUsageSink } from "./usageSink.js";
 
 export interface BootstrapRuntimeRegistryOptions {
   logger?: RuntimeRegistryLogger;
   runtimeModules?: string[];
+  /**
+   * Sink that receives usage events for every LLM call that flows through the
+   * registry. Host processes (api, agent) pass a DB-backed sink from
+   * `@aif/data` so every run is persisted to `usage_events`. When omitted,
+   * usage is silently dropped — only suitable for tests and CLI tools.
+   */
+  usageSink?: RuntimeUsageSink;
 }
 
 /**
@@ -30,6 +38,7 @@ export async function bootstrapRuntimeRegistry(
       createOpenRouterRuntimeAdapter(),
     ],
     logger: options.logger,
+    usageSink: options.usageSink,
   });
 
   for (const moduleSpecifier of options.runtimeModules ?? []) {

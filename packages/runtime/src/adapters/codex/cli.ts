@@ -578,7 +578,7 @@ function finalizeCodexResult(
                 (usageRaw.outputTokens ?? usageRaw.output_tokens ?? 0),
             costUsd: usageRaw.costUsd ?? usageRaw.cost_usd,
           }
-        : undefined,
+        : null,
       events: legacyEvents,
       raw: parsed,
     };
@@ -590,6 +590,7 @@ function finalizeCodexResult(
     return {
       outputText: raw,
       sessionId: fallbackSessionId,
+      usage: null,
       raw,
     };
   }
@@ -597,7 +598,7 @@ function finalizeCodexResult(
   return {
     outputText: state.outputText,
     sessionId: state.sessionId ?? fallbackSessionId,
-    usage: state.usage ?? undefined,
+    usage: state.usage ?? null,
     events: state.events,
     raw: state.rawEvents,
   };

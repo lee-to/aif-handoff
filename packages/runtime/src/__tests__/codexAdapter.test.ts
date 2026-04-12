@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 const runCodexCliMock = vi.fn();
 const runCodexAgentApiMock = vi.fn();
@@ -41,6 +42,7 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     workflowKind: "implementer",
     prompt: "Implement feature",
     options: {},
+    usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
   };
 }

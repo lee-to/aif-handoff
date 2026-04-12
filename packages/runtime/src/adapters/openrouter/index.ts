@@ -19,6 +19,7 @@ import {
   type OpenRouterApiLogger,
 } from "./api.js";
 import { classifyOpenRouterRuntimeError } from "./errors.js";
+import { RuntimeExecutionError } from "../../errors.js";
 
 export type OpenRouterAdapterLogger = OpenRouterApiLogger & {
   error?(context: Record<string, unknown>, message: string): void;
@@ -77,6 +78,32 @@ function readString(value: unknown): string | null {
 
 function diagnoseErrorMessage(input: RuntimeDiagnoseErrorInput): string {
   const message = input.error instanceof Error ? input.error.message : String(input.error);
+
+  // Primary: dispatch on structured category when available
+  if (input.error instanceof RuntimeExecutionError && input.error.category !== "unknown") {
+    switch (input.error.category) {
+      case "auth":
+        return "OpenRouter API key is missing or invalid. Check OPENROUTER_API_KEY environment variable.";
+      case "rate_limit":
+        return "OpenRouter rate limit or quota exceeded. Wait and retry, or check your plan limits at openrouter.ai.";
+      case "model_not_found":
+        return "The requested model is not available on OpenRouter. Check the model ID format (provider/model).";
+      case "context_length":
+        return "The prompt exceeds the model's maximum context length. Reduce the input or choose a model with a larger context window.";
+      case "content_filter":
+        return "OpenRouter blocked the request due to content policy. Review the prompt content.";
+      case "transport":
+        return "Cannot reach OpenRouter API. Check network connectivity and OPENROUTER_BASE_URL.";
+      case "timeout":
+        return `OpenRouter request timed out. ${message}`;
+      case "permission":
+        return `OpenRouter permission denied. ${message}`;
+      case "stream":
+        return `OpenRouter stream interrupted. ${message}`;
+    }
+  }
+
+  // Fallback: string matching for unclassified errors or plain Error instances
   const combined = `${message} ${input.stderrTail ?? ""}`.toLowerCase();
 
   if (
@@ -98,6 +125,7 @@ function diagnoseErrorMessage(input: RuntimeDiagnoseErrorInput): string {
   if (combined.includes("connection refused") || combined.includes("fetch failed")) {
     return "Cannot reach OpenRouter API. Check network connectivity and OPENROUTER_BASE_URL.";
   }
+
   return `OpenRouter error: ${message}`;
 }
 

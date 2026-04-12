@@ -1,62 +1,53 @@
-import { RuntimeExecutionError, type RuntimeErrorCategory } from "../../errors.js";
+import {
+  RuntimeExecutionError,
+  classifyByHttpStatus,
+  classifyByMessageFallback,
+  type RuntimeErrorCategory,
+} from "../../errors.js";
 
-const AUTH_PATTERNS = [
-  "unauthorized",
-  "forbidden",
-  "authentication",
-  "invalid credentials",
-  "invalid password",
-  "401",
-  "403",
-];
-const RATE_LIMIT_PATTERNS = [
-  "rate limit",
-  "rate_limit",
-  "too many requests",
-  "429",
-  "quota",
-  "hit your limit",
-  "limit reached",
-  "limit exceeded",
-  "out of credits",
-];
-const TIMEOUT_PATTERNS = ["timed out", "timeout", "etimedout", "aborted"];
-const NETWORK_PATTERNS = ["network", "fetch failed", "econnrefused", "connection refused"];
-const SESSION_PATTERNS = ["session", "not found", "404"];
-const MODEL_PATTERNS = [
-  "providermodelnotfounderror",
-  "modelnotfounderror",
-  "provider not found",
-  "model not found",
-];
+/** OpenCode-specific session patterns that don't map to shared categories. */
+const SESSION_PATTERNS = ["session", "not found"];
+
+/** Map semantic category to OpenCode-specific adapter code. */
+const CATEGORY_TO_ADAPTER_CODE: Record<RuntimeErrorCategory, string> = {
+  rate_limit: "OPENCODE_RATE_LIMIT",
+  auth: "OPENCODE_AUTH_ERROR",
+  timeout: "OPENCODE_TIMEOUT",
+  permission: "OPENCODE_PERMISSION_DENIED",
+  stream: "OPENCODE_STREAM_ERROR",
+  transport: "OPENCODE_TRANSPORT_ERROR",
+  model_not_found: "OPENCODE_MODEL_ERROR",
+  context_length: "OPENCODE_CONTEXT_LENGTH",
+  content_filter: "OPENCODE_CONTENT_FILTER",
+  unknown: "OPENCODE_RUNTIME_ERROR",
+};
 
 function messageFromUnknown(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function classify(message: string): { adapterCode: string; category: RuntimeErrorCategory } {
+function classify(
+  message: string,
+  httpStatus?: number,
+): { adapterCode: string; category: RuntimeErrorCategory } {
+  // Primary: HTTP status (API transport)
+  if (httpStatus !== undefined) {
+    const category = classifyByHttpStatus(httpStatus);
+    if (category) {
+      return { adapterCode: CATEGORY_TO_ADAPTER_CODE[category], category };
+    }
+  }
+
   const lowered = message.toLowerCase();
 
-  if (AUTH_PATTERNS.some((pattern) => lowered.includes(pattern))) {
-    return { adapterCode: "OPENCODE_AUTH_ERROR", category: "auth" };
-  }
-  if (RATE_LIMIT_PATTERNS.some((pattern) => lowered.includes(pattern))) {
-    return { adapterCode: "OPENCODE_RATE_LIMIT", category: "rate_limit" };
-  }
-  if (TIMEOUT_PATTERNS.some((pattern) => lowered.includes(pattern))) {
-    return { adapterCode: "OPENCODE_TIMEOUT", category: "timeout" };
-  }
-  if (NETWORK_PATTERNS.some((pattern) => lowered.includes(pattern))) {
-    return { adapterCode: "OPENCODE_TRANSPORT_ERROR", category: "unknown" };
-  }
-  if (MODEL_PATTERNS.some((pattern) => lowered.includes(pattern))) {
-    return { adapterCode: "OPENCODE_MODEL_ERROR", category: "unknown" };
-  }
-  if (SESSION_PATTERNS.some((pattern) => lowered.includes(pattern))) {
+  // OpenCode-specific: session not found
+  if (SESSION_PATTERNS.every((pattern) => lowered.includes(pattern))) {
     return { adapterCode: "OPENCODE_SESSION_ERROR", category: "unknown" };
   }
 
-  return { adapterCode: "OPENCODE_RUNTIME_ERROR", category: "unknown" };
+  // Fallback: shared message-based classification
+  const category = classifyByMessageFallback(message);
+  return { adapterCode: CATEGORY_TO_ADAPTER_CODE[category], category };
 }
 
 export class OpenCodeRuntimeAdapterError extends RuntimeExecutionError {
@@ -74,8 +65,11 @@ export class OpenCodeRuntimeAdapterError extends RuntimeExecutionError {
   }
 }
 
-export function classifyOpenCodeRuntimeError(error: unknown): OpenCodeRuntimeAdapterError {
+export function classifyOpenCodeRuntimeError(
+  error: unknown,
+  httpStatus?: number,
+): OpenCodeRuntimeAdapterError {
   const message = messageFromUnknown(error);
-  const { adapterCode, category } = classify(message);
+  const { adapterCode, category } = classify(message, httpStatus);
   return new OpenCodeRuntimeAdapterError(message, adapterCode, category, error);
 }

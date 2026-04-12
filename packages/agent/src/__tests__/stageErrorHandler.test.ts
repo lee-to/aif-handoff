@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { RuntimeExecutionError } from "@aif/runtime";
+
+const { mockWarn, mockError } = vi.hoisted(() => ({
+  mockWarn: vi.fn(),
+  mockError: vi.fn(),
+}));
 
 vi.mock("@aif/data", () => ({
   appendTaskActivityLog: vi.fn(),
@@ -8,9 +14,6 @@ vi.mock("@aif/data", () => ({
 vi.mock("../taskWatchdog.js", () => ({
   getRandomBackoffMinutes: () => 10,
 }));
-
-const mockWarn = vi.fn();
-const mockError = vi.fn();
 
 vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
@@ -77,13 +80,19 @@ describe("classifyStageError", () => {
   // --- blocked_external ---
 
   it("returns blocked_external for rate limit errors", () => {
-    const result = classifyStageError(makeInput({ err: new Error("rate limit exceeded") }));
+    const result = classifyStageError(
+      makeInput({ err: new RuntimeExecutionError("rate limit exceeded", undefined, "rate_limit") }),
+    );
     expect(result.kind).toBe("blocked_external");
   });
 
   it("includes retryAfter ISO string for external failures", () => {
     const before = Date.now();
-    const result = classifyStageError(makeInput({ err: new Error("Usage limit exceeded") }));
+    const result = classifyStageError(
+      makeInput({
+        err: new RuntimeExecutionError("Usage limit exceeded", undefined, "rate_limit"),
+      }),
+    );
 
     expect(result.kind).toBe("blocked_external");
     if (result.kind === "blocked_external") {
@@ -96,7 +105,10 @@ describe("classifyStageError", () => {
 
   it("increments retryCount from input", () => {
     const result = classifyStageError(
-      makeInput({ err: new Error("exited with code 1"), retryCount: 2 }),
+      makeInput({
+        err: new RuntimeExecutionError("timeout", undefined, "timeout"),
+        retryCount: 2,
+      }),
     );
     expect(result.kind).toBe("blocked_external");
     if (result.kind === "blocked_external") {
@@ -105,7 +117,7 @@ describe("classifyStageError", () => {
   });
 
   it("logs error with taskId, stage, retryAfter, and backoffMinutes for blocked_external", () => {
-    const err = new Error("rate limit exceeded");
+    const err = new RuntimeExecutionError("rate limit exceeded", undefined, "rate_limit");
     classifyStageError(makeInput({ err, taskId: "t-ext", stageLabel: "reviewer" }));
 
     expect(mockError).toHaveBeenCalledOnce();
@@ -123,7 +135,7 @@ describe("classifyStageError", () => {
   it("writes activity log for external failure", () => {
     classifyStageError(
       makeInput({
-        err: new Error("not logged in"),
+        err: new RuntimeExecutionError("auth failed", undefined, "auth"),
         sourceStatus: "planning",
         stageLabel: "planner",
       }),

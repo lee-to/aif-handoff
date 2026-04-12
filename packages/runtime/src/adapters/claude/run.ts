@@ -18,6 +18,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * String matching is intentional here: Claude Agent SDK surfaces session-not-found
+ * as a plain Error(message) with no structured error class, HTTP status, or subtype.
+ * These are SDK-internal session lifecycle signals that only appear as message strings.
+ */
 function isMissingResumeSessionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
@@ -28,6 +33,11 @@ function isMissingResumeSessionError(error: unknown): boolean {
   );
 }
 
+/**
+ * String matching is intentional here: Claude Agent SDK exposes execution failures
+ * and error results as plain Error(message) strings. No structured error class or
+ * HTTP status is available for these SDK-internal signals.
+ */
 function isRetryableResumeFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();

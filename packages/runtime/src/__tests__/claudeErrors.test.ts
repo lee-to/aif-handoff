@@ -74,4 +74,33 @@ describe("Claude runtime error classification", () => {
     expect(classified.message).toContain("error_during_execution");
     expect(classified.message).toContain("No conversation found with session ID");
   });
+
+  // HTTP status classification
+  it("classifies by HTTP status 429 as rate_limit", () => {
+    const classified = classifyClaudeRuntimeError(new Error("response body"), 429);
+    expect(classified.adapterCode).toBe("CLAUDE_USAGE_LIMIT");
+    expect(classified.category).toBe("rate_limit");
+  });
+
+  it("classifies by HTTP status 401 as auth", () => {
+    const classified = classifyClaudeRuntimeError(new Error("response body"), 401);
+    expect(classified.adapterCode).toBe("CLAUDE_AUTH_ERROR");
+    expect(classified.category).toBe("auth");
+  });
+
+  it("classifies by HTTP status 500 as transport", () => {
+    const classified = classifyClaudeRuntimeError(new Error("server error"), 500);
+    expect(classified.adapterCode).toBe("CLAUDE_TRANSPORT_ERROR");
+    expect(classified.category).toBe("transport");
+  });
+
+  it("prefers HTTP status over message", () => {
+    const classified = classifyClaudeRuntimeError(new Error("rate limit"), 401);
+    expect(classified.category).toBe("auth");
+  });
+
+  it("falls back to message when HTTP status is unrecognized", () => {
+    const classified = classifyClaudeRuntimeError(new Error("rate limit"), 200);
+    expect(classified.category).toBe("rate_limit");
+  });
 });

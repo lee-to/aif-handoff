@@ -1,69 +1,64 @@
-import { RuntimeExecutionError, type RuntimeErrorCategory } from "../../errors.js";
+import {
+  RuntimeExecutionError,
+  classifyByHttpStatus,
+  classifyByMessageFallback,
+  type RuntimeErrorCategory,
+} from "../../errors.js";
 
+/** Codex-specific CLI patterns that don't map to shared categories. */
 const CLI_NOT_FOUND_PATTERNS = ["enoent", "not recognized", "not found", "no such file"];
-const TIMEOUT_PATTERNS = ["timed out", "timeout", "etimedout"];
-const AUTH_PATTERNS = [
-  "unauthorized",
-  "invalid api key",
-  "forbidden",
-  "authentication_error",
-  "invalid authentication credentials",
-];
-const TRANSPORT_PATTERNS = ["connection refused", "econnrefused", "network", "fetch failed"];
 const THREAD_PATTERNS = [
   "thread not found",
   "session not found",
   "no such session",
   "invalid thread",
 ];
-const RATE_LIMIT_PATTERNS = [
-  "rate limit",
-  "rate_limit",
-  "too many requests",
-  "429",
-  "insufficient_quota",
-  "quota",
-  "at capacity",
-  "model is at capacity",
-  "hit your limit",
-  "limit reached",
-  "limit exceeded",
-  "out of credits",
-];
+
+/** Map semantic category to Codex-specific adapter code. */
+const CATEGORY_TO_ADAPTER_CODE: Record<RuntimeErrorCategory, string> = {
+  rate_limit: "CODEX_RATE_LIMIT",
+  auth: "CODEX_AUTH_ERROR",
+  timeout: "CODEX_TIMEOUT",
+  permission: "CODEX_PERMISSION_DENIED",
+  stream: "CODEX_STREAM_ERROR",
+  transport: "CODEX_TRANSPORT_ERROR",
+  model_not_found: "CODEX_MODEL_NOT_FOUND",
+  context_length: "CODEX_CONTEXT_LENGTH",
+  content_filter: "CODEX_CONTENT_FILTER",
+  unknown: "CODEX_RUNTIME_ERROR",
+};
 
 function messageFromUnknown(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function classify(message: string): { adapterCode: string; category: RuntimeErrorCategory } {
-  const lowered = message.toLowerCase();
-  if (RATE_LIMIT_PATTERNS.some((p) => lowered.includes(p))) {
-    return { adapterCode: "CODEX_RATE_LIMIT", category: "rate_limit" };
+function classify(
+  message: string,
+  httpStatus?: number,
+): { adapterCode: string; category: RuntimeErrorCategory } {
+  // Primary: HTTP status (API transport)
+  if (httpStatus !== undefined) {
+    const category = classifyByHttpStatus(httpStatus);
+    if (category) {
+      return { adapterCode: CATEGORY_TO_ADAPTER_CODE[category], category };
+    }
   }
+
+  const lowered = message.toLowerCase();
+
+  // Codex-specific: CLI not found (no shared equivalent)
   if (CLI_NOT_FOUND_PATTERNS.some((p) => lowered.includes(p))) {
     return { adapterCode: "CODEX_CLI_NOT_FOUND", category: "unknown" };
   }
-  if (TIMEOUT_PATTERNS.some((p) => lowered.includes(p))) {
-    return { adapterCode: "CODEX_TIMEOUT", category: "timeout" };
-  }
-  if (
-    AUTH_PATTERNS.some((p) => lowered.includes(p)) ||
-    lowered.includes("http 401") ||
-    lowered.includes("http error: 401") ||
-    lowered.includes("status: 401") ||
-    lowered.includes("http 403") ||
-    lowered.includes("http error: 403") ||
-    lowered.includes("status: 403")
-  ) {
-    return { adapterCode: "CODEX_AUTH_ERROR", category: "auth" };
-  }
-  if (TRANSPORT_PATTERNS.some((p) => lowered.includes(p))) {
-    return { adapterCode: "CODEX_TRANSPORT_ERROR", category: "unknown" };
-  }
+
+  // Codex-specific: thread/session not found
   if (THREAD_PATTERNS.some((p) => lowered.includes(p))) {
     return { adapterCode: "CODEX_THREAD_NOT_FOUND", category: "unknown" };
   }
-  return { adapterCode: "CODEX_RUNTIME_ERROR", category: "unknown" };
+
+  // Fallback: shared message-based classification
+  const category = classifyByMessageFallback(message);
+  return { adapterCode: CATEGORY_TO_ADAPTER_CODE[category], category };
 }
 
 export class CodexRuntimeAdapterError extends RuntimeExecutionError {
@@ -81,11 +76,14 @@ export class CodexRuntimeAdapterError extends RuntimeExecutionError {
   }
 }
 
-export function classifyCodexRuntimeError(error: unknown): CodexRuntimeAdapterError {
+export function classifyCodexRuntimeError(
+  error: unknown,
+  httpStatus?: number,
+): CodexRuntimeAdapterError {
   if (error instanceof CodexRuntimeAdapterError) {
     return error;
   }
   const message = messageFromUnknown(error);
-  const { adapterCode, category } = classify(message);
+  const { adapterCode, category } = classify(message, httpStatus);
   return new CodexRuntimeAdapterError(message, adapterCode, category, error);
 }

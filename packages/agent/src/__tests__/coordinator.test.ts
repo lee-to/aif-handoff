@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { tasks, projects } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
+import { RuntimeExecutionError } from "@aif/runtime";
 import { eq } from "drizzle-orm";
 
 // Set up test db
@@ -364,7 +365,7 @@ describe("coordinator", () => {
       .run();
 
     vi.mocked(runPlanner).mockRejectedValueOnce(
-      new Error("Claude Code process exited with code 1"),
+      new RuntimeExecutionError("Claude Code process exited with code 1", undefined, "timeout"),
     );
 
     await pollAndProcess();
@@ -452,7 +453,7 @@ describe("coordinator", () => {
       .run();
 
     vi.mocked(runImplementer).mockRejectedValueOnce(
-      new Error("Implementer blocked by permissions"),
+      new RuntimeExecutionError("Implementer blocked by permissions", undefined, "permission"),
     );
 
     await pollAndProcess();

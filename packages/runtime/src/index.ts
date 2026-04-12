@@ -49,6 +49,9 @@ export {
   RuntimeRegistrationError,
   RuntimeResolutionError,
   RuntimeValidationError,
+  classifyByHttpStatus,
+  classifyByMessageFallback,
+  isExternalFailureCategory,
   isRuntimeErrorCategory,
   type RuntimeErrorCategory,
 } from "./errors.js";

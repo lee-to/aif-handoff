@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Moon, Sun, Command, ChartColumn, Cpu, Map, Settings } from "lucide-react";
+import { Bell, Moon, Sun, Command, ChartColumn, Cpu, Map, Settings, BookOpen } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { useEffectiveChatRuntime } from "@/hooks/useRuntimeProfiles";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { NotificationsDialog } from "./NotificationsDialog";
 import { MetricsDialog } from "./MetricsDialog";
 import { RoadmapDialog } from "./RoadmapDialog";
 import { GlobalSettingsDialog } from "./GlobalSettingsDialog";
+import { FaqDialog } from "./FaqDialog";
 
 export interface RoadmapImportResult {
   roadmapAlias: string;
@@ -64,6 +65,7 @@ export function Header({
   const [metricsOpen, setMetricsOpen] = useState(false);
   const [roadmapOpen, setRoadmapOpen] = useState(false);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
+  const [faqOpen, setFaqOpen] = useState(false);
   const isCompact = density === "compact";
   const currentRuntimeLabel = !selectedProject
     ? "No project"
@@ -196,6 +198,16 @@ export function Header({
           <Button
             variant="outline"
             size="icon"
+            onClick={() => setFaqOpen((v) => !v)}
+            className="h-8 w-8"
+            aria-label="AIF Skills FAQ"
+            title="AIF Skills FAQ"
+          >
+            <BookOpen className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
             onClick={() => setGlobalSettingsOpen((v) => !v)}
             className="h-8 w-8"
             aria-label="Global settings"
@@ -241,6 +253,7 @@ export function Header({
         onOpenChange={setGlobalSettingsOpen}
         projectId={selectedProject?.id ?? null}
       />
+      <FaqDialog open={faqOpen} onOpenChange={setFaqOpen} />
     </header>
   );
 }

@@ -71,6 +71,7 @@ export default defineConfig({
       "/runtime-profiles": apiTarget,
       "/settings": apiTarget,
       "/health": apiTarget,
+      "/docs": apiTarget,
       "/ws": {
         target: `ws://localhost:${API_PORT}`,
         ws: true,

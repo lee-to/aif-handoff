@@ -20,6 +20,7 @@ import {
   sleepMs,
   withStreamTimeouts,
 } from "../../timeouts.js";
+import { asRecord, readString } from "../../utils.js";
 import { classifyCodexRuntimeError } from "./errors.js";
 
 export interface CodexSdkLogger {
@@ -27,20 +28,6 @@ export interface CodexSdkLogger {
   info?(context: Record<string, unknown>, message: string): void;
   warn?(context: Record<string, unknown>, message: string): void;
   error?(context: Record<string, unknown>, message: string): void;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function formatToolDetail(value: unknown, maxLength = 200): string {
@@ -61,7 +48,6 @@ function formatToolDetail(value: unknown, maxLength = 200): string {
 
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
-
 const ALLOWED_ENV_PREFIXES = [
   "OPENAI_",
   "CODEX_",

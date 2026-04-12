@@ -198,6 +198,9 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}
 All files must be created and modified inside this directory. Do NOT create files outside of it.`;
   const implementSlashCommand = `/aif-implement ${planSection}`;
+  const handoffContext = `HANDOFF_MODE: 1
+HANDOFF_TASK_ID: ${taskId}
+HANDOFF_SKIP_REVIEW: ${task.skipReview ? "1" : "0"}`;
 
   const isRework = task.reworkRequested;
 
@@ -244,6 +247,16 @@ Rework handling protocol:
 
   const prompt = `${topReworkHeader}${useSubagents ? "Implement the task using the provided plan." : implementSlashCommand}
 
+${
+  useSubagents
+    ? `${handoffContext}
+Autonomous Handoff mode: true.
+Do not ask interactive questions.
+Do not perform Handoff MCP sync yourself.
+`
+    : ""
+}
+
 ${scopeConstraint}
 
 ${bodyReworkHeader}Title: ${task.title}
@@ -268,6 +281,7 @@ Execution rules:
     agentDefinitionName: useSubagents ? AGENT_NAME : undefined,
     fallbackSlashCommand: implementSlashCommand,
     fallbackStrategy: useSubagents ? "slash_command" : "none",
+    executionMode: useSubagents ? "native_subagents" : "standard",
     // Rework must always start a fresh session — resuming an old thread
     // leads Claude to treat the completed work as authoritative and ignore
     // the new rework request.

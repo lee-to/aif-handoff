@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved subagent workflows (Claude adapter first).
+Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved subagent workflows.
 
 ## Tech Stack
 
@@ -87,7 +87,7 @@ packages/
         ├── notifier.ts      # Notification system
         └── subagents/       # planner.ts, implementer.ts, reviewer.ts
 
-.claude/agents/          # Agent definitions (loaded by runtimes that support them)
+.claude/agents/          # Claude-native agent definitions
 .docker/                 # Dockerfile, entrypoint, Angie configs
 data/                    # SQLite database files (gitignored)
 .ai-factory/             # AI Factory context and references

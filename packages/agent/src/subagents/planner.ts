@@ -163,6 +163,10 @@ ${commentsForPrompt}`;
 ${handoffContext}
 ${scopeConstraint}
 
+Autonomous Handoff mode: true.
+Do not ask interactive questions.
+Do not perform Handoff MCP sync yourself.
+
 Mode: ${plannerMode}, tests: ${planTests}, docs: ${planDocs}.
 Plan file: @${planPath}
 
@@ -177,6 +181,7 @@ Always write the final plan to @${planPath}.`;
       agentDefinitionName: AGENT_NAME,
       fallbackSlashCommand: plannerSlashCommand,
       fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
       sessionReusePolicy: "resume_if_available",
       systemPromptAppend: scopeConstraint,
       metadata: {

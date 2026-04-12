@@ -1,5 +1,10 @@
 import type { RuntimeCapabilities } from "./types.js";
 import type { RuntimeWorkflowSpec } from "./workflowSpec.js";
+import {
+  CODEX_SUBAGENT_STRATEGIES,
+  getNativeSubagentWorkflowGuidance,
+  resolveCodexSubagentStrategy,
+} from "./adapters/codex/subagentStrategy.js";
 
 export interface RuntimePromptPolicyLogger {
   debug?(context: Record<string, unknown>, message: string): void;
@@ -9,6 +14,7 @@ export interface RuntimePromptPolicyLogger {
 export interface RuntimePromptPolicyInput {
   runtimeId: string;
   capabilities: RuntimeCapabilities;
+  runtimeOptions?: Record<string, unknown>;
   workflow: RuntimeWorkflowSpec;
   logger?: RuntimePromptPolicyLogger;
 }
@@ -18,6 +24,8 @@ export interface RuntimePromptPolicyResult {
   systemPromptAppend: string;
   agentDefinitionName?: string;
   usedFallbackSlashCommand: boolean;
+  usedIsolatedSkillCommand: boolean;
+  usedNativeSubagentWorkflow: boolean;
 }
 
 const DEFAULT_SKILL_PREFIX = "/";
@@ -47,18 +55,67 @@ function prependSlashFallbackPrompt(prompt: string, fallbackSlashCommand: string
   return `${trimmedCommand}\n\n${prompt}`;
 }
 
+function prependNativeSubagentPrompt(
+  workflow: RuntimeWorkflowSpec,
+  prompt: string,
+  agentDefinitionName: string,
+): string {
+  const agentReference = `Spawn the custom Codex agent "${agentDefinitionName}" and delegate this workflow to it.`;
+  const workflowSpecificGuidance = getNativeSubagentWorkflowGuidance(workflow.workflowKind);
+
+  return [
+    "Use Codex native subagents for this workflow.",
+    agentReference,
+    "Wait for delegated work to complete before producing the final answer.",
+    "Do not use slash or skill commands as the primary execution mechanism when native subagents are available.",
+    workflowSpecificGuidance,
+    "",
+    prompt,
+  ].join("\n");
+}
+
 export function resolveRuntimePromptPolicy(
   input: RuntimePromptPolicyInput,
 ): RuntimePromptPolicyResult {
   const canUseAgentDefinition = Boolean(
     input.workflow.agentDefinitionName && input.capabilities.supportsAgentDefinitions,
   );
+  const wantsNativeSubagentWorkflow = input.workflow.executionMode === "native_subagents";
+  const wantsIsolatedSkillCommand = input.workflow.executionMode === "isolated_skill_session";
   const wantsSlashFallback = input.workflow.fallbackStrategy === "slash_command";
+  // Returns null for non-Codex runtimes; capability checks remain the real gate.
+  const requestedCodexSubagentStrategy = resolveCodexSubagentStrategy(
+    input.runtimeId,
+    input.runtimeOptions,
+  );
+  const supportsIsolatedSkillCommand = Boolean(
+    input.capabilities.supportsIsolatedSubagentWorkflows,
+  );
+  const supportsNativeSubagentWorkflow =
+    requestedCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.isolated &&
+    Boolean(input.capabilities.supportsNativeSubagentWorkflows);
   const hasFallbackCommand = Boolean(input.workflow.promptInput.fallbackSlashCommand?.trim());
-  const useSlashFallback = !canUseAgentDefinition && wantsSlashFallback && hasFallbackCommand;
+  const hasNativeAgentName = Boolean(input.workflow.agentDefinitionName?.trim());
+  const useNativeSubagentWorkflow =
+    !canUseAgentDefinition &&
+    wantsNativeSubagentWorkflow &&
+    supportsNativeSubagentWorkflow &&
+    hasNativeAgentName;
+  const useIsolatedSkillCommand =
+    !canUseAgentDefinition &&
+    (wantsIsolatedSkillCommand ||
+      (wantsNativeSubagentWorkflow && !useNativeSubagentWorkflow && wantsSlashFallback)) &&
+    supportsIsolatedSkillCommand &&
+    hasFallbackCommand;
+  const useSlashFallback =
+    !canUseAgentDefinition &&
+    wantsSlashFallback &&
+    hasFallbackCommand &&
+    !useNativeSubagentWorkflow &&
+    !useIsolatedSkillCommand;
 
   if (!canUseAgentDefinition && input.workflow.agentDefinitionName) {
-    input.logger?.warn?.(
+    input.logger?.debug?.(
       {
         runtimeId: input.runtimeId,
         workflowKind: input.workflow.workflowKind,
@@ -66,6 +123,28 @@ export function resolveRuntimePromptPolicy(
         hasFallbackCommand,
       },
       "Runtime does not support agent definitions, checking workflow fallback strategy",
+    );
+  }
+  if (wantsNativeSubagentWorkflow && !hasNativeAgentName) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+      },
+      "Workflow requested native subagent execution but no agentDefinitionName was provided",
+    );
+  }
+  if (
+    wantsNativeSubagentWorkflow &&
+    requestedCodexSubagentStrategy === CODEX_SUBAGENT_STRATEGIES.isolated &&
+    input.runtimeId === "codex"
+  ) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+      },
+      "Native Codex subagents disabled via runtime option; falling back to isolated skill-session execution",
     );
   }
 
@@ -78,13 +157,51 @@ export function resolveRuntimePromptPolicy(
       "Workflow requested slash fallback but no fallback slash command was provided",
     );
   }
+  if (wantsNativeSubagentWorkflow && !supportsNativeSubagentWorkflow) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+      },
+      "Workflow requested native subagent execution but runtime does not support it",
+    );
+  }
+  if (wantsNativeSubagentWorkflow && !supportsNativeSubagentWorkflow && !hasFallbackCommand) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+      },
+      "Workflow requested native subagent execution without any fallback command; prompt will remain non-delegated",
+    );
+  }
+  if (wantsIsolatedSkillCommand && !supportsIsolatedSkillCommand) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        workflowKind: input.workflow.workflowKind,
+      },
+      "Workflow requested isolated skill-command execution but runtime does not support it",
+    );
+  }
 
-  const prompt = useSlashFallback
-    ? prependSlashFallbackPrompt(
+  const prompt = useNativeSubagentWorkflow
+    ? prependNativeSubagentPrompt(
+        input.workflow,
         input.workflow.promptInput.prompt,
-        input.workflow.promptInput.fallbackSlashCommand ?? "",
+        input.workflow.agentDefinitionName ?? "",
       )
-    : input.workflow.promptInput.prompt;
+    : useIsolatedSkillCommand
+      ? prependSlashFallbackPrompt(
+          input.workflow.promptInput.prompt,
+          input.workflow.promptInput.fallbackSlashCommand ?? "",
+        )
+      : useSlashFallback
+        ? prependSlashFallbackPrompt(
+            input.workflow.promptInput.prompt,
+            input.workflow.promptInput.fallbackSlashCommand ?? "",
+          )
+        : input.workflow.promptInput.prompt;
   const systemPromptAppend = input.workflow.promptInput.systemPromptAppend ?? "";
   const agentDefinitionName = canUseAgentDefinition
     ? input.workflow.agentDefinitionName
@@ -95,6 +212,8 @@ export function resolveRuntimePromptPolicy(
       runtimeId: input.runtimeId,
       workflowKind: input.workflow.workflowKind,
       usedFallbackSlashCommand: useSlashFallback,
+      usedIsolatedSkillCommand: useIsolatedSkillCommand,
+      usedNativeSubagentWorkflow: useNativeSubagentWorkflow,
       agentDefinitionName: agentDefinitionName ?? null,
       systemPromptAppendLength: systemPromptAppend.length,
     },
@@ -106,5 +225,7 @@ export function resolveRuntimePromptPolicy(
     systemPromptAppend,
     agentDefinitionName,
     usedFallbackSlashCommand: useSlashFallback,
+    usedIsolatedSkillCommand: useIsolatedSkillCommand,
+    usedNativeSubagentWorkflow: useNativeSubagentWorkflow,
   };
 }

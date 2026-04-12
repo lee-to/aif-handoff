@@ -224,6 +224,8 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
   systemPromptAppend: string;
   agentDefinitionName?: string;
   canResume: boolean;
+  usedIsolatedSkillCommand: boolean;
+  usedNativeSubagentWorkflow: boolean;
 }> {
   const task = findTaskById(options.taskId);
   const effective = resolveEffectiveRuntimeProfile({
@@ -296,6 +298,7 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
   const promptPolicy = resolveRuntimePromptPolicy({
     runtimeId: resolved.runtimeId,
     capabilities,
+    runtimeOptions: resolved.options,
     workflow,
     logger: {
       debug(context, message) {
@@ -307,8 +310,21 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
     },
   });
 
-  const canResume =
+  const baseCanResume =
     workflow.sessionReusePolicy === "resume_if_available" && capabilities.supportsResume;
+  const requiresFreshSession =
+    promptPolicy.usedIsolatedSkillCommand || promptPolicy.usedNativeSubagentWorkflow;
+  const canResume = requiresFreshSession ? false : baseCanResume;
+  if (baseCanResume && requiresFreshSession) {
+    log.debug(
+      {
+        taskId: options.taskId,
+        runtimeId: resolved.runtimeId,
+        workflowKind: workflow.workflowKind,
+      },
+      "Workflow selected a fresh-session subagent strategy; forcing new session instead of resume",
+    );
+  }
 
   const profileLogContext = redactResolvedRuntimeProfile(resolved);
   log.info(
@@ -317,6 +333,8 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
       workflowKind: workflow.workflowKind,
       ...profileLogContext,
       usedFallbackSlashCommand: promptPolicy.usedFallbackSlashCommand,
+      usedIsolatedSkillCommand: promptPolicy.usedIsolatedSkillCommand,
+      usedNativeSubagentWorkflow: promptPolicy.usedNativeSubagentWorkflow,
       suppressModelFallback,
       canResume,
     },
@@ -353,6 +371,8 @@ async function resolveExecutionContext(options: SubagentQueryOptions): Promise<{
     systemPromptAppend: promptPolicy.systemPromptAppend,
     agentDefinitionName: promptPolicy.agentDefinitionName,
     canResume,
+    usedIsolatedSkillCommand: promptPolicy.usedIsolatedSkillCommand,
+    usedNativeSubagentWorkflow: promptPolicy.usedNativeSubagentWorkflow,
   };
 }
 
@@ -445,6 +465,8 @@ export async function executeSubagentQuery(
         model: context.model,
         systemPromptAppend: context.systemPromptAppend,
         maxBudgetUsd: options.maxBudgetUsd ?? null,
+        usedIsolatedSkillCommand: context.usedIsolatedSkillCommand,
+        usedNativeSubagentWorkflow: context.usedNativeSubagentWorkflow,
       },
     });
 

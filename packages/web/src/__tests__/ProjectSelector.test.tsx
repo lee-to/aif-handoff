@@ -128,4 +128,28 @@ describe("ProjectSelector", () => {
       8000,
     );
   });
+
+  describe("auto-queue toggle", () => {
+    it("renders Auto-Queue Mode switch in create dialog", () => {
+      mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+      render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+      fireEvent.click(screen.getByText("New project"));
+
+      expect(screen.getByText("Auto-Queue Mode")).toBeDefined();
+      expect(
+        screen.getByText(/When enabled, the coordinator advances the next backlog task/i),
+      ).toBeDefined();
+    });
+
+    it("appears alongside Parallel Execution in the same dialog", () => {
+      mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+      render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+      fireEvent.click(screen.getByText("New project"));
+
+      expect(screen.getByText("Parallel Execution")).toBeDefined();
+      expect(screen.getByText("Auto-Queue Mode")).toBeDefined();
+    });
+  });
 });

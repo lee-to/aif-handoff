@@ -394,4 +394,36 @@ describe("AddTaskForm", () => {
       expect.any(Object),
     );
   });
+
+  describe("priority picker", () => {
+    it("defaults to None and creates with priority 0", () => {
+      render(<AddTaskForm projectId="p-1" />);
+      fireEvent.click(screen.getByText("Add task"));
+      fireEvent.change(screen.getByPlaceholderText("Task title"), {
+        target: { value: "Default priority" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(mutateCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({ priority: 0 }),
+        expect.any(Object),
+      );
+    });
+
+    it("creates with the chosen priority value", () => {
+      render(<AddTaskForm projectId="p-1" />);
+      fireEvent.click(screen.getByText("Add task"));
+      // Open the priority Select trigger (label "None") and pick "High"
+      fireEvent.click(screen.getByText("None"));
+      fireEvent.click(screen.getByText("High"));
+      fireEvent.change(screen.getByPlaceholderText("Task title"), {
+        target: { value: "High priority task" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(mutateCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "High priority task", priority: 3 }),
+        expect.any(Object),
+      );
+    });
+  });
 });

@@ -89,4 +89,129 @@ describe("TaskCard", () => {
     expect(screen.getByText("Manual Review")).toBeDefined();
     expect(screen.getByText("Auto-review stopped. Human review required.")).toBeDefined();
   });
+
+  describe("scheduled banner", () => {
+    it("renders 'Starts ...' for backlog tasks with scheduledAt", () => {
+      const future = "2099-06-15T10:30:00.000Z";
+      render(<TaskCard task={{ ...mockTask, scheduledAt: future }} onClick={vi.fn()} />);
+      expect(screen.getByText(/Starts/)).toBeDefined();
+    });
+
+    it("does not render the banner once the task leaves backlog", () => {
+      const future = "2099-06-15T10:30:00.000Z";
+      render(
+        <TaskCard
+          task={{ ...mockTask, scheduledAt: future, status: "planning" }}
+          onClick={vi.fn()}
+        />,
+      );
+      expect(screen.queryByText(/Starts/)).toBeNull();
+    });
+  });
+
+  describe("reorder arrows", () => {
+    it("renders up/down buttons only when callbacks are provided in backlog", () => {
+      const onMoveUp = vi.fn();
+      const onMoveDown = vi.fn();
+      render(
+        <TaskCard
+          task={mockTask}
+          onClick={vi.fn()}
+          canMoveUp
+          canMoveDown
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText("Move task up"));
+      fireEvent.click(screen.getByLabelText("Move task down"));
+      expect(onMoveUp).toHaveBeenCalledTimes(1);
+      expect(onMoveDown).toHaveBeenCalledTimes(1);
+    });
+
+    it("disables Move up at top of list and Move down at bottom", () => {
+      const onMoveUp = vi.fn();
+      const onMoveDown = vi.fn();
+      render(
+        <TaskCard
+          task={mockTask}
+          onClick={vi.fn()}
+          canMoveUp={false}
+          canMoveDown={false}
+          onMoveUp={onMoveUp}
+          onMoveDown={onMoveDown}
+        />,
+      );
+      const up = screen.getByLabelText("Move task up") as HTMLButtonElement;
+      const down = screen.getByLabelText("Move task down") as HTMLButtonElement;
+      expect(up.disabled).toBe(true);
+      expect(down.disabled).toBe(true);
+    });
+
+    it("does not render arrows for non-backlog tasks", () => {
+      render(
+        <TaskCard
+          task={{ ...mockTask, status: "planning" }}
+          onClick={vi.fn()}
+          canMoveUp
+          canMoveDown
+          onMoveUp={vi.fn()}
+          onMoveDown={vi.fn()}
+        />,
+      );
+      expect(screen.queryByLabelText("Move task up")).toBeNull();
+    });
+
+    it("clicking arrow does not bubble onClick to the card", () => {
+      const cardClick = vi.fn();
+      const onMoveUp = vi.fn();
+      render(
+        <TaskCard
+          task={mockTask}
+          onClick={cardClick}
+          canMoveUp
+          canMoveDown
+          onMoveUp={onMoveUp}
+          onMoveDown={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText("Move task up"));
+      expect(onMoveUp).toHaveBeenCalled();
+      expect(cardClick).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("pause toggle", () => {
+    it("calls onTogglePause when Pause clicked on an unpaused backlog task", () => {
+      const onTogglePause = vi.fn();
+      render(<TaskCard task={mockTask} onClick={vi.fn()} onTogglePause={onTogglePause} />);
+      fireEvent.click(screen.getByLabelText("Pause task"));
+      expect(onTogglePause).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows Resume label and calls onTogglePause when paused", () => {
+      const onTogglePause = vi.fn();
+      render(
+        <TaskCard
+          task={{ ...mockTask, paused: true }}
+          onClick={vi.fn()}
+          onTogglePause={onTogglePause}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText("Resume task"));
+      expect(onTogglePause).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not render the pause button for non-backlog tasks", () => {
+      render(
+        <TaskCard
+          task={{ ...mockTask, status: "planning" }}
+          onClick={vi.fn()}
+          onTogglePause={vi.fn()}
+        />,
+      );
+      expect(screen.queryByLabelText("Pause task")).toBeNull();
+      expect(screen.queryByLabelText("Resume task")).toBeNull();
+    });
+  });
 });

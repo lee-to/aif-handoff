@@ -50,6 +50,30 @@ describe("codex model discovery process helpers", () => {
     expect(result.droppedDisallowedPrefixKeys).toContain("npm_config_registry");
   });
 
+  it("forwards HTTP(S)_PROXY / NO_PROXY env vars (both cases) for closed-network builds", () => {
+    vi.stubEnv("HTTP_PROXY", "http://proxy.example.com:8080");
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example.com:8080");
+    vi.stubEnv("NO_PROXY", "localhost,127.0.0.1,api,agent");
+    vi.stubEnv("http_proxy", "http://proxy.example.com:8080");
+    vi.stubEnv("https_proxy", "http://proxy.example.com:8080");
+    vi.stubEnv("no_proxy", "localhost,127.0.0.1,api,agent");
+
+    const result = buildCodexAppServerDiscoveryEnvWithStats(
+      createModelDiscoveryInput({
+        baseUrl: "https://runtime.example.com/v1",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        apiKey: "sk-input",
+      }),
+    );
+
+    expect(result.env.HTTP_PROXY).toBe("http://proxy.example.com:8080");
+    expect(result.env.HTTPS_PROXY).toBe("http://proxy.example.com:8080");
+    expect(result.env.NO_PROXY).toBe("localhost,127.0.0.1,api,agent");
+    expect(result.env.http_proxy).toBe("http://proxy.example.com:8080");
+    expect(result.env.https_proxy).toBe("http://proxy.example.com:8080");
+    expect(result.env.no_proxy).toBe("localhost,127.0.0.1,api,agent");
+  });
+
   it("resolves discovery executable from options/env/defaults", () => {
     expect(
       resolveDiscoveryExecutable(

@@ -4,6 +4,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: api
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "127.0.0.1:3009:3009"
     env_file: .env
@@ -47,6 +51,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: web
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
@@ -91,6 +99,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: agent
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     env_file: .env
     environment:
       - DATABASE_URL=/data/aif.sqlite
@@ -124,6 +136,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: mcp
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "127.0.0.1:3100:3100"
     env_file: .env

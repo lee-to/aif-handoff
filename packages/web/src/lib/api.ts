@@ -20,6 +20,15 @@ import type {
   UpdateRuntimeProfileInput,
 } from "@aif/shared/browser";
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export interface AifConfig {
   language?: {
     ui?: string;
@@ -138,7 +147,7 @@ async function request<T>(
         message = firstFieldError[0] ?? null;
       }
     }
-    throw new Error(message ?? `HTTP ${res.status}`);
+    throw new ApiError(message ?? `HTTP ${res.status}`, res.status);
   }
 
   return res.json();

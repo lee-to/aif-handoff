@@ -254,6 +254,24 @@ describe("processAutoQueueAdvance", () => {
     });
   });
 
+  describe("CAS race protection", () => {
+    it("scheduler and auto-queue cannot double-advance the same task in one cycle", () => {
+      seedProject("race", { autoQueue: true, parallel: false });
+      const past = new Date(Date.now() - 60_000).toISOString();
+      // Single task that is BOTH due and the next backlog item by position.
+      seedTask("solo", "race", 100, { scheduledAt: past });
+
+      const fired = processDueScheduledTasks();
+      const advanced = processAutoQueueAdvance();
+
+      // Scheduler claimed it; auto-queue saw it as already in flight.
+      expect(fired).toBe(1);
+      expect(advanced).toBe(0);
+      expect(findTaskById("solo")?.status).toBe("planning");
+      expect(findTaskById("solo")?.scheduledAt).toBeNull();
+    });
+  });
+
   describe("toggle path", () => {
     it("setAutoQueueMode controls whether the project is processed", () => {
       seedProject("toggle", { autoQueue: false });

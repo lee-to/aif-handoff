@@ -57,6 +57,7 @@ const {
   nextBacklogTaskByPosition,
   listAutoQueueProjects,
   countActivePipelineTasksForProject,
+  claimBacklogTaskForAdvance,
 } = await import("../index.js");
 
 function seedProject(id = "proj-1") {
@@ -1089,6 +1090,40 @@ describe("data layer", () => {
       updateTaskStatus(d!.id, "done");
       expect(countActivePipelineTasksForProject("proj-1")).toBe(2);
       expect(a).toBeDefined();
+    });
+
+    it("claimBacklogTaskForAdvance returns true exactly once and is idempotent on retries", () => {
+      const t = createTask({ projectId: "proj-1", title: "Race", description: "" });
+      const first = claimBacklogTaskForAdvance(t!.id);
+      const second = claimBacklogTaskForAdvance(t!.id);
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      expect(findTaskById(t!.id)?.status).toBe("planning");
+    });
+
+    it("claimBacklogTaskForAdvance refuses paused tasks", () => {
+      const t = createTask({ projectId: "proj-1", title: "P", description: "" });
+      setTaskFields(t!.id, { paused: true });
+      expect(claimBacklogTaskForAdvance(t!.id)).toBe(false);
+      expect(findTaskById(t!.id)?.status).toBe("backlog");
+    });
+
+    it("claimBacklogTaskForAdvance refuses non-backlog tasks", () => {
+      const t = createTask({ projectId: "proj-1", title: "P", description: "" });
+      updateTaskStatus(t!.id, "planning");
+      expect(claimBacklogTaskForAdvance(t!.id)).toBe(false);
+    });
+
+    it("claimBacklogTaskForAdvance clears scheduledAt in the same write", () => {
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const t = createTask({
+        projectId: "proj-1",
+        title: "S",
+        description: "",
+        scheduledAt: future,
+      });
+      expect(claimBacklogTaskForAdvance(t!.id)).toBe(true);
+      expect(findTaskById(t!.id)?.scheduledAt).toBeNull();
     });
 
     it("countActivePipelineTasksForProject includes blocked_external", () => {

@@ -155,6 +155,33 @@ describe("tasks API", () => {
       expect(res.status).toBe(400);
     });
 
+    it("normalizes non-UTC scheduledAt to UTC Z form", async () => {
+      // +03:00 offset, 2 hours in the future as UTC instant
+      const future = new Date(Date.now() + 2 * 60 * 60_000);
+      const yyyy = future.getUTCFullYear();
+      const mm = String(future.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(future.getUTCDate()).padStart(2, "0");
+      // Express the same instant with +03:00 offset (UTC+3)
+      const utcHour = future.getUTCHours();
+      const localHour = (utcHour + 3) % 24;
+      const offsetIso = `${yyyy}-${mm}-${dd}T${String(localHour).padStart(2, "0")}:${String(future.getUTCMinutes()).padStart(2, "0")}:00+03:00`;
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "TZ",
+          projectId: "test-project",
+          scheduledAt: offsetIso,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      // Must be normalized to UTC Z so DB lexical compare matches instant compare
+      expect(body.scheduledAt).toMatch(/Z$/);
+      expect(new Date(body.scheduledAt).getTime()).toBe(new Date(offsetIso).getTime());
+    });
+
     it("PUT allows null to clear scheduledAt", async () => {
       const future = new Date(Date.now() + 3_600_000).toISOString();
       const created = await (

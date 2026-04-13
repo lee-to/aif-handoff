@@ -2,21 +2,23 @@ import { z } from "zod";
 import { TASK_EVENTS, TASK_STATUSES, getEnv } from "@aif/shared";
 
 /**
- * ISO-8601 datetime, must represent a future instant at parse time.
+ * ISO-8601 datetime accepted with any offset, but **normalized to UTC `Z`**
+ * before storage. We compare `scheduledAt` as TEXT in the DB (`<=` against
+ * `new Date().toISOString()`), and lexical string compare only matches
+ * instant compare when both sides use the same UTC `Z` form. Without
+ * normalization, `+03:00` values would silently never trigger.
+ *
  * `null` is allowed to clear a previously-set schedule.
- * We use a `datetime()` check + a refinement that parses and compares to now;
- * the parse catches invalid strings, the refinement catches past timestamps.
+ * Past timestamps are rejected here so the scheduler is never asked to
+ * fire something already overdue.
  */
 export const scheduledAtSchema = z
   .string()
-  .datetime({ offset: true, message: "scheduledAt must be ISO-8601 UTC" })
-  .refine(
-    (s) => {
-      const t = Date.parse(s);
-      return Number.isFinite(t) && t > Date.now();
-    },
-    { message: "scheduledAt must be a future timestamp" },
-  )
+  .datetime({ offset: true, message: "scheduledAt must be ISO-8601" })
+  .transform((s) => new Date(s).toISOString())
+  .refine((iso) => Date.parse(iso) > Date.now(), {
+    message: "scheduledAt must be a future timestamp",
+  })
   .nullable()
   .optional();
 

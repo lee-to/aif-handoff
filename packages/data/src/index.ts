@@ -778,6 +778,41 @@ export function claimTask(taskId: string, coordinatorId: string, lockDurationMs:
 
 /** Check if any task in a project is currently locked (active, non-expired). */
 /**
+ * Conditional advance from `backlog` to `planning`. Returns `true` only if
+ * the row was actually updated — i.e. the task was still in `backlog` and
+ * not paused at the moment of the write. This is the CAS that prevents two
+ * coordinator passes (auto-queue + scheduler, or two replicas) from racing
+ * the same task through the transition twice. Callers that observe `false`
+ * must skip the task without further side effects (no broadcast, no log
+ * entry).
+ *
+ * Clears `scheduledAt` in the same write so the scheduler can't re-fire a
+ * task that auto-queue already advanced (or vice versa).
+ */
+export function claimBacklogTaskForAdvance(taskId: string): boolean {
+  const nowIso = new Date().toISOString();
+  const result = getDb()
+    .update(tasks)
+    .set({
+      status: "planning",
+      scheduledAt: null,
+      blockedReason: null,
+      blockedFromStatus: null,
+      retryAfter: null,
+      retryCount: 0,
+      reworkRequested: false,
+      reviewIterationCount: 0,
+      manualReviewRequired: false,
+      autoReviewStateJson: null,
+      lastHeartbeatAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .where(and(eq(tasks.id, taskId), eq(tasks.status, "backlog"), eq(tasks.paused, false)))
+    .run();
+  return result.changes > 0;
+}
+
+/**
  * Count tasks the auto-queue must consider "still in flight" before advancing
  * the next backlog item. Includes blocked_external so retry-cycles don't
  * cause the pool to overshoot. Excludes terminal (done/verified) and the

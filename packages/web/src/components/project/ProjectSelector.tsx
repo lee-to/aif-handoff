@@ -166,7 +166,10 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
         },
       );
     } else if (editingId) {
-      const previousAutoQueue = selected?.autoQueueMode ?? false;
+      // Look up the project being edited, NOT the currently selected one —
+      // edit dialog can be opened for a non-selected project from the picker.
+      const editingProject = projects?.find((p) => p.id === editingId);
+      const previousAutoQueue = editingProject?.autoQueueMode ?? false;
       updateProject.mutate(
         {
           id: editingId,

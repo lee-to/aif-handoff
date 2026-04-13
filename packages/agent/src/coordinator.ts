@@ -7,11 +7,11 @@ import {
   releaseStaleTaskClaims,
   updateTaskStatus as updateTaskStatusRow,
   listDueScheduledTasks,
-  clearScheduledAt,
   appendTaskActivityLog,
   listAutoQueueProjects,
   nextBacklogTaskByPosition,
   countActivePipelineTasksForProject,
+  claimBacklogTaskForAdvance,
   type CoordinatorStage,
   type TaskFieldsPatch,
   type TaskRow,
@@ -412,22 +412,26 @@ export function processDueScheduledTasks(): number {
   let fired = 0;
   for (const task of due) {
     try {
-      // Transition backlog → planning using the same patch as start_ai,
-      // and clear scheduledAt in the same write so we don't re-fire.
-      updateTaskStatus(
-        task.id,
-        "planning",
-        { ...CLEAN_STATE_RESET, scheduledAt: null },
-        { title: task.title, fromStatus: task.status },
-      );
-      // Defensive: ensure scheduledAt is cleared even if a race modified the
-      // row between list and update. cheap idempotent write.
-      clearScheduledAt(task.id);
+      // CAS-style claim: only proceed if the row is still backlog+unpaused
+      // at the moment of the write. Prevents racing with auto-queue or with
+      // a parallel coordinator instance.
+      if (!claimBacklogTaskForAdvance(task.id)) {
+        log.debug({ taskId: task.id }, "Scheduler: task no longer backlog/unpaused, skipped");
+        continue;
+      }
       appendTaskActivityLog(
         task.id,
         `[${nowIso}] [scheduler] Fired scheduled task (was due at ${task.scheduledAt})`,
       );
       void notifyTaskBroadcast(task.id, "task:scheduled_fired", {
+        title: task.title,
+        fromStatus: task.status,
+        toStatus: "planning",
+      });
+      // Mirror the standard status broadcast that updateTaskStatus would
+      // have sent, so kanban columns re-render through the existing
+      // task:moved code path (and Telegram fires for the transition).
+      void notifyTaskBroadcast(task.id, "task:moved", {
         title: task.title,
         fromStatus: task.status,
         toStatus: "planning",
@@ -497,12 +501,24 @@ export function processAutoQueueAdvance(): number {
 
       const nowIso = new Date().toISOString();
       try {
-        updateTaskStatus(
-          next.id,
-          "planning",
-          { ...CLEAN_STATE_RESET, scheduledAt: null },
-          { title: next.title, fromStatus: next.status },
-        );
+        // CAS-style claim: only proceed if the row is still backlog+unpaused.
+        // If false, another pass (scheduler / parallel coordinator / human
+        // start_ai click) won the race — re-read pool counters and continue.
+        if (!claimBacklogTaskForAdvance(next.id)) {
+          log.debug(
+            { taskId: next.id, projectId: project.id },
+            "Auto-queue: task no longer backlog/unpaused, skipped",
+          );
+          active = countActivePipelineTasksForProject(project.id);
+          continue;
+        }
+        // Mirror the broadcast that updateTaskStatus would have produced for
+        // the backlog → planning transition (CAS write skips it).
+        void notifyTaskBroadcast(next.id, "task:moved", {
+          title: next.title,
+          fromStatus: next.status,
+          toStatus: "planning",
+        });
         appendTaskActivityLog(
           next.id,
           `[${nowIso}] [auto-queue] Advanced by project auto-queue mode (pool ${active + 1}/${limit})`,

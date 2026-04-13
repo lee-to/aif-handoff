@@ -211,9 +211,14 @@ The advance step:
 4. The fill loop runs in a single tick so a parallel project can start its
    full pool without waiting for additional poll cycles.
 
-Auto-queue and scheduled execution compose cleanly: a due scheduled task fires
-first; if none is due, auto-queue advances the next backlog item up to the
-project's pool depth.
+Auto-queue and scheduled execution compose in the same poll cycle:
+`processDueScheduledTasks()` runs first and fires every backlog task whose
+`scheduledAt` is due, then `processAutoQueueAdvance()` runs and **tops up the
+remaining pool slots**. Order matters because once the scheduler advances a
+task, it counts as in-flight and reduces how many slots auto-queue still
+needs to fill. Both passes use the same atomic `claimBacklogTaskForAdvance`
+write so a row is moved out of `backlog` exactly once even when both passes
+target the same task in the same cycle.
 
 ## Roadmap Import
 

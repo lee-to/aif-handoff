@@ -1,6 +1,27 @@
 import { z } from "zod";
 import { TASK_EVENTS, TASK_STATUSES, getEnv } from "@aif/shared";
 
+/**
+ * ISO-8601 datetime accepted with any offset, but **normalized to UTC `Z`**
+ * before storage. We compare `scheduledAt` as TEXT in the DB (`<=` against
+ * `new Date().toISOString()`), and lexical string compare only matches
+ * instant compare when both sides use the same UTC `Z` form. Without
+ * normalization, `+03:00` values would silently never trigger.
+ *
+ * `null` is allowed to clear a previously-set schedule.
+ * Past timestamps are rejected here so the scheduler is never asked to
+ * fire something already overdue.
+ */
+export const scheduledAtSchema = z
+  .string()
+  .datetime({ offset: true, message: "scheduledAt must be ISO-8601" })
+  .transform((s) => new Date(s).toISOString())
+  .refine((iso) => Date.parse(iso) > Date.now(), {
+    message: "scheduledAt must be a future timestamp",
+  })
+  .nullable()
+  .optional();
+
 const taskAttachmentSchema = z.object({
   name: z.string().min(1).max(500),
   mimeType: z.string().max(200),
@@ -50,6 +71,7 @@ export const createTaskSchema = z.object({
   runtimeOptions: z.record(z.string(), z.unknown()).nullable().optional(),
   roadmapAlias: z.string().max(200).optional(),
   tags: z.array(z.string().max(100)).max(50).default([]),
+  scheduledAt: scheduledAtSchema,
 });
 
 export const updateTaskSchema = z.object({
@@ -82,6 +104,7 @@ export const updateTaskSchema = z.object({
   runtimeProfileId: z.string().min(1).nullable().optional(),
   modelOverride: z.string().max(200).nullable().optional(),
   runtimeOptions: z.record(z.string(), z.unknown()).nullable().optional(),
+  scheduledAt: scheduledAtSchema,
 });
 
 export const taskEventSchema = z.object({
@@ -100,7 +123,18 @@ export const reorderTaskSchema = z.object({
 });
 
 export const broadcastTaskSchema = z.object({
-  type: z.enum(["task:updated", "task:moved", "task:activity"]).default("task:updated"),
+  type: z
+    .enum(["task:updated", "task:moved", "task:activity", "task:scheduled_fired"])
+    .default("task:updated"),
+});
+
+export const autoQueueModeSchema = z.object({
+  enabled: z.boolean(),
+});
+
+export const broadcastProjectSchema = z.object({
+  type: z.enum(["project:auto_queue_mode_changed", "project:auto_queue_advanced"]),
+  taskId: z.string().uuid().optional(),
 });
 
 export const roadmapImportSchema = z.object({

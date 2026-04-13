@@ -1,4 +1,5 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent } from "react";
+import { ChevronUp, ChevronDown, Clock, Pause, Play } from "lucide-react";
 import { STATUS_CONFIG, type Task } from "@aif/shared/browser";
 import { Badge } from "@/components/ui/badge";
 import { TaskTagsList } from "@/components/ui/task-tags-list";
@@ -18,15 +19,37 @@ interface TaskCardProps {
   onClick: () => void;
   overlay?: boolean;
   density?: "comfortable" | "compact";
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  onTogglePause?: () => void;
 }
 
 function shortTaskId(id: string) {
   return id.slice(0, 8);
 }
 
-export function TaskCard({ task, onClick, overlay, density = "comfortable" }: TaskCardProps) {
+export function TaskCard({
+  task,
+  onClick,
+  overlay,
+  density = "comfortable",
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+  onTogglePause,
+}: TaskCardProps) {
   const priority = PRIORITY_LABELS[task.priority] ?? PRIORITY_LABELS[0];
   const isCompact = density === "compact";
+  const showReorder =
+    task.status === "backlog" && (onMoveUp !== undefined || onMoveDown !== undefined);
+  const showPauseToggle = task.status === "backlog" && onTogglePause !== undefined;
+
+  const stop = (e: MouseEvent) => {
+    e.stopPropagation();
+  };
 
   if (overlay) {
     return (
@@ -93,6 +116,78 @@ export function TaskCard({ task, onClick, overlay, density = "comfortable" }: Ta
         isCompact={isCompact}
         className={isCompact ? "mt-0.5 pl-1.5" : "mt-1.5 pl-2"}
       />
+
+      {task.scheduledAt && task.status === "backlog" && (
+        <div className="mt-2 ml-2 flex items-center gap-1.5 border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-3xs text-sky-700 dark:text-sky-300">
+          <Clock className="h-3 w-3 shrink-0" />
+          <span>
+            Starts{" "}
+            <span className="font-medium">
+              {new Date(task.scheduledAt).toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+          </span>
+        </div>
+      )}
+
+      {(showReorder || showPauseToggle) && (
+        <div className="mt-2 ml-2 flex items-center gap-1">
+          {showReorder && (
+            <>
+              <button
+                type="button"
+                aria-label="Move task up"
+                disabled={!canMoveUp}
+                onClick={(e) => {
+                  stop(e);
+                  onMoveUp?.();
+                }}
+                className="flex h-5 w-5 items-center justify-center border border-border bg-secondary/50 text-muted-foreground transition hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronUp className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                aria-label="Move task down"
+                disabled={!canMoveDown}
+                onClick={(e) => {
+                  stop(e);
+                  onMoveDown?.();
+                }}
+                className="flex h-5 w-5 items-center justify-center border border-border bg-secondary/50 text-muted-foreground transition hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </>
+          )}
+          {showPauseToggle && (
+            <button
+              type="button"
+              aria-label={task.paused ? "Resume task" : "Pause task"}
+              title={
+                task.paused
+                  ? "Paused — auto-queue and scheduler will skip this task. Click to resume."
+                  : "Pause — exclude from auto-queue and scheduled execution"
+              }
+              onClick={(e) => {
+                stop(e);
+                onTogglePause?.();
+              }}
+              className={`flex h-5 w-5 items-center justify-center border transition ${
+                task.paused
+                  ? "border-yellow-500/50 bg-yellow-500/15 text-yellow-700 dark:text-yellow-300"
+                  : "border-border bg-secondary/50 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {task.paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+            </button>
+          )}
+        </div>
+      )}
 
       {task.status === "blocked_external" && task.blockedReason && (
         <div className="mt-2 ml-2 border border-red-500/30 bg-red-500/10 px-2 py-1 text-3xs text-red-300 line-clamp-2">

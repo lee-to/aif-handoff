@@ -194,6 +194,39 @@ DELETE /projects/:id
 { "success": true }
 ```
 
+### Get Auto-Queue Mode
+
+```
+GET /projects/:id/auto-queue-mode
+```
+
+Returns the current auto-queue state for the project. When enabled, the
+coordinator advances the next backlog task (by `position`) into planning
+whenever the project has no active/locked task.
+
+**Response:** `200 OK`
+
+```json
+{ "enabled": true }
+```
+
+### Toggle Auto-Queue Mode
+
+```
+PATCH /projects/:id/auto-queue-mode
+```
+
+**Body:** `{ "enabled": boolean }`
+
+Broadcasts `project:auto_queue_mode_changed` over WebSocket so connected
+clients can update their board indicator.
+
+**Response:** `200 OK`
+
+```json
+{ "enabled": true }
+```
+
 ### Get Project MCP Config
 
 ```
@@ -258,6 +291,7 @@ POST /tasks
 | `useSubagents` | boolean | no | `true` | Run via custom subagents (`plan-coordinator`, `implement-coordinator`, sidecars). `false` uses `aif-*` skills directly |
 | `roadmapAlias` | string | no | `null` | Roadmap alias for grouping (e.g., `v1.0`) |
 | `tags` | string[] | no | `[]` | Tags for filtering/categorization (max 50, each max 100 chars) |
+| `scheduledAt` | string \| null | no | `null` | ISO-8601 UTC timestamp. If set, the coordinator fires the task into planning at that time. Must be in the future; `null` clears it. Accepted on both create and update. |
 
 **Attachment object:**
 | Field | Type | Description |
@@ -594,20 +628,23 @@ All events are JSON with this structure:
 }
 ```
 
-| Event                 | Payload                             | Triggered By                                                                         |
-| --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `project:created`     | Full project object                 | `POST /projects`                                                                     |
-| `task:created`        | Full task object                    | `POST /tasks`, `POST /projects/:id/roadmap/import`                                   |
-| `task:updated`        | Full task object                    | `PUT /tasks/:id`, `PATCH /tasks/:id/position`, `POST /tasks/:id/events` (`fast_fix`) |
-| `task:moved`          | Full task object                    | `POST /tasks/:id/events`                                                             |
-| `task:deleted`        | `{ id: string }`                    | `DELETE /tasks/:id`                                                                  |
-| `sync:task_created`   | Full task object                    | MCP `handoff_create_task`                                                            |
-| `sync:task_updated`   | Full task object                    | MCP `handoff_update_task`, `handoff_push_plan`                                       |
-| `sync:status_changed` | Full task object                    | MCP `handoff_sync_status`                                                            |
-| `sync:plan_pushed`    | Full task object                    | MCP `handoff_push_plan`                                                              |
-| `chat:token`          | `{ conversationId, token }`         | `POST /chat` — streaming response tokens                                             |
-| `chat:done`           | `{ conversationId }`                | `POST /chat` — stream completed                                                      |
-| `chat:error`          | `{ conversationId, message, code }` | `POST /chat` — error during streaming                                                |
+| Event                             | Payload                             | Triggered By                                                                         |
+| --------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
+| `project:created`                 | Full project object                 | `POST /projects`                                                                     |
+| `task:created`                    | Full task object                    | `POST /tasks`, `POST /projects/:id/roadmap/import`                                   |
+| `task:updated`                    | Full task object                    | `PUT /tasks/:id`, `PATCH /tasks/:id/position`, `POST /tasks/:id/events` (`fast_fix`) |
+| `task:moved`                      | Full task object                    | `POST /tasks/:id/events`                                                             |
+| `task:deleted`                    | `{ id: string }`                    | `DELETE /tasks/:id`                                                                  |
+| `sync:task_created`               | Full task object                    | MCP `handoff_create_task`                                                            |
+| `sync:task_updated`               | Full task object                    | MCP `handoff_update_task`, `handoff_push_plan`                                       |
+| `sync:status_changed`             | Full task object                    | MCP `handoff_sync_status`                                                            |
+| `sync:plan_pushed`                | Full task object                    | MCP `handoff_push_plan`                                                              |
+| `chat:token`                      | `{ conversationId, token }`         | `POST /chat` — streaming response tokens                                             |
+| `chat:done`                       | `{ conversationId }`                | `POST /chat` — stream completed                                                      |
+| `chat:error`                      | `{ conversationId, message, code }` | `POST /chat` — error during streaming                                                |
+| `task:scheduled_fired`            | Full task object                    | Coordinator fires a backlog task whose `scheduledAt` is due                          |
+| `project:auto_queue_mode_changed` | Full project object                 | `PATCH /projects/:id/auto-queue-mode`                                                |
+| `project:auto_queue_advanced`     | `{ id: string }` (task id)          | Coordinator auto-advances the next backlog task in an auto-queue project             |
 
 ### Connection
 

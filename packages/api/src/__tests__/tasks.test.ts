@@ -111,6 +111,98 @@ describe("tasks API", () => {
     });
   });
 
+  describe("POST /tasks scheduledAt", () => {
+    it("accepts a future ISO-8601 scheduledAt", async () => {
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Scheduled",
+          projectId: "test-project",
+          scheduledAt: future,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.scheduledAt).toBe(future);
+    });
+
+    it("rejects a past scheduledAt with 400", async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Past",
+          projectId: "test-project",
+          scheduledAt: past,
+        }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects a non-ISO-8601 scheduledAt", async () => {
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Garbage",
+          projectId: "test-project",
+          scheduledAt: "tomorrow",
+        }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("normalizes non-UTC scheduledAt to UTC Z form", async () => {
+      // +03:00 offset, 2 hours in the future as UTC instant
+      const future = new Date(Date.now() + 2 * 60 * 60_000);
+      const yyyy = future.getUTCFullYear();
+      const mm = String(future.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(future.getUTCDate()).padStart(2, "0");
+      // Express the same instant with +03:00 offset (UTC+3)
+      const utcHour = future.getUTCHours();
+      const localHour = (utcHour + 3) % 24;
+      const offsetIso = `${yyyy}-${mm}-${dd}T${String(localHour).padStart(2, "0")}:${String(future.getUTCMinutes()).padStart(2, "0")}:00+03:00`;
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "TZ",
+          projectId: "test-project",
+          scheduledAt: offsetIso,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      // Must be normalized to UTC Z so DB lexical compare matches instant compare
+      expect(body.scheduledAt).toMatch(/Z$/);
+      expect(new Date(body.scheduledAt).getTime()).toBe(new Date(offsetIso).getTime());
+    });
+
+    it("PUT allows null to clear scheduledAt", async () => {
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      const created = await (
+        await app.request("/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "S", projectId: "test-project", scheduledAt: future }),
+        })
+      ).json();
+
+      const res = await app.request(`/tasks/${created.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduledAt: null }),
+      });
+      expect(res.status).toBe(200);
+      const updated = await res.json();
+      expect(updated.scheduledAt).toBeNull();
+    });
+  });
+
   describe("POST /tasks", () => {
     it("should create a task", async () => {
       const res = await app.request("/tasks", {
@@ -1503,6 +1595,33 @@ describe("tasks API", () => {
       });
 
       expect(res.status).toBe(404);
+    });
+
+    it("does not bump updatedAt — reorder is metadata, not content", async () => {
+      const db = testDb.current;
+      const frozen = "2026-01-01T00:00:00.000Z";
+      db.insert(tasks)
+        .values({
+          id: "pos-keep-ts",
+          projectId: "test-project",
+          title: "Keep updatedAt",
+          position: 2000,
+          createdAt: frozen,
+          updatedAt: frozen,
+        })
+        .run();
+
+      const res = await app.request("/tasks/pos-keep-ts/position", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ position: 1500 }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.position).toBe(1500);
+      // updatedAt must remain unchanged — list views sorted by "updated" stay stable
+      expect(body.updatedAt).toBe(frozen);
     });
   });
 

@@ -32,6 +32,26 @@ export function useUpdateProject() {
   });
 }
 
+export function useAutoQueueMode(projectId: string | null) {
+  return useQuery<{ enabled: boolean }>({
+    queryKey: ["autoQueueMode", projectId],
+    queryFn: () => api.getAutoQueueMode(projectId!),
+    enabled: Boolean(projectId),
+  });
+}
+
+export function useSetAutoQueueMode() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api.setAutoQueueMode(id, enabled),
+    onSuccess: (_, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["autoQueueMode", id] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
 export function useCreateProject() {
   const queryClient = useQueryClient();
   return useMutation({

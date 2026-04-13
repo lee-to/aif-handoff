@@ -13,6 +13,7 @@ export const projects = sqliteTable("projects", {
   implementerMaxBudgetUsd: real("implementer_max_budget_usd"),
   reviewSidecarMaxBudgetUsd: real("review_sidecar_max_budget_usd"),
   parallelEnabled: integer("parallel_enabled", { mode: "boolean" }).notNull().default(false),
+  autoQueueMode: integer("auto_queue_mode", { mode: "boolean" }).notNull().default(false),
   defaultTaskRuntimeProfileId: text("default_task_runtime_profile_id"),
   defaultPlanRuntimeProfileId: text("default_plan_runtime_profile_id"),
   defaultReviewRuntimeProfileId: text("default_review_runtime_profile_id"),
@@ -81,6 +82,7 @@ export const tasks = sqliteTable("tasks", {
   sessionId: text("session_id"),
   lockedBy: text("locked_by"),
   lockedUntil: text("locked_until"),
+  scheduledAt: text("scheduled_at"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),

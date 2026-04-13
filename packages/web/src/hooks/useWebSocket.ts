@@ -153,6 +153,16 @@ export function useWebSocket() {
         return;
       }
 
+      // Project auto-queue toggle changed somewhere — refresh the projects
+      // list so the Switch in the project settings dialog stays in sync.
+      if (data.type === "project:auto_queue_mode_changed") {
+        queryClient.invalidateQueries({ queryKey: ["projects"] });
+        if (hasIdPayload(data.payload)) {
+          queryClient.invalidateQueries({ queryKey: ["autoQueueMode", data.payload.id] });
+        }
+        return;
+      }
+
       if (data.type === "task:deleted" && hasIdPayload(data.payload)) {
         statusCacheRef.current.delete(data.payload.id);
         // Remove the individual task query from cache instead of invalidating

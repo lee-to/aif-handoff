@@ -1,7 +1,7 @@
 import type { Task, TaskEvent, TaskStatus } from "@aif/shared/browser";
 import { STATUS_CONFIG } from "@aif/shared/browser";
 import { statusColorStyle } from "@/hooks/useStatusColor";
-import { Pause, Play } from "lucide-react";
+import { Pause, Play, Clock } from "lucide-react";
 import { SheetHeader, SheetTitle, SheetClose } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { TaskTagsList } from "@/components/ui/task-tags-list";
@@ -78,7 +78,10 @@ export function TaskDetailHeader({
   const visibleActions = (ACTION_BUTTONS_BY_STATUS[task.status] ?? []).filter(
     (action) => action.visible?.(task) ?? true,
   );
-  const showPauseButton = !["backlog", "done", "verified"].includes(task.status);
+  // Pause is also shown in `backlog` so users can park a task that auto-queue
+  // would otherwise advance — paused backlog tasks are skipped by both the
+  // scheduler and the auto-queue advancer.
+  const showPauseButton = !["done", "verified"].includes(task.status);
 
   return (
     <div className="border-b border-border p-6 pb-4 pr-14">
@@ -111,6 +114,15 @@ export function TaskDetailHeader({
           )}
           <TaskTagsList tags={task.tags} roadmapAlias={task.roadmapAlias ?? undefined} />
         </div>
+        {task.scheduledAt && task.status === "backlog" && (
+          <div className="mb-2 inline-flex items-center gap-1.5 border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-xs text-sky-700 dark:text-sky-300">
+            <Clock className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Scheduled to start{" "}
+              <span className="font-medium">{new Date(task.scheduledAt).toLocaleString()}</span>
+            </span>
+          </div>
+        )}
         <div className="mb-2 flex flex-wrap gap-1.5">
           <Badge variant="outline" size="sm">
             in: {formatTokenCount(task.tokenInput)}

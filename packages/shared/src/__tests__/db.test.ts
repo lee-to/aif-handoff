@@ -282,7 +282,7 @@ describe("db", () => {
       expect(taskColumns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["manual_review_required", "auto_review_state_json"]),
       );
-      expect(userVersion).toBe(11);
+      expect(userVersion).toBe(12);
     } finally {
       closeDb();
       rmSync(dbPath, { force: true });

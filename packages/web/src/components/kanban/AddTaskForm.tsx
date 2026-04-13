@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useCreateTask } from "@/hooks/useTasks";
 import { useKeyboardShortcut } from "@/hooks/useKeyboardShortcut";
@@ -36,6 +37,7 @@ export function AddTaskForm({ projectId }: Props) {
   const [runtimeProfileId, setRuntimeProfileId] = useState("");
   const [modelOverride, setModelOverride] = useState("");
   const [runtimeOverrideOpen, setRuntimeOverrideOpen] = useState(false);
+  const [priority, setPriority] = useState(0);
   const createTask = useCreateTask();
 
   // Track whether the user has manually edited the plan path field.
@@ -84,6 +86,7 @@ export function AddTaskForm({ projectId }: Props) {
     setPlanPath(defaultPlanPath);
     setRuntimeProfileId("");
     setModelOverride("");
+    setPriority(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncGen]);
 
@@ -142,6 +145,7 @@ export function AddTaskForm({ projectId }: Props) {
         maxReviewIterations,
         runtimeProfileId: runtimeProfileId || null,
         modelOverride: modelOverride.trim() || null,
+        priority,
       },
       {
         onSuccess: () => {
@@ -159,6 +163,7 @@ export function AddTaskForm({ projectId }: Props) {
           setMaxReviewIterations(maxReviewIterationsDefault);
           setRuntimeProfileId("");
           setModelOverride("");
+          setPriority(0);
           userOverride.current = false;
           setIsOpen(false);
         },
@@ -250,6 +255,23 @@ export function AddTaskForm({ projectId }: Props) {
             }
           </span>
         </label>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">Priority</span>
+          <Select
+            selectSize="sm"
+            value={String(priority)}
+            onChange={(e) => setPriority(Number(e.target.value))}
+            options={[
+              { value: "0", label: "None" },
+              { value: "1", label: "Low" },
+              { value: "2", label: "Medium" },
+              { value: "3", label: "High" },
+              { value: "4", label: "Urgent" },
+              { value: "5", label: "Critical" },
+            ]}
+            className="w-32"
+          />
+        </div>
       </div>
       {!isFix && (
         <div className="space-y-2">
@@ -387,6 +409,7 @@ export function AddTaskForm({ projectId }: Props) {
             setMaxReviewIterations(maxReviewIterationsDefault);
             setRuntimeProfileId("");
             setModelOverride("");
+            setPriority(0);
             userOverride.current = false;
           }}
         >

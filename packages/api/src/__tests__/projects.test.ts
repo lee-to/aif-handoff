@@ -298,4 +298,42 @@ describe("projects API", () => {
     expect(refetched.defaultPlanRuntimeProfileId).toBe("profile-plan");
     expect(refetched.defaultReviewRuntimeProfileId).toBe("profile-review");
   });
+
+  describe("auto-queue mode", () => {
+    beforeEach(() => {
+      testDb.current.insert(projects).values({ id: "p-1", name: "P1", rootPath: "/tmp/p1" }).run();
+    });
+
+    it("GET returns disabled by default", async () => {
+      const res = await app.request("/projects/p-1/auto-queue-mode");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ enabled: false });
+    });
+
+    it("PATCH toggles and persists", async () => {
+      const res = await app.request("/projects/p-1/auto-queue-mode", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ enabled: true });
+      const get = await app.request("/projects/p-1/auto-queue-mode");
+      expect(await get.json()).toEqual({ enabled: true });
+    });
+
+    it("PATCH rejects invalid body", async () => {
+      const res = await app.request("/projects/p-1/auto-queue-mode", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: "yes" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 404 for unknown project", async () => {
+      const res = await app.request("/projects/missing/auto-queue-mode");
+      expect(res.status).toBe(404);
+    });
+  });
 });

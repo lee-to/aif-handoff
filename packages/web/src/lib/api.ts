@@ -172,6 +172,19 @@ export const api = {
     });
   },
 
+  getAutoQueueMode(id: string): Promise<{ enabled: boolean }> {
+    console.debug("[api] GET /projects/%s/auto-queue-mode", id);
+    return request<{ enabled: boolean }>(`/projects/${id}/auto-queue-mode`);
+  },
+
+  setAutoQueueMode(id: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    console.debug("[api] PATCH /projects/%s/auto-queue-mode", id, enabled);
+    return request<{ enabled: boolean }>(`/projects/${id}/auto-queue-mode`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
   deleteProject(id: string): Promise<void> {
     console.debug("[api] DELETE /projects/%s", id);
     return request(`/projects/${id}`, { method: "DELETE" });

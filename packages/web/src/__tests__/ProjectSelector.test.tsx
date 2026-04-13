@@ -36,6 +36,10 @@ vi.mock("@/hooks/useProjects", () => ({
   useDeleteProject: () => ({
     mutate: mutateDeleteProject,
   }),
+  useSetAutoQueueMode: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/components/ui/toast", () => ({
@@ -123,5 +127,31 @@ describe("ProjectSelector", () => {
       "error",
       8000,
     );
+  });
+
+  describe("auto-queue toggle", () => {
+    it("renders Auto-Queue Mode switch in create dialog", () => {
+      mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+      render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+      fireEvent.click(screen.getByText("New project"));
+
+      expect(screen.getByText("Auto-Queue Mode")).toBeDefined();
+      expect(
+        screen.getByText(
+          /Sequential projects start the next task only after the previous reaches done/i,
+        ),
+      ).toBeDefined();
+    });
+
+    it("appears alongside Parallel Execution in the same dialog", () => {
+      mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+      render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+      fireEvent.click(screen.getByText("New project"));
+
+      expect(screen.getByText("Parallel Execution")).toBeDefined();
+      expect(screen.getByText("Auto-Queue Mode")).toBeDefined();
+    });
   });
 });

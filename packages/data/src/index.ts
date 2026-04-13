@@ -85,6 +85,7 @@ export type TaskFieldsUpdate = {
   modelOverride?: string | null;
   runtimeOptions?: Record<string, unknown> | null;
   position?: number;
+  scheduledAt?: string | null;
 };
 
 
@@ -416,6 +417,7 @@ export function createTask(input: {
   runtimeOptions?: Record<string, unknown> | null;
   roadmapAlias?: string;
   tags?: string[];
+  scheduledAt?: string | null;
 }): TaskRow | undefined {
   const db = getDb();
   const id = crypto.randomUUID();
@@ -462,6 +464,7 @@ export function createTask(input: {
         input.runtimeOptions === undefined ? null : JSON.stringify(input.runtimeOptions),
       roadmapAlias: input.roadmapAlias ?? null,
       tags: JSON.stringify(input.tags ?? []),
+      scheduledAt: input.scheduledAt ?? null,
       reworkRequested: false,
       manualReviewRequired: false,
       status: "backlog",
@@ -510,6 +513,14 @@ export function updateTask(id: string, fields: TaskFieldsUpdate): TaskRow | unde
   }
   getDb().update(tasks).set(patch).where(eq(tasks.id, id)).run();
   return findTaskById(id);
+}
+
+/**
+ * Write only the `position` column. Does NOT bump `updatedAt` — manual reorder
+ * is metadata, not content, and must not disturb "updated at" sort views.
+ */
+export function updateTaskPositionOnly(id: string, position: number): void {
+  getDb().update(tasks).set({ position }).where(eq(tasks.id, id)).run();
 }
 
 export function setTaskFields(id: string, fields: TaskFieldsPatch): void {
@@ -766,6 +777,61 @@ export function claimTask(taskId: string, coordinatorId: string, lockDurationMs:
 }
 
 /** Check if any task in a project is currently locked (active, non-expired). */
+/**
+ * Conditional advance from `backlog` to `planning`. Returns `true` only if
+ * the row was actually updated — i.e. the task was still in `backlog` and
+ * not paused at the moment of the write. This is the CAS that prevents two
+ * coordinator passes (auto-queue + scheduler, or two replicas) from racing
+ * the same task through the transition twice. Callers that observe `false`
+ * must skip the task without further side effects (no broadcast, no log
+ * entry).
+ *
+ * Clears `scheduledAt` in the same write so the scheduler can't re-fire a
+ * task that auto-queue already advanced (or vice versa).
+ */
+export function claimBacklogTaskForAdvance(taskId: string): boolean {
+  const nowIso = new Date().toISOString();
+  const result = getDb()
+    .update(tasks)
+    .set({
+      status: "planning",
+      scheduledAt: null,
+      blockedReason: null,
+      blockedFromStatus: null,
+      retryAfter: null,
+      retryCount: 0,
+      reworkRequested: false,
+      reviewIterationCount: 0,
+      manualReviewRequired: false,
+      autoReviewStateJson: null,
+      lastHeartbeatAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .where(and(eq(tasks.id, taskId), eq(tasks.status, "backlog"), eq(tasks.paused, false)))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Count tasks the auto-queue must consider "still in flight" before advancing
+ * the next backlog item. Includes blocked_external so retry-cycles don't
+ * cause the pool to overshoot. Excludes terminal (done/verified) and the
+ * source state (backlog).
+ */
+export function countActivePipelineTasksForProject(projectId: string): number {
+  const row = getDb()
+    .select({ cnt: count() })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.projectId, projectId),
+        inArray(tasks.status, ["planning", "plan_ready", "implementing", "review", "blocked_external"]),
+      ),
+    )
+    .get();
+  return row?.cnt ?? 0;
+}
+
 export function hasActiveLockedTaskForProject(projectId: string): boolean {
   const nowIso = new Date().toISOString();
   const row = getDb()
@@ -843,6 +909,99 @@ export function listDueBlockedExternalTasks(nowIso: string): TaskRow[] {
       ),
     )
     .all();
+}
+
+/** Backlog tasks whose `scheduledAt` is due (<= nowIso). Skips paused tasks. */
+export function listDueScheduledTasks(nowIso: string): TaskRow[] {
+  log.debug({ nowIso }, "Scanning for due scheduled tasks");
+  const rows = getDb()
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.status, "backlog"),
+        eq(tasks.paused, false),
+        isNotNull(tasks.scheduledAt),
+        lte(tasks.scheduledAt, nowIso),
+      ),
+    )
+    .all();
+  log.debug({ dueCount: rows.length }, "Due scheduled tasks resolved");
+  return rows;
+}
+
+/** Clear scheduledAt after firing; bumps updatedAt. */
+export function clearScheduledAt(taskId: string): void {
+  log.debug({ taskId }, "Clearing scheduledAt");
+  const nowIso = new Date().toISOString();
+  getDb()
+    .update(tasks)
+    .set({ scheduledAt: null, updatedAt: nowIso })
+    .where(eq(tasks.id, taskId))
+    .run();
+}
+
+/** Set or clear scheduledAt. Caller validates the ISO string upstream. */
+export function updateScheduledAt(taskId: string, scheduledAt: string | null): void {
+  log.debug({ taskId, scheduledAt }, "Updating scheduledAt");
+  const nowIso = new Date().toISOString();
+  getDb()
+    .update(tasks)
+    .set({ scheduledAt, updatedAt: nowIso })
+    .where(eq(tasks.id, taskId))
+    .run();
+}
+
+/** Read the auto-queue flag for a project. Returns false for unknown projects. */
+export function getAutoQueueMode(projectId: string): boolean {
+  const row = getDb()
+    .select({ autoQueueMode: projects.autoQueueMode })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .get();
+  return Boolean(row?.autoQueueMode);
+}
+
+/** Projects with `autoQueueMode = true`. Used by the coordinator's auto-advance pass. */
+export function listAutoQueueProjects(): ProjectRow[] {
+  return getDb().select().from(projects).where(eq(projects.autoQueueMode, true)).all();
+}
+
+/** Toggle the project-level auto-queue flag. */
+export function setAutoQueueMode(projectId: string, enabled: boolean): void {
+  log.info({ projectId, enabled }, "Setting auto-queue mode");
+  const nowIso = new Date().toISOString();
+  getDb()
+    .update(projects)
+    .set({ autoQueueMode: enabled, updatedAt: nowIso })
+    .where(eq(projects.id, projectId))
+    .run();
+}
+
+/**
+ * Next backlog task in a project ordered by `position` ascending.
+ * Skips paused tasks and tasks that still have a future `scheduledAt`
+ * (those belong to the scheduled-task trigger, not the auto-queue advancer).
+ */
+export function nextBacklogTaskByPosition(projectId: string): TaskRow | undefined {
+  const nowIso = new Date().toISOString();
+  return getDb()
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.projectId, projectId),
+        eq(tasks.status, "backlog"),
+        eq(tasks.paused, false),
+        or(
+          isNull(tasks.scheduledAt),
+          lte(tasks.scheduledAt, nowIso),
+        ),
+      ),
+    )
+    .orderBy(asc(tasks.position))
+    .limit(1)
+    .get();
 }
 
 export function listStaleInProgressTasks(): TaskRow[] {

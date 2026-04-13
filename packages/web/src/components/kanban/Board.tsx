@@ -273,7 +273,14 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
               className={isCompact ? "w-48" : "w-52"}
             />
           </div>
-          <TaskListTable tasks={listTasks} isCompact={isCompact} onTaskClick={onTaskClick} />
+          <TaskListTable
+            tasks={listTasks}
+            isCompact={isCompact}
+            onTaskClick={onTaskClick}
+            onReorderBacklog={() => {
+              if (listSort !== "status") setListSort("status");
+            }}
+          />
         </div>
       )}
     </>

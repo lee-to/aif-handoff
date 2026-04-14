@@ -586,4 +586,53 @@ describe("chat API", () => {
       }),
     );
   });
+
+  it("returns 404 when aborting an unknown conversation", async () => {
+    const res = await app.request("/chat/unknown-conversation-id/abort", { method: "POST" });
+    expect(res.status).toBe(404);
+  });
+
+  it("aborts an in-flight chat run and surfaces chat:error with code 'aborted'", async () => {
+    let capturedController: AbortController | undefined;
+    mockAdapterRun.mockImplementation(async (input: RuntimeRunInput) => {
+      capturedController = input.execution?.abortController;
+      // Simulate adapter honoring the AbortController by throwing AbortError
+      await new Promise<void>((_resolve, reject) => {
+        capturedController?.signal.addEventListener("abort", () => {
+          const err = new Error("The operation was aborted");
+          (err as Error & { name: string }).name = "AbortError";
+          reject(err);
+        });
+      });
+      return { outputText: "", sessionId: "runtime-session-1" };
+    });
+
+    const conversationId = crypto.randomUUID();
+    const chatPromise = app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "long task",
+        clientId: "client-1",
+        conversationId,
+      }),
+    });
+
+    // Give the route a tick to register the AbortController before we abort.
+    await new Promise((r) => setTimeout(r, 20));
+    const abortRes = await app.request(`/chat/${conversationId}/abort`, { method: "POST" });
+    expect(abortRes.status).toBe(204);
+
+    const chatRes = await chatPromise;
+    expect(chatRes.status).toBe(409);
+    const body = await chatRes.json();
+    expect(body.code).toBe("aborted");
+
+    expect(
+      mockSendToClient.mock.calls.some(
+        (call) => call[1]?.type === "chat:error" && call[1].payload?.code === "aborted",
+      ),
+    ).toBe(true);
+  });
 });

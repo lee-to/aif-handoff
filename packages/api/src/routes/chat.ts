@@ -156,6 +156,15 @@ function runtimeSourceFromTransport(transport: string): "cli" | "agent" {
   return transport === RuntimeTransport.CLI ? "cli" : "agent";
 }
 
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const asError = err as { name?: string; code?: string; cause?: unknown };
+  if (asError.name === "AbortError") return true;
+  if (asError.code === "ABORT_ERR") return true;
+  if (asError.cause) return isAbortError(asError.cause);
+  return false;
+}
+
 function classifyChatError(err: unknown): {
   status: 429 | 500;
   code: string;
@@ -321,6 +330,16 @@ async function getAdapterForRuntimeId(runtimeId: string): Promise<RuntimeAdapter
 }
 
 export const chatRouter = new Hono();
+
+/**
+ * Per-conversation AbortController registry. Populated before dispatching the
+ * runtime `run`/`resume` call and cleared in the route's finally block.
+ * The `/:conversationId/abort` endpoint looks up the controller and calls
+ * `.abort()`, which propagates through the Claude adapter (AbortController on
+ * SDK query options, `kill()` on the CLI spawn) and surfaces to the client as
+ * `chat:error` with code `"aborted"`.
+ */
+const activeChatRuns = new Map<string, AbortController>();
 
 // ── Session CRUD ───────────────────────────────────────────
 
@@ -687,6 +706,23 @@ chatRouter.get("/sessions/:sessionId/attachments/:filename", async (c) => {
 });
 
 // POST /chat
+// POST /chat/:conversationId/abort — interrupt an in-flight chat run.
+chatRouter.post("/:conversationId/abort", async (c) => {
+  const conversationId = c.req.param("conversationId");
+  const controller = activeChatRuns.get(conversationId);
+  if (!controller) {
+    log.debug(
+      { conversationId },
+      "DEBUG [chat-route] abort requested for unknown or completed conversation",
+    );
+    return c.json({ error: "Conversation not found or already completed" }, 404);
+  }
+  controller.abort();
+  activeChatRuns.delete(conversationId);
+  log.info({ conversationId }, "INFO [chat-route] Chat run aborted by user");
+  return c.body(null, 204);
+});
+
 chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
   const body = c.req.valid("json") as ChatRequestPayload;
   const { projectId, message, clientId, conversationId, explore, taskId, attachments } = body;
@@ -758,6 +794,8 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
   }
 
   const chatConversationId = conversationId ?? crypto.randomUUID();
+  const abortController = new AbortController();
+  activeChatRuns.set(chatConversationId, abortController);
   log.info(
     {
       projectId,
@@ -880,6 +918,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         onEvent: onRuntimeEvent,
         systemPromptAppend: systemAppend,
         bypassPermissions,
+        abortController,
         environment: {
           HANDOFF_MODE: "1",
           ...(taskId ? { HANDOFF_TASK_ID: taskId } : {}),
@@ -979,6 +1018,31 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       ...(savedAttachments?.length ? { attachments: savedAttachments } : {}),
     });
   } catch (err) {
+    const aborted = abortController.signal.aborted || isAbortError(err);
+    if (aborted) {
+      log.info(
+        { runtimeId, runtimeProfileId, conversationId: chatConversationId },
+        "INFO [chat-route] Chat run aborted",
+      );
+      const abortedEvent: WsEvent = {
+        type: "chat:error",
+        payload: {
+          conversationId: chatConversationId,
+          message: "Chat run aborted by user",
+          code: "aborted",
+        },
+      };
+      const doneEvent: WsEvent = {
+        type: "chat:done",
+        payload: { conversationId: chatConversationId },
+      };
+      if (clientId) {
+        sendToClient(clientId, abortedEvent);
+        sendToClient(clientId, doneEvent);
+      }
+      return c.json({ error: "Chat run aborted by user", code: "aborted" }, 409);
+    }
+
     log.error(
       { err, runtimeId, runtimeProfileId, runtimeProviderId, conversationId: chatConversationId },
       "Chat request failed",
@@ -1006,5 +1070,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     }
 
     return c.json({ error: classified.message, code: classified.code }, classified.status);
+  } finally {
+    activeChatRuns.delete(chatConversationId);
   }
 });

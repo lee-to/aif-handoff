@@ -403,6 +403,14 @@ export const api = {
     );
   },
 
+  async abortChat(conversationId: string): Promise<void> {
+    console.debug("[api] POST /chat/%s/abort", conversationId);
+    const res = await fetch(`${API_PREFIX}/chat/${conversationId}/abort`, { method: "POST" });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`Failed to abort chat: ${res.status}`);
+    }
+  },
+
   // Chat Sessions
   listChatSessions(projectId: string): Promise<ChatSession[]> {
     console.debug("[api] GET /chat/sessions projectId=%s", projectId);

@@ -18,6 +18,7 @@ import {
   PanelLeftOpen,
   Paperclip,
   AlertTriangle,
+  Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -71,6 +72,7 @@ export function ChatPanel({
     explore,
     setExplore,
     sendMessage,
+    abortStream,
     clearMessages,
     newSession,
   } = useChat(projectId, activeSessionId, taskId, setActiveSessionId);
@@ -413,14 +415,25 @@ export function ChatPanel({
             rows={1}
             className="max-h-32 min-h-[2.25rem] flex-1 resize-none bg-secondary/50"
           />
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim() || isStreaming}
-            aria-label="Send message"
-            className="h-auto self-stretch w-9 shrink-0 rounded px-0"
-          >
-            <Send className="h-4 w-4 shrink-0" />
-          </Button>
+          {isStreaming ? (
+            <Button
+              onClick={() => void abortStream()}
+              aria-label="Stop generation"
+              variant="destructive"
+              className="h-auto self-stretch w-9 shrink-0 rounded px-0"
+            >
+              <Square className="h-4 w-4 shrink-0" />
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              aria-label="Send message"
+              className="h-auto self-stretch w-9 shrink-0 rounded px-0"
+            >
+              <Send className="h-4 w-4 shrink-0" />
+            </Button>
+          )}
         </div>
       </div>
     </div>

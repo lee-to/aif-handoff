@@ -49,6 +49,8 @@ export function useChat(
   const [chatErrorCode, setChatErrorCode] = useState<string | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
 
+  // Conversation id of the most recently dispatched message — used by abortStream().
+  const currentConversationIdRef = useRef<string | null>(null);
   // Per-session streaming state: conversationId → streamKey (sessionId or conversationId)
   const activeStreamsRef = useRef<Map<string, string>>(new Map());
   // Per-session stream data: streamKey → state
@@ -275,6 +277,7 @@ export function useChat(
       const newMessages = forceNewSession ? [userMessage] : [...messages, userMessage];
 
       // Register active stream
+      currentConversationIdRef.current = newConversationId;
       if (!effectiveSessionId) {
         conversationIdForNoSession.current = newConversationId;
       }
@@ -434,6 +437,17 @@ export function useChat(
     ],
   );
 
+  const abortStream = useCallback(async () => {
+    const conversationId = currentConversationIdRef.current;
+    if (!conversationId) return;
+    console.debug("[useChat] aborting conversation %s", conversationId);
+    try {
+      await api.abortChat(conversationId);
+    } catch (err) {
+      console.warn("[useChat] abort request failed", err);
+    }
+  }, []);
+
   const clearMessages = useCallback(() => {
     setMessages([]);
     setChatErrorCode(null);
@@ -452,6 +466,7 @@ export function useChat(
     explore,
     setExplore,
     sendMessage,
+    abortStream,
     clearMessages,
     newSession,
   };

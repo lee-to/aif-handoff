@@ -651,6 +651,87 @@ describe("tasks API", () => {
       expect(body.planTests).toBe(true);
     });
 
+    it("should apply full-mode flag defaults when PUT sends only plannerMode=full", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "upd-mode-full",
+          projectId: "test-project",
+          title: "Mode switch",
+          plannerMode: "fast",
+          skipReview: true,
+          planDocs: false,
+          planTests: false,
+        })
+        .run();
+
+      const res = await app.request("/tasks/upd-mode-full", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plannerMode: "full" }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plannerMode).toBe("full");
+      expect(body.skipReview).toBe(false);
+      expect(body.planDocs).toBe(true);
+      expect(body.planTests).toBe(true);
+    });
+
+    it("should respect explicit flag values over mode defaults on PUT", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({ id: "upd-mode-explicit", projectId: "test-project", title: "Explicit" })
+        .run();
+
+      const res = await app.request("/tasks/upd-mode-explicit", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plannerMode: "full",
+          skipReview: true,
+          planDocs: false,
+          planTests: false,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plannerMode).toBe("full");
+      expect(body.skipReview).toBe(true);
+      expect(body.planDocs).toBe(false);
+      expect(body.planTests).toBe(false);
+    });
+
+    it("should not touch flags when PUT omits plannerMode", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "upd-mode-absent",
+          projectId: "test-project",
+          title: "No mode",
+          plannerMode: "fast",
+          skipReview: true,
+          planDocs: false,
+          planTests: false,
+        })
+        .run();
+
+      const res = await app.request("/tasks/upd-mode-absent", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "renamed" }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plannerMode).toBe("fast");
+      expect(body.skipReview).toBe(true);
+      expect(body.planDocs).toBe(false);
+      expect(body.planTests).toBe(false);
+    });
+
     it("should handle attachments update via PUT", async () => {
       const db = testDb.current;
       const rootPath = mkdtempSync(join(tmpdir(), "aif-put-attach-"));

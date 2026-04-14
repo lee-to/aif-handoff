@@ -322,6 +322,25 @@ tasksRouter.put("/:id", jsonValidator(updateTaskSchema), async (c) => {
 
   const { plan, attachments: incomingAttachments, ...updatePayload } = body;
 
+  // Mirror POST /tasks: when plannerMode changes, fill omitted flags from mode defaults.
+  if (updatePayload.plannerMode !== undefined) {
+    const modeDefaults = defaultsForMode(updatePayload.plannerMode);
+    const filled = {
+      skipReview: updatePayload.skipReview === undefined,
+      planDocs: updatePayload.planDocs === undefined,
+      planTests: updatePayload.planTests === undefined,
+    };
+    updatePayload.skipReview = updatePayload.skipReview ?? modeDefaults.skipReview;
+    updatePayload.planDocs = updatePayload.planDocs ?? modeDefaults.planDocs;
+    updatePayload.planTests = updatePayload.planTests ?? modeDefaults.planTests;
+    if (filled.skipReview || filled.planDocs || filled.planTests) {
+      log.debug(
+        { taskId: id, plannerMode: updatePayload.plannerMode, filled },
+        "Applied mode-driven task flag defaults on update",
+      );
+    }
+  }
+
   const hasPlanUpdate = Object.prototype.hasOwnProperty.call(body, "plan");
   if (hasPlanUpdate) {
     try {

@@ -133,9 +133,12 @@ language:
 
 Keys:
 
-- `artifacts` — BCP-47-ish language code. `en` (or unset) leaves prompts untouched so the model
-  uses its native default. Any other value appends a short system directive asking the model to
-  write artifacts in that language.
+- `artifacts` — BCP-47-ish language code. Values are validated against a conservative
+  `^[a-z]{2,3}(-[a-z0-9]{2,8})*$` pattern after trim+lowercase; tags that fail the pattern
+  (typos, non-ASCII strings) silently fall back to the default `en` rather than being embedded
+  raw in the system directive. Any regional tag whose primary subtag is `en` (`en-US`, `en_GB`,
+  …) is also treated as a no-op. Any other valid tag appends a short system directive asking
+  the model to write artifacts in that language.
 - `technical_terms` — `keep` (default) instructs the model to leave identifiers, API/function
   names, file paths, CLI flags, environment variables, code snippets, and log/error strings in
   English even when the rest of the text is translated. `translate` allows natural translation
@@ -146,6 +149,19 @@ The directive is appended to `execution.systemPromptAppend` — never to `prompt
 sessions, slash commands, and agent definitions continue to work unchanged. Existing appends
 (project-scope, review-diff-scope) are preserved verbatim and placed BEFORE the language
 directive so scope rules keep their emphasis.
+
+Transport delivery matrix (how each adapter surfaces `systemPromptAppend` to the model):
+
+| Adapter    | SDK                          | CLI                      | API            |
+| ---------- | ---------------------------- | ------------------------ | -------------- |
+| Claude     | `options.systemPromptAppend` | `--append-system-prompt` | n/a            |
+| Codex      | prepended to user prompt     | prepended to CLI stdin   | system message |
+| OpenRouter | n/a                          | n/a                      | system message |
+| OpenCode   | n/a                          | n/a                      | system message |
+
+The Codex SDK/CLI paths do not expose a dedicated system-prompt slot, so the adapter prepends
+the append block to the user prompt separated by a blank line. This keeps the registry-level
+injection guaranteed to reach the model on every Codex transport, matching the API path.
 
 To disable: leave `artifacts: en` (the default).
 

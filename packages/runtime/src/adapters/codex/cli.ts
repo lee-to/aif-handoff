@@ -705,7 +705,13 @@ function runCodexCliAttempt(
     // Ignore broken-pipe errors — the child may exit before stdin is fully written
   });
   if (shouldWritePromptToStdin(args, input.prompt)) {
-    child.stdin!.write(input.prompt);
+    // The Codex CLI consumes a single prompt blob from stdin with no separate
+    // system-prompt flag, so `execution.systemPromptAppend` (carrying the
+    // registry's language directive among other cross-cutting appends) is
+    // prepended to the user prompt to keep parity with the API transport.
+    const systemAppend = execution?.systemPromptAppend?.trim();
+    const composedPrompt = systemAppend ? `${systemAppend}\n\n${input.prompt}` : input.prompt;
+    child.stdin!.write(composedPrompt);
   }
   child.stdin!.end();
 

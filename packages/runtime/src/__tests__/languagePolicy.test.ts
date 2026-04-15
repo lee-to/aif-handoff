@@ -44,6 +44,14 @@ describe("buildLanguageDirective", () => {
     expect(out).toContain("Portuguese");
   });
 
+  it("treats en-US as a no-op (primary subtag check)", () => {
+    expect(buildLanguageDirective({ artifacts: "en-US", technicalTerms: "keep" })).toBe("");
+  });
+
+  it("treats en_GB as a no-op (primary subtag check, underscore separator)", () => {
+    expect(buildLanguageDirective({ artifacts: "en_GB", technicalTerms: "keep" })).toBe("");
+  });
+
   it("falls back to the raw code when the language is not in the lookup table", () => {
     const out = buildLanguageDirective({ artifacts: "eo", technicalTerms: "keep" });
     // Empty directive would only happen for en/unset; unknown codes still produce a directive.

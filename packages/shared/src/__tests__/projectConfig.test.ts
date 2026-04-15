@@ -175,6 +175,35 @@ describe("getProjectConfig", () => {
     expect(config.language.technical_terms).toBe("keep");
   });
 
+  it("falls back to default artifacts when language tag is not BCP-47 shaped", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      'language:\n  artifacts: "not a tag"\n  ui: "русский"\n',
+    );
+    const config = getProjectConfig(projectRoot);
+    // Garbage values must not reach the directive builder verbatim.
+    expect(config.language.artifacts).toBe("en");
+    expect(config.language.ui).toBe("en");
+  });
+
+  it("accepts BCP-47 region subtags on artifacts", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "language:\n  artifacts: pt-BR\n",
+    );
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.artifacts).toBe("pt-br");
+  });
+
+  it("normalizes technical_terms case and whitespace ('Translate' → 'translate')", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      'language:\n  artifacts: ru\n  technical_terms: " Translate "\n',
+    );
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.technical_terms).toBe("translate");
+  });
+
   it("clearProjectConfigCache invalidates cache", () => {
     writeFileSync(join(projectRoot, ".ai-factory", "config.yaml"), "paths:\n  plan: v1/PLAN.md\n");
     const first = getProjectConfig(projectRoot);

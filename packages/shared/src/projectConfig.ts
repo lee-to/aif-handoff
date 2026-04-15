@@ -108,16 +108,31 @@ const DEFAULT_LANGUAGE: AifProjectLanguage = {
   technical_terms: "keep",
 };
 
+/**
+ * Conservative BCP-47-ish tag: 2-3 letter primary subtag optionally followed
+ * by one or more `-`/`_` separated alphanumeric subtags (2-8 chars each).
+ * Catches typos and garbage values so they don't leak into the injected
+ * system directive as-is (e.g. `"ru1"` or `"русский"` would be rejected).
+ */
+const BCP47_TAG = /^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$/;
+
+function normalizeLanguageTag(raw: unknown, fallback: string): string {
+  if (typeof raw !== "string") return fallback;
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return fallback;
+  return BCP47_TAG.test(trimmed) ? trimmed : fallback;
+}
+
 function normalizeLanguage(raw: unknown): AifProjectLanguage {
   const obj = (raw ?? {}) as Partial<AifProjectLanguage>;
-  const ui =
-    typeof obj.ui === "string" && obj.ui.trim() ? obj.ui.trim().toLowerCase() : DEFAULT_LANGUAGE.ui;
-  const artifacts =
-    typeof obj.artifacts === "string" && obj.artifacts.trim()
-      ? obj.artifacts.trim().toLowerCase()
-      : DEFAULT_LANGUAGE.artifacts;
+  const ui = normalizeLanguageTag(obj.ui, DEFAULT_LANGUAGE.ui);
+  const artifacts = normalizeLanguageTag(obj.artifacts, DEFAULT_LANGUAGE.artifacts);
+  // Mirror the lenient parsing of `ui`/`artifacts` so `"Translate"` or
+  // `" translate "` don't silently revert to `keep`.
+  const technicalRaw =
+    typeof obj.technical_terms === "string" ? obj.technical_terms.trim().toLowerCase() : "";
   const technicalTerms =
-    obj.technical_terms === "translate" ? "translate" : DEFAULT_LANGUAGE.technical_terms;
+    technicalRaw === "translate" ? "translate" : DEFAULT_LANGUAGE.technical_terms;
   return { ui, artifacts, technical_terms: technicalTerms };
 }
 

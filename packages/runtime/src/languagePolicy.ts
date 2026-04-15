@@ -33,14 +33,22 @@ const LANGUAGE_NAMES: Record<string, string> = {
   ko: "Korean (한국어)",
 };
 
+function primarySubtag(code: string): string {
+  return code.toLowerCase().split(/[-_]/, 1)[0] ?? "";
+}
+
 function resolveLanguageName(code: string): string {
-  const normalized = code.toLowerCase().split(/[-_]/, 1)[0] ?? "";
-  return LANGUAGE_NAMES[normalized] ?? code;
+  return LANGUAGE_NAMES[primarySubtag(code)] ?? code;
 }
 
 export function buildLanguageDirective(input: LanguageDirectiveInput): string {
   const raw = (input.artifacts ?? "").trim().toLowerCase();
-  if (!raw || raw === "en") return "";
+  // No-op not only for exact `en` but for any BCP-47 tag whose primary
+  // subtag is English (`en-US`, `en_GB`, `en-x-private`, …). Without this,
+  // regional English settings would still inject a directive asking the
+  // model to "write in English", which is noise at best and misleading
+  // (since the lookup table would stringify `en-US` as the raw tag).
+  if (!raw || primarySubtag(raw) === "en") return "";
 
   const languageName = resolveLanguageName(raw);
   const lines = [

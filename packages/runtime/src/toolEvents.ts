@@ -55,13 +55,14 @@ export function buildToolUseEvents(params: BuildToolUseEventsInput): RuntimeEven
     detailSuffix = "",
     questionPayload = null,
   } = params;
+  const interactive = Boolean(questionPayload);
   const events: RuntimeEvent[] = [
     {
       type: "tool:use",
       timestamp,
       level: "info",
       message: `${toolName}${detailSuffix}`,
-      data: { name: toolName, input, id: toolUseId },
+      data: { name: toolName, input, id: toolUseId, interactive },
     },
   ];
   if (questionPayload) {

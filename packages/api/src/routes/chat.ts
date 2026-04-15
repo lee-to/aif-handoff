@@ -601,6 +601,19 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 
       const messages: ChatSessionMessage[] = runtimeEvents
         .map((event) => {
+          if (event.type === "tool:question") {
+            const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
+            if (!payload) return null;
+            const rendered = formatToolQuestion(payload);
+            if (!rendered || !rendered.trim()) return null;
+            return {
+              id: eventId(event),
+              sessionId: id,
+              role: "assistant" as const,
+              content: rendered,
+              createdAt: event.timestamp,
+            } as ChatSessionMessage;
+          }
           const role = eventRole(event);
           const content = event.message ?? "";
           if (!role || !content.trim()) return null;
@@ -672,6 +685,19 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 
         const runtimeMessages: ChatSessionMessage[] = runtimeEvents
           .map((event) => {
+            if (event.type === "tool:question") {
+              const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
+              if (!payload) return null;
+              const rendered = formatToolQuestion(payload);
+              if (!rendered || !rendered.trim()) return null;
+              return {
+                id: eventId(event),
+                sessionId: id,
+                role: "assistant" as const,
+                content: rendered,
+                createdAt: event.timestamp,
+              } as ChatSessionMessage;
+            }
             const role = eventRole(event);
             const rawContent = event.message ?? "";
             const content = extractMessageContent(rawContent, adapter);
@@ -908,6 +934,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
     let fullAssistantResponse = "";
     let hasStreamedTokens = false;
+    let streamedTextLength = 0;
 
     const sendToken = (text: string) => {
       if (!clientId) return;
@@ -923,6 +950,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     const onRuntimeEvent = (event: RuntimeEvent) => {
       if (event.type === "stream:text" && event.message) {
         hasStreamedTokens = true;
+        streamedTextLength += event.message.length;
         fullAssistantResponse += event.message;
         sendToken(event.message);
         return;
@@ -963,8 +991,11 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         const data = (event.data ?? {}) as Record<string, unknown>;
         const toolName = typeof data.name === "string" ? data.name : null;
         if (!toolName) return;
-        if (toolName === "AskUserQuestion") {
-          // Rendered via the adapter-normalized tool:question event — skip.
+        if (data.interactive === true) {
+          // Adapter will emit a correlated `tool:question` event for interactive
+          // tools — skip the raw tool:use so we don't render both a `> Tool` line
+          // and the question block. Runtime-neutral: branches on an event flag,
+          // not a provider-specific tool name.
           return;
         }
         if (NOISY_TOOL_NAMES.has(toolName) || toolName.startsWith("mcp__handoff__")) {
@@ -1071,8 +1102,16 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       );
     }
 
-    if (!hasStreamedTokens && result.outputText) {
-      fullAssistantResponse += result.outputText;
+    // Recover assistant text that never arrived as `stream:text` deltas.
+    // Claude CLI in partial-messages mode accumulates text assistant-blocks
+    // into `result.outputText` but doesn't re-emit them as `stream:text` once
+    // the block is complete (to avoid delta/block duplication). If a turn
+    // mixes text + AskUserQuestion, the live stream may carry only the
+    // question block while the intro text sits in `outputText`. We detect
+    // that by comparing streamed text length against `outputText` and prepend
+    // the missing prefix so the UI and DB row both see the full answer.
+    if (streamedTextLength === 0 && result.outputText) {
+      fullAssistantResponse = result.outputText + fullAssistantResponse;
       sendToken(result.outputText);
     }
 

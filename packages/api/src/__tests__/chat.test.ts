@@ -639,7 +639,17 @@ describe("chat API", () => {
       onEvent?.({ type: "tool:use", data: { name: "Bash", input: { command: "ls" } } });
       onEvent?.({
         type: "tool:use",
-        data: { name: "AskUserQuestion", input: { question: "ignored via tool:use" } },
+        data: {
+          name: "AskUserQuestion",
+          input: { question: "ignored via tool:use" },
+          interactive: true,
+        },
+      });
+      // Future-proofing: any interactive tool (regardless of provider-specific
+      // name) must be suppressed via the `interactive` flag, not a name match.
+      onEvent?.({
+        type: "tool:use",
+        data: { name: "SomeOtherAdapterQuestion", input: {}, interactive: true },
       });
       return { outputText: "", sessionId: "runtime-session-1" };
     });
@@ -659,8 +669,10 @@ describe("chat API", () => {
     const combined = tokenCalls.map((call) => String(call[1].payload.token)).join("");
     expect(combined).not.toContain("🔧 Read");
     expect(combined).toContain("🔧 Bash");
-    // AskUserQuestion must NOT be surfaced via tool:use — it only renders via tool:question.
+    // Interactive tools must NOT be surfaced via tool:use — they render via tool:question.
     expect(combined).not.toContain("ignored via tool:use");
+    expect(combined).not.toContain("🔧 AskUserQuestion");
+    expect(combined).not.toContain("🔧 SomeOtherAdapterQuestion");
   });
 
   it("deduplicates repeated tool:question events with the same toolUseId", async () => {
@@ -948,5 +960,114 @@ describe("chat API", () => {
     expect(res2.status).toBe(200);
     const runInput2 = mockAdapterRun.mock.calls[0]?.[0] as RuntimeRunInput;
     expect(runInput2.execution?.systemPromptAppend).toContain("AskUserQuestion");
+  });
+
+  it("prepends assistant outputText when a mixed text+AskUserQuestion turn streamed only the question (Claude CLI path)", async () => {
+    // Simulates Claude CLI in partial-messages mode: text assistant-block is
+    // accumulated into result.outputText but not re-emitted as stream:text,
+    // while the tool_use block fires tool:question. UI + DB must still see
+    // the intro text before the question block.
+    mockAdapterRun.mockImplementation(async (input: RuntimeRunInput) => {
+      const onEvent = input.execution?.onEvent as
+        | ((event: Record<string, unknown>) => void)
+        | undefined;
+      onEvent?.({
+        type: "tool:question",
+        data: {
+          toolUseId: "tool-mixed",
+          toolName: "AskUserQuestion",
+          questions: [{ question: "Pick a mode", options: [{ label: "A" }, { label: "B" }] }],
+        },
+      });
+      return { outputText: "Let me check the options.", sessionId: "runtime-session-1" };
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "mixed",
+        clientId: "client-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.assistantMessage).toContain("Let me check the options.");
+    expect(body.assistantMessage).toContain("Pick a mode");
+    // Intro text must appear before the question block in the persisted message.
+    expect(body.assistantMessage.indexOf("Let me check the options.")).toBeLessThan(
+      body.assistantMessage.indexOf("Pick a mode"),
+    );
+    const persisted = mockCreateChatMessage.mock.calls.find(
+      (call) => (call[0] as { role: string }).role === "assistant",
+    );
+    expect(persisted).toBeDefined();
+    expect((persisted![0] as { content: string }).content).toContain("Let me check the options.");
+    expect((persisted![0] as { content: string }).content).toContain("Pick a mode");
+  });
+
+  it("does NOT duplicate assistant text when stream:text deltas already fired alongside a question", async () => {
+    mockAdapterRun.mockImplementation(async (input: RuntimeRunInput) => {
+      const onEvent = input.execution?.onEvent as
+        | ((event: Record<string, unknown>) => void)
+        | undefined;
+      onEvent?.({ type: "stream:text", message: "Let me check the options." });
+      onEvent?.({
+        type: "tool:question",
+        data: {
+          toolUseId: "tool-dup",
+          toolName: "AskUserQuestion",
+          questions: [{ question: "Pick?", options: [{ label: "A" }] }],
+        },
+      });
+      return { outputText: "Let me check the options.", sessionId: "runtime-session-1" };
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "nodup",
+        clientId: "client-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const occurrences = body.assistantMessage.split("Let me check the options.").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("projects tool:question events as assistant messages when reading virtual runtime session history", async () => {
+    mockGetApiRuntimeRegistry.mockResolvedValue({
+      resolveRuntime: vi.fn(() => ({
+        ...runtimeAdapter,
+        getSession: vi.fn(),
+        listSessionEvents: vi.fn(async () => [
+          {
+            type: "tool:question",
+            timestamp: "2026-04-15T00:00:00.000Z",
+            data: {
+              toolUseId: "tool-reload",
+              toolName: "AskUserQuestion",
+              questions: [
+                { question: "Which branch?", options: [{ label: "main" }, { label: "dev" }] },
+              ],
+            },
+          },
+        ]),
+      })),
+    });
+
+    const res = await app.request("/chat/sessions/runtime:claude:abc/messages", { method: "GET" });
+    expect(res.status).toBe(200);
+    const messages = (await res.json()) as Array<{ role: string; content: string }>;
+    expect(messages.length).toBe(1);
+    expect(messages[0].role).toBe("assistant");
+    expect(messages[0].content).toContain("Which branch?");
+    expect(messages[0].content).toContain("1. main");
   });
 });

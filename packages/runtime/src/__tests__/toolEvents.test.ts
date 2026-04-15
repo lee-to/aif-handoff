@@ -15,7 +15,7 @@ describe("buildToolUseEvents", () => {
     expect(events[0]).toMatchObject({
       type: "tool:use",
       message: "Bash `ls`",
-      data: { name: "Bash", input: { command: "ls" }, id: "t-1" },
+      data: { name: "Bash", input: { command: "ls" }, id: "t-1", interactive: false },
     });
   });
 
@@ -34,6 +34,7 @@ describe("buildToolUseEvents", () => {
     });
     expect(events).toHaveLength(2);
     expect(events[0].type).toBe("tool:use");
+    expect((events[0].data as { interactive: boolean }).interactive).toBe(true);
     expect(events[1].type).toBe("tool:question");
     expect(events[1].data).toBe(payload);
     // Both events share the same timestamp so consumers can correlate them.

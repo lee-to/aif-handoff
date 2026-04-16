@@ -478,6 +478,131 @@ describe("useChat", () => {
     expect(handleSessionResolved).toHaveBeenCalledWith("sess-new-1");
   });
 
+  it("does not clear Stop or show Stopped on session B when session A's run aborts in the background", async () => {
+    // Stream A: resolvable by us, simulates A's HTTP settling after user switches away
+    let rejectA: ((reason?: unknown) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectA = reject;
+        }),
+    );
+    // Stream B: pending forever for this test
+    let resolveB: ((v: { conversationId: string; sessionId: string }) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveB = resolve;
+        }),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ sid }: { sid: string | null }) => useChat("p-1", sid),
+      { initialProps: { sid: "sess-A" as string | null } },
+    );
+
+    // Kick off stream for A
+    let sendAPromise: Promise<void>;
+    act(() => {
+      sendAPromise = result.current.sendMessage("A");
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(1));
+    const convA = mockSendChatMessage.mock.calls[0][0].conversationId as string;
+
+    // Switch to B and kick off its stream
+    await act(async () => {
+      rerender({ sid: "sess-B" });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    let sendBPromise: Promise<void>;
+    act(() => {
+      sendBPromise = result.current.sendMessage("B");
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(2));
+
+    // While the user is still viewing B, A's HTTP request aborts with 409.
+    await act(async () => {
+      rejectA!(
+        new ApiError("Chat run aborted by user", 409, {
+          code: "aborted",
+          sessionId: "sess-A",
+          conversationId: convA,
+          assistantMessage: null,
+        }),
+      );
+      await sendAPromise;
+    });
+
+    // B is still streaming — Stop must stay, no "Stopped" banner must appear.
+    expect(result.current.isStreaming).toBe(true);
+    expect(result.current.chatErrorCode).toBeNull();
+
+    // Clean up
+    await act(async () => {
+      resolveB?.({ conversationId: "conv-B", sessionId: "sess-B" });
+      await sendBPromise;
+    });
+  });
+
+  it("appends the partial assistant reply from the 409 abort body when no WS tokens arrived", async () => {
+    mockGetWsClientId.mockReturnValue(null);
+    mockSendChatMessage.mockRejectedValueOnce(
+      new ApiError("Chat run aborted by user", 409, {
+        code: "aborted",
+        sessionId: "sess-partial-1",
+        conversationId: "conv-partial-1",
+        assistantMessage: "half-written answer",
+      }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1"));
+
+    await act(async () => {
+      await result.current.sendMessage("question");
+    });
+
+    expect(result.current.messages).toEqual([
+      { role: "user", content: "question" },
+      { role: "assistant", content: "half-written answer" },
+    ]);
+    expect(result.current.chatErrorCode).toBe("aborted");
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("upgrades user message attachments from the 409 abort body", async () => {
+    mockSendChatMessage.mockRejectedValueOnce(
+      new ApiError("Chat run aborted by user", 409, {
+        code: "aborted",
+        sessionId: "sess-att-1",
+        conversationId: "conv-att-1",
+        attachments: [
+          {
+            name: "plan.md",
+            mimeType: "text/markdown",
+            size: 12,
+            path: "storage/chat/s1/plan.md",
+          },
+        ],
+      }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1"));
+
+    await act(async () => {
+      await result.current.sendMessage("take a look", [
+        { name: "plan.md", mimeType: "text/markdown", size: 12, content: "hello" },
+      ]);
+    });
+
+    const userMessage = result.current.messages.find((m) => m.role === "user");
+    expect(userMessage?.attachments?.[0]).toEqual(
+      expect.objectContaining({
+        name: "plan.md",
+        path: "storage/chat/s1/plan.md",
+      }),
+    );
+  });
+
   it("toggles explore mode", () => {
     const { result } = renderHook(() => useChat("p-1"));
 

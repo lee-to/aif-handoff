@@ -750,6 +750,10 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
   // completed. Without this, aborting the first turn of a fresh chat would
   // break runtime continuity — the next turn would have no resume context.
   let runtimeSessionIdFromEvents: string | null = null;
+  // Hoisted so the abort branch can surface server-resolved attachment paths
+  // to the client — without this, an aborted run with uploads would leave the
+  // user bubble with a path-less chip until the session is reopened.
+  let savedAttachments: ChatMessageAttachment[] | undefined;
 
   try {
     const project = findProjectById(projectId);
@@ -845,7 +849,6 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
 
     // Persist file attachments to disk and build prompt with paths
     let prompt = explore ? `/aif-explore ${message}` : message;
-    let savedAttachments: ChatMessageAttachment[] | undefined;
     if (attachments?.length && chatSessionId) {
       const persisted = await persistAttachments(attachments, {
         projectRoot: project.rootPath,
@@ -1100,6 +1103,13 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
           code: "aborted",
           conversationId: chatConversationId,
           sessionId: chatSessionId,
+          // Expose the partial assistant reply so clients without an active
+          // WebSocket can render what was saved server-side. Mirrors the
+          // success path's `assistantMessage`.
+          assistantMessage: partial.length > 0 ? partial : null,
+          // Echo server-resolved attachments so the optimistic user bubble
+          // can upgrade its chips with download paths even on abort.
+          ...(savedAttachments?.length ? { attachments: savedAttachments } : {}),
         },
         409,
       );

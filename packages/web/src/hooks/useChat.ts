@@ -94,6 +94,18 @@ export function useChat(
     return false;
   }, []);
 
+  // True when `streamKey` belongs to the session the user is currently viewing.
+  // Any `setIsStreaming` / `setChatErrorCode` / `setMessages` call that ends a
+  // run must be gated by this — otherwise a background session terminating
+  // would wipe the Stop button / banner / transcript of an unrelated session
+  // the user has already switched to.
+  const isCurrentStream = useCallback((streamKey: string) => {
+    return (
+      currentSessionIdRef.current === streamKey ||
+      (!currentSessionIdRef.current && streamKey === conversationIdForNoSession.current)
+    );
+  }, []);
+
   const prevSessionIdRef = useRef<string | null>(null);
   // Load messages when sessionId changes
   useEffect(() => {
@@ -156,11 +168,6 @@ export function useChat(
 
   // Listen for chat stream events dispatched by useWebSocket
   useEffect(() => {
-    // Check if a stream belongs to the currently viewed session
-    const isCurrentStream = (streamKey: string) =>
-      currentSessionIdRef.current === streamKey ||
-      (!currentSessionIdRef.current && streamKey === conversationIdForNoSession.current);
-
     const handleToken = (e: Event) => {
       const { conversationId, token } = (e as CustomEvent<ChatStreamTokenPayload>).detail;
       const streamKey = activeStreamsRef.current.get(conversationId);
@@ -246,7 +253,7 @@ export function useChat(
       window.removeEventListener("chat:error", handleError);
       clearAllConversationTimers();
     };
-  }, [clearAllConversationTimers, clearConversationTimers]);
+  }, [clearAllConversationTimers, clearConversationTimers, isCurrentStream]);
 
   const sendMessage = useCallback(
     async (text: string, attachments?: ChatAttachment[], forceNewSession?: boolean) => {
@@ -319,41 +326,53 @@ export function useChat(
         });
 
         if (result.sessionId) {
-          currentSessionIdRef.current = result.sessionId;
-
-          if (streamKey !== result.sessionId) {
+          const resolvedId = result.sessionId;
+          // Move stream-scoped state to the resolved key regardless of which
+          // session the user is viewing — WS events still need to match.
+          if (streamKey !== resolvedId) {
             const state = sessionStreamsRef.current.get(streamKey);
             if (state) {
               sessionStreamsRef.current.delete(streamKey);
-              sessionStreamsRef.current.set(result.sessionId, state);
+              sessionStreamsRef.current.set(resolvedId, state);
             }
-            activeStreamsRef.current.set(newConversationId, result.sessionId);
+            activeStreamsRef.current.set(newConversationId, resolvedId);
           }
 
-          if (result.sessionId !== effectiveSessionId) {
-            onSessionResolved?.(result.sessionId);
+          // Only rebind the viewed session to the resolved id when the user is
+          // still on this stream. Otherwise a background run finishing would
+          // silently yank their view back to the originating session.
+          if (isCurrentStream(streamKey)) {
+            currentSessionIdRef.current = resolvedId;
+            if (resolvedId !== effectiveSessionId) {
+              onSessionResolved?.(resolvedId);
+            }
           }
+          // Sidebar notification is view-agnostic.
           window.dispatchEvent(
-            new CustomEvent("chat:session_created", { detail: { id: result.sessionId } }),
+            new CustomEvent("chat:session_created", { detail: { id: resolvedId } }),
           );
         }
 
         // Update user message attachments with server-resolved paths (for download links)
         if (result.attachments?.length) {
-          setMessages((prev) =>
-            prev.map((m) => (m === userMessage ? { ...m, attachments: result.attachments } : m)),
-          );
+          const resolvedAttachments = result.attachments;
           const activeStreamKey = activeStreamsRef.current.get(newConversationId) ?? streamKey;
           const state = sessionStreamsRef.current.get(activeStreamKey);
           if (state) {
-            // Also update in-flight stream state
+            // Also update in-flight stream state so restoring the session
+            // after a switch-away keeps the upgraded attachments.
             state.messages = state.messages.map((m) =>
               m.role === "user" &&
               m.content === userMessage.content &&
               m.attachments &&
               !m.attachments[0]?.path
-                ? { ...m, attachments: result.attachments }
+                ? { ...m, attachments: resolvedAttachments }
                 : m,
+            );
+          }
+          if (isCurrentStream(activeStreamKey)) {
+            setMessages((prev) =>
+              prev.map((m) => (m === userMessage ? { ...m, attachments: resolvedAttachments } : m)),
             );
           }
         }
@@ -384,10 +403,15 @@ export function useChat(
             );
             clearConversationTimers(newConversationId);
             state.messages = [...state.messages, { role: "assistant", content: assistantMessage }];
-            setMessages(state.messages);
             activeStreamsRef.current.delete(newConversationId);
             sessionStreamsRef.current.delete(activeStreamKey);
-            setIsStreaming(false);
+            // Only mutate UI state when the viewed session owns this stream.
+            // Otherwise a background session finishing would set the active
+            // session's transcript to someone else's messages.
+            if (isCurrentStream(activeStreamKey)) {
+              setMessages(state.messages);
+              setIsStreaming(false);
+            }
           }, 100);
           fallbackTimersRef.current.set(newConversationId, fallbackTimer);
         }
@@ -409,53 +433,119 @@ export function useChat(
           clearConversationTimers(newConversationId);
           activeStreamsRef.current.delete(newConversationId);
           sessionStreamsRef.current.delete(activeStreamKey);
-          setIsStreaming(false);
+          if (isCurrentStream(activeStreamKey)) {
+            setIsStreaming(false);
+          }
         }, 500);
         forcedStopTimersRef.current.set(newConversationId, forcedStopTimer);
       } catch (err) {
         console.error("[useChat] Failed to send message:", err);
         clearConversationTimers(newConversationId);
-        // If the server aborted the run but already created a DB session, promote it
-        // so the fresh "new chat" doesn't lose its thread in the sidebar.
-        if (err instanceof ApiError && err.status === 409) {
-          const data = err.data as { code?: string; sessionId?: string | null } | null;
-          if (data?.code === "aborted" && data.sessionId) {
-            const resolvedId = data.sessionId;
-            currentSessionIdRef.current = resolvedId;
-            if (streamKey !== resolvedId) {
-              const state = sessionStreamsRef.current.get(streamKey);
-              if (state) {
-                sessionStreamsRef.current.delete(streamKey);
-                sessionStreamsRef.current.set(resolvedId, state);
-              }
-              activeStreamsRef.current.set(newConversationId, resolvedId);
+
+        const abortData =
+          err instanceof ApiError && err.status === 409
+            ? (err.data as {
+                code?: string;
+                sessionId?: string | null;
+                assistantMessage?: string | null;
+                attachments?: ChatMessageAttachment[];
+              } | null)
+            : null;
+        const isAbortedError = abortData?.code === "aborted";
+
+        // If the server aborted the run but already created a DB session, promote
+        // it so the fresh "new chat" doesn't lose its thread in the sidebar.
+        // Only switch the viewed session when the user is still on this stream —
+        // otherwise a background abort would yank them away from the session
+        // they're currently reading.
+        if (isAbortedError && abortData?.sessionId) {
+          const resolvedId = abortData.sessionId;
+          const shouldPromoteView = isCurrentStream(streamKey);
+          if (streamKey !== resolvedId) {
+            const state = sessionStreamsRef.current.get(streamKey);
+            if (state) {
+              sessionStreamsRef.current.delete(streamKey);
+              sessionStreamsRef.current.set(resolvedId, state);
             }
+            activeStreamsRef.current.set(newConversationId, resolvedId);
+          }
+          if (shouldPromoteView) {
+            currentSessionIdRef.current = resolvedId;
             if (resolvedId !== effectiveSessionId) {
               onSessionResolved?.(resolvedId);
             }
-            window.dispatchEvent(
-              new CustomEvent("chat:session_created", { detail: { id: resolvedId } }),
+          }
+          // Sidebar update is view-agnostic — always surface the new session.
+          window.dispatchEvent(
+            new CustomEvent("chat:session_created", { detail: { id: resolvedId } }),
+          );
+        }
+
+        const activeStreamKey = activeStreamsRef.current.get(newConversationId) ?? streamKey;
+        const state = sessionStreamsRef.current.get(activeStreamKey);
+        const errorHandled = state?.errorHandled ?? false;
+        const hasAccumulatedTokens = (state?.accumulator.length ?? 0) > 0;
+
+        // On abort, apply server-resolved data to the stream-scoped state before
+        // deleting it. Guards below then decide whether to mirror the changes
+        // into React state for the viewed session.
+        let patchedUserAttachments: ChatMessageAttachment[] | undefined;
+        let appendedPartialAssistant: string | null = null;
+        if (isAbortedError && state) {
+          if (abortData?.attachments?.length) {
+            const resolvedAttachments = abortData.attachments;
+            state.messages = state.messages.map((m) =>
+              m.role === "user" &&
+              m.content === userMessage.content &&
+              m.attachments &&
+              !m.attachments[0]?.path
+                ? { ...m, attachments: resolvedAttachments }
+                : m,
             );
+            patchedUserAttachments = resolvedAttachments;
+          }
+          if (
+            !hasAccumulatedTokens &&
+            typeof abortData?.assistantMessage === "string" &&
+            abortData.assistantMessage.trim().length > 0
+          ) {
+            appendedPartialAssistant = abortData.assistantMessage;
+            state.messages = [
+              ...state.messages,
+              { role: "assistant", content: appendedPartialAssistant },
+            ];
           }
         }
-        const activeStreamKey = activeStreamsRef.current.get(newConversationId) ?? streamKey;
+
         activeStreamsRef.current.delete(newConversationId);
-        const errorHandled = sessionStreamsRef.current.get(activeStreamKey)?.errorHandled ?? false;
         sessionStreamsRef.current.delete(activeStreamKey);
-        setIsStreaming(false);
+
         const wsHandled = handledErrorConversationsRef.current.has(newConversationId);
-        const isAbortedError =
-          err instanceof ApiError &&
-          err.status === 409 &&
-          (err.data as { code?: string } | null)?.code === "aborted";
-        if (isAbortedError) {
-          // Abort is surfaced via the banner only — no phantom bubble.
-          setChatErrorCode("aborted");
-        } else if (!errorHandled && !wsHandled) {
-          const message =
-            err instanceof Error ? err.message : "Failed to get a response. Please try again.";
-          setChatErrorCode(null);
-          setMessages((prev) => [...prev, { role: "assistant", content: message }]);
+        // All UI state mutations below end the run for the viewed session —
+        // gate them on isCurrentStream so a background conversation terminating
+        // can't hide Stop / flip the banner / inject messages into session B
+        // while the user is watching it.
+        if (isCurrentStream(activeStreamKey)) {
+          if (patchedUserAttachments) {
+            const resolved = patchedUserAttachments;
+            setMessages((prev) =>
+              prev.map((m) => (m === userMessage ? { ...m, attachments: resolved } : m)),
+            );
+          }
+          if (appendedPartialAssistant) {
+            const partial = appendedPartialAssistant;
+            setMessages((prev) => [...prev, { role: "assistant", content: partial }]);
+          }
+          setIsStreaming(false);
+          if (isAbortedError) {
+            // Abort is surfaced via the banner only — no phantom bubble.
+            setChatErrorCode("aborted");
+          } else if (!errorHandled && !wsHandled) {
+            const message =
+              err instanceof Error ? err.message : "Failed to get a response. Please try again.";
+            setChatErrorCode(null);
+            setMessages((prev) => [...prev, { role: "assistant", content: message }]);
+          }
         }
         handledErrorConversationsRef.current.delete(newConversationId);
       }
@@ -469,6 +559,7 @@ export function useChat(
       taskId,
       onSessionResolved,
       clearConversationTimers,
+      isCurrentStream,
     ],
   );
 

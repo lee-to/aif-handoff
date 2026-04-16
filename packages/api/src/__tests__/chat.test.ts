@@ -680,6 +680,60 @@ describe("chat API", () => {
         (call) => call[0]?.role === "assistant" && call[0].content === "Partial reply",
       ),
     ).toBe(true);
+
+    // The 409 body must surface the partial reply so no-WS clients can render
+    // what was saved server-side without a round-trip to load messages.
+    const body = await chatRes.json();
+    expect(body.assistantMessage).toBe("Partial reply");
+  });
+
+  it("returns saved attachments in the 409 abort response", async () => {
+    mockPersistAttachments.mockResolvedValue([
+      {
+        name: "spec.md",
+        mimeType: "text/markdown",
+        size: 10,
+        path: "storage/chat/s1/spec.md",
+      },
+    ]);
+    mockAdapterRun.mockImplementation(async (input: RuntimeRunInput) => {
+      await new Promise<void>((_resolve, reject) => {
+        input.execution?.abortController?.signal.addEventListener("abort", () => {
+          const err = new Error("The operation was aborted");
+          (err as Error & { name: string }).name = "AbortError";
+          reject(err);
+        });
+      });
+      return { outputText: "", sessionId: "runtime-session-3" };
+    });
+
+    const conversationId = crypto.randomUUID();
+    const chatPromise = app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "review this",
+        clientId: "client-1",
+        conversationId,
+        attachments: [{ name: "spec.md", mimeType: "text/markdown", size: 10, content: "hi" }],
+      }),
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    await app.request(`/chat/${conversationId}/abort`, { method: "POST" });
+    const chatRes = await chatPromise;
+    expect(chatRes.status).toBe(409);
+
+    const body = await chatRes.json();
+    expect(body.attachments).toEqual([
+      {
+        name: "spec.md",
+        mimeType: "text/markdown",
+        size: 10,
+        path: "storage/chat/s1/spec.md",
+      },
+    ]);
   });
 
   it("persists the runtime session link on abort so the next turn can resume", async () => {

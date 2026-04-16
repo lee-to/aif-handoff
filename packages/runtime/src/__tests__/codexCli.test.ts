@@ -312,6 +312,39 @@ describe("codex cli transport", () => {
     expect(result.events?.[0]?.type).toBe("stream:text");
   });
 
+  it("expands multiple placeholders within one custom arg and suppresses stdin", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        options: {
+          codexCliArgs: [
+            "run",
+            "--json",
+            "--meta={model}:{session_id}",
+            "--prompt={prompt} ({model})",
+          ],
+        },
+      }),
+    );
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toEqual([
+      "run",
+      "--json",
+      "--meta=gpt-5.4:session-1",
+      "--prompt=Implement feature (gpt-5.4)",
+    ]);
+    expect(child.stdin.write).not.toHaveBeenCalled();
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+
+    const result = await runPromise;
+    expect(result.outputText).toBe("ok");
+  });
+
   it("emits -c approval_policy and -c sandbox_mode defaults when execution.bypassPermissions is true", async () => {
     const child = createMockChildProcess();
     spawnMock.mockReturnValueOnce(child);

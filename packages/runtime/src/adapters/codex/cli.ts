@@ -158,12 +158,11 @@ function normalizeCliArgs(
     const args = configured.map((arg) => {
       if (arg.includes("{prompt}")) {
         usesPromptPlaceholder = true;
-        return arg.replaceAll("{prompt}", effectivePrompt);
       }
-      if (arg.includes("{model}")) return arg.replaceAll("{model}", input.model ?? "");
-      if (arg.includes("{session_id}"))
-        return arg.replaceAll("{session_id}", input.sessionId ?? "");
-      return arg;
+      return arg
+        .replaceAll("{prompt}", effectivePrompt)
+        .replaceAll("{model}", input.model ?? "")
+        .replaceAll("{session_id}", input.sessionId ?? "");
     });
     return { args, usesPromptPlaceholder };
   }

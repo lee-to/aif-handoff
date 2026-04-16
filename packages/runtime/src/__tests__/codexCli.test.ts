@@ -115,6 +115,58 @@ describe("codex cli transport", () => {
     await runPromise;
   });
 
+  it("prepends execution.systemPromptAppend to resume stdin prompt (resume path)", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        resume: true,
+        sessionId: "thread-resume",
+        execution: { systemPromptAppend: "Language policy: write in Russian." },
+      }),
+    );
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args.slice(0, 3)).toEqual(["exec", "resume", "thread-resume"]);
+    expect(child.stdin.write).toHaveBeenCalledWith(
+      "Language policy: write in Russian.\n\nImplement feature",
+    );
+
+    child.stdout.emit("data", "resumed output");
+    child.emit("close", 0);
+
+    await runPromise;
+  });
+
+  it("injects systemPromptAppend into custom codexCliArgs {prompt} placeholder and skips stdin", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(
+      createRunInput({
+        execution: { systemPromptAppend: "Language policy: write in Russian." },
+        options: {
+          codexCliArgs: ["run", "--json", "--prompt={prompt}"],
+        },
+      }),
+    );
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toEqual([
+      "run",
+      "--json",
+      "--prompt=Language policy: write in Russian.\n\nImplement feature",
+    ]);
+    // Prompt was embedded via {prompt} → stdin must not receive it again.
+    expect(child.stdin.write).not.toHaveBeenCalled();
+
+    child.stdout.emit("data", "ok");
+    child.emit("close", 0);
+
+    await runPromise;
+  });
+
   it("uses exec resume subcommand when resume and sessionId are set", async () => {
     const child = createMockChildProcess();
     spawnMock.mockReturnValueOnce(child);

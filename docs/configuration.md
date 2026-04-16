@@ -134,11 +134,12 @@ language:
 Keys:
 
 - `artifacts` — BCP-47-ish language code. Values are validated against a conservative
-  `^[a-z]{2,3}(-[a-z0-9]{2,8})*$` pattern after trim+lowercase; tags that fail the pattern
-  (typos, non-ASCII strings) silently fall back to the default `en` rather than being embedded
-  raw in the system directive. Any regional tag whose primary subtag is `en` (`en-US`, `en_GB`,
-  …) is also treated as a no-op. Any other valid tag appends a short system directive asking
-  the model to write artifacts in that language.
+  `^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$` pattern after trim+lowercase (both `-` and `_` are
+  accepted as subtag separators, so `en-US` and `en_GB` parse identically); tags that fail the
+  pattern (typos, non-ASCII strings) silently fall back to the default `en` rather than being
+  embedded raw in the system directive. Any regional tag whose primary subtag is `en` (`en-US`,
+  `en_GB`, …) is also treated as a no-op. Any other valid tag appends a short system directive
+  asking the model to write artifacts in that language.
 - `technical_terms` — `keep` (default) instructs the model to leave identifiers, API/function
   names, file paths, CLI flags, environment variables, code snippets, and log/error strings in
   English even when the rest of the text is translated. `translate` allows natural translation

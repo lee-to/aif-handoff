@@ -477,6 +477,33 @@ describe("runCodexSdk", () => {
     );
   });
 
+  it("prepends execution.systemPromptAppend to the resumed thread's prompt", async () => {
+    mockRunStreamed.mockResolvedValue({
+      events: createMockEvents([
+        { type: "thread.started", thread_id: "thread-resume-sysappend" },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 },
+        },
+      ]),
+    });
+
+    await runCodexSdk(
+      createRunInput({
+        resume: true,
+        sessionId: "thread-old",
+        prompt: "Continue feature",
+        execution: { systemPromptAppend: "Language policy: write in Russian." },
+      }),
+    );
+
+    expect(mockResumeThread).toHaveBeenCalledWith("thread-old", expect.any(Object));
+    expect(mockRunStreamed).toHaveBeenCalledWith(
+      "Language policy: write in Russian.\n\nContinue feature",
+      expect.any(Object),
+    );
+  });
+
   it("leaves the prompt untouched when systemPromptAppend is absent", async () => {
     mockRunStreamed.mockResolvedValue({
       events: createMockEvents([

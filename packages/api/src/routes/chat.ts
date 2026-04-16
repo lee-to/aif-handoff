@@ -313,11 +313,19 @@ function eventRole(event: RuntimeEvent): "user" | "assistant" | null {
 }
 
 function eventId(event: RuntimeEvent): string {
-  const raw =
-    event.data && typeof event.data === "object" && typeof event.data.id === "string"
-      ? event.data.id
-      : null;
-  return raw ?? crypto.randomUUID();
+  const data = event.data;
+  if (data && typeof data === "object") {
+    if (typeof data.id === "string" && data.id) {
+      return data.id;
+    }
+    // `tool:question` payloads don't carry a generic `id` field — fall back to
+    // the provider's `toolUseId` so the same question keeps a stable client id
+    // across fetches/reloads instead of churning on every refresh.
+    if (event.type === "tool:question" && typeof data.toolUseId === "string" && data.toolUseId) {
+      return `tool:question:${data.toolUseId}`;
+    }
+  }
+  return crypto.randomUUID();
 }
 
 /**
@@ -932,8 +940,21 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     }
 
     const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
-    let fullAssistantResponse = "";
+    // Streamed assistant text and question blocks are tracked separately:
+    //   * live chat:token order must place intro text before the question
+    //     block even when the provider (e.g. Claude CLI in partial-messages
+    //     mode) emits only the tool_use during the run and the intro arrives
+    //     via `result.outputText` at the end — so we buffer rendered question
+    //     blocks and flush them after the intro is sent.
+    //   * DB persistence mirrors runtime session replay, which splits the
+    //     turn into `session-message` (text) + `tool:question` — storing two
+    //     separate assistant rows lets `mergeRuntimeAndDbMessages` dedupe by
+    //     exact trimmed-content equality instead of appending a combined row
+    //     as a third message on reload of a linked session.
+    let streamedText = "";
     let streamedTextLength = 0;
+    let questionBlocksText = "";
+    const pendingQuestionBlocks: string[] = [];
 
     const sendToken = (text: string) => {
       if (!clientId) return;
@@ -949,7 +970,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     const onRuntimeEvent = (event: RuntimeEvent) => {
       if (event.type === "stream:text" && event.message) {
         streamedTextLength += event.message.length;
-        fullAssistantResponse += event.message;
+        streamedText += event.message;
         sendToken(event.message);
         return;
       }
@@ -973,12 +994,8 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
             },
             "DEBUG [chat] tool:question rendered",
           );
-          sendToken(rendered);
-          // Persist the question into the assistant text so DB-backed history
-          // still has the rendered block after reload. Virtual/runtime-only
-          // sessions now also see the question via listSessionEvents, which
-          // projects tool_use→tool:question on replay.
-          fullAssistantResponse += rendered;
+          pendingQuestionBlocks.push(rendered);
+          questionBlocksText += rendered;
           if (payload.toolUseId) lastToolPromptId = payload.toolUseId;
         }
         return;
@@ -1103,25 +1120,42 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     // Claude CLI in partial-messages mode accumulates text assistant-blocks
     // into `result.outputText` but doesn't re-emit them as `stream:text` once
     // the block is complete (to avoid delta/block duplication). If a turn
-    // mixes text + AskUserQuestion, the live stream may carry only the
-    // question block while the intro text sits in `outputText`. We detect
-    // that by comparing streamed text length against `outputText` and prepend
-    // the missing prefix so the UI and DB row both see the full answer.
+    // mixes text + AskUserQuestion, the live stream carries only the question
+    // (buffered above) while the intro text sits in `outputText`. Flush the
+    // intro first, then the buffered question blocks, so live chat:token
+    // order matches the final HTTP/DB order (intro → question).
     if (streamedTextLength === 0 && result.outputText) {
-      fullAssistantResponse = result.outputText + fullAssistantResponse;
+      streamedText = result.outputText;
       sendToken(result.outputText);
     }
+    for (const block of pendingQuestionBlocks) {
+      sendToken(block);
+    }
 
-    // Persist assistant response in local chat history for both fresh and resumed runtime sessions.
-    // Trim leading/trailing whitespace so the stored content matches what
-    // Claude's session-file parser returns (which does `.trim()`), keeping
-    // mergeRuntimeAndDbMessages dedupe consistent on page reload.
-    const persistedAssistantResponse = fullAssistantResponse.trim();
-    if (chatSessionId && persistedAssistantResponse) {
+    const fullAssistantResponse = streamedText + questionBlocksText;
+
+    // Persist assistant response in local chat history for both fresh and
+    // resumed runtime sessions. Trim leading/trailing whitespace so the stored
+    // content matches what Claude's session-file parser returns (which does
+    // `.trim()`), keeping mergeRuntimeAndDbMessages dedupe consistent on page
+    // reload. Split intro and question into separate DB rows so the stored
+    // shape mirrors Claude replay's split of the assistant turn into a
+    // `session-message` plus a `tool:question`; a combined row would fail the
+    // exact-content match in the merger and surface as a third duplicate.
+    const trimmedStreamedText = streamedText.trim();
+    const trimmedQuestionBlocks = questionBlocksText.trim();
+    if (chatSessionId && trimmedStreamedText) {
       createChatMessage({
         sessionId: chatSessionId,
         role: "assistant",
-        content: persistedAssistantResponse,
+        content: trimmedStreamedText,
+      });
+    }
+    if (chatSessionId && trimmedQuestionBlocks) {
+      createChatMessage({
+        sessionId: chatSessionId,
+        role: "assistant",
+        content: trimmedQuestionBlocks,
       });
     }
     if (chatSessionId) {

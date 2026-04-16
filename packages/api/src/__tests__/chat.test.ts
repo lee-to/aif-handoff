@@ -996,16 +996,64 @@ describe("chat API", () => {
     const body = await res.json();
     expect(body.assistantMessage).toContain("Let me check the options.");
     expect(body.assistantMessage).toContain("Pick a mode");
-    // Intro text must appear before the question block in the persisted message.
+    // Intro text must appear before the question block in the HTTP response.
     expect(body.assistantMessage.indexOf("Let me check the options.")).toBeLessThan(
       body.assistantMessage.indexOf("Pick a mode"),
     );
-    const persisted = mockCreateChatMessage.mock.calls.find(
+    // DB persist splits the assistant turn into two rows — intro text first,
+    // rendered question block second — so it mirrors Claude replay's split
+    // and mergeRuntimeAndDbMessages can dedupe on reload.
+    const persistedAssistantCalls = mockCreateChatMessage.mock.calls.filter(
       (call) => (call[0] as { role: string }).role === "assistant",
     );
-    expect(persisted).toBeDefined();
-    expect((persisted![0] as { content: string }).content).toContain("Let me check the options.");
-    expect((persisted![0] as { content: string }).content).toContain("Pick a mode");
+    expect(persistedAssistantCalls.length).toBe(2);
+    expect((persistedAssistantCalls[0][0] as { content: string }).content).toBe(
+      "Let me check the options.",
+    );
+    expect((persistedAssistantCalls[1][0] as { content: string }).content).toContain("Pick a mode");
+    expect((persistedAssistantCalls[1][0] as { content: string }).content).not.toContain(
+      "Let me check the options.",
+    );
+  });
+
+  it("flushes tool:question tokens AFTER intro text so live chat:token order matches persisted order", async () => {
+    // Regression for PR#77 review item #1 — the rendered question block must
+    // not race ahead of the intro text on the live websocket. Intro may arrive
+    // via `result.outputText` (Claude CLI mixed turn) or as `stream:text`
+    // deltas, but either way the question must come last in the token stream.
+    mockAdapterRun.mockImplementation(async (input: RuntimeRunInput) => {
+      const onEvent = input.execution?.onEvent as
+        | ((event: Record<string, unknown>) => void)
+        | undefined;
+      onEvent?.({
+        type: "tool:question",
+        data: {
+          toolUseId: "tool-order",
+          toolName: "AskUserQuestion",
+          questions: [{ question: "Pick a mode", options: [{ label: "A" }, { label: "B" }] }],
+        },
+      });
+      return { outputText: "Let me check the options.", sessionId: "runtime-session-1" };
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "order",
+        clientId: "client-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const tokenCalls = mockSendToClient.mock.calls.filter((call) => call[1]?.type === "chat:token");
+    const tokens = tokenCalls.map((call) => String(call[1].payload.token));
+    const introIndex = tokens.findIndex((t) => t.includes("Let me check the options."));
+    const questionIndex = tokens.findIndex((t) => t.includes("Pick a mode"));
+    expect(introIndex).toBeGreaterThanOrEqual(0);
+    expect(questionIndex).toBeGreaterThanOrEqual(0);
+    expect(introIndex).toBeLessThan(questionIndex);
   });
 
   it("does NOT duplicate assistant text when stream:text deltas already fired alongside a question", async () => {

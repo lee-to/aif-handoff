@@ -296,6 +296,121 @@ describe("chat session API", () => {
       expect(body[1].role).toBe("assistant");
     });
 
+    it("deduplicates a mixed text+question turn on reload of a linked DB session", async () => {
+      // Regression for PR#77 review item #2 — Claude replay splits a mixed
+      // assistant turn into a `session-message` (intro text) and a separate
+      // `tool:question`. POST now persists the same split shape (two rows),
+      // so mergeRuntimeAndDbMessages matches each runtime event to its DB row
+      // by exact trimmed-content equality instead of appending a stale
+      // combined row as a third duplicate.
+      mockFindChatSessionById.mockReturnValue({
+        ...SESSION_ROW,
+        runtimeSessionId: "runtime-linked",
+      });
+
+      const introContent = "Let me check the options.";
+      const questionContent = [
+        "",
+        "",
+        "**❓ Pick a mode**",
+        "",
+        "1. A",
+        "2. B",
+        "",
+        "_Answer by number or free text in the next message._",
+        "",
+        "",
+      ].join("\n");
+
+      mockListChatMessages.mockReturnValue([
+        {
+          id: "m-user",
+          sessionId: "session-1",
+          role: "user",
+          content: "mixed prompt",
+          createdAt: "2026-04-10T00:00:00Z",
+        },
+        {
+          id: "m-intro",
+          sessionId: "session-1",
+          role: "assistant",
+          content: introContent,
+          createdAt: "2026-04-10T00:00:01Z",
+        },
+        {
+          id: "m-question",
+          sessionId: "session-1",
+          role: "assistant",
+          content: questionContent.trim(),
+          createdAt: "2026-04-10T00:00:02Z",
+        },
+      ]);
+
+      mockListSessionEvents.mockResolvedValue([
+        {
+          type: "session-message",
+          timestamp: "2026-04-10T00:00:00Z",
+          message: "mixed prompt",
+          data: { role: "user", id: "u1" },
+        },
+        {
+          type: "session-message",
+          timestamp: "2026-04-10T00:00:01Z",
+          message: introContent,
+          data: { role: "assistant", id: "a1" },
+        },
+        {
+          type: "tool:question",
+          timestamp: "2026-04-10T00:00:02Z",
+          data: {
+            toolUseId: "tool-reload",
+            toolName: "AskUserQuestion",
+            questions: [{ question: "Pick a mode", options: [{ label: "A" }, { label: "B" }] }],
+          },
+        },
+      ]);
+
+      const res = await app.request("/chat/sessions/session-1/messages");
+      expect(res.status).toBe(200);
+      const messages = (await res.json()) as Array<{ role: string; content: string }>;
+      expect(messages.length).toBe(3);
+      expect(messages.filter((m) => m.role === "user").length).toBe(1);
+      expect(messages.filter((m) => m.role === "assistant").length).toBe(2);
+      expect(messages.filter((m) => m.content.includes("Let me check the options.")).length).toBe(
+        1,
+      );
+      expect(messages.filter((m) => m.content.includes("Pick a mode")).length).toBe(1);
+    });
+
+    it("assigns a stable id to tool:question events based on toolUseId across repeated fetches", async () => {
+      // Regression for PR#77 review item #3 — without this, eventId() falls
+      // back to crypto.randomUUID() on every fetch, churning the UI's message
+      // keys and causing visible list re-ordering/flicker on reload.
+      mockListSessionEvents.mockResolvedValue([
+        {
+          type: "tool:question",
+          timestamp: "2026-04-10T00:00:00Z",
+          data: {
+            toolUseId: "tool-stable-42",
+            toolName: "AskUserQuestion",
+            questions: [{ question: "Pick?", options: [{ label: "A" }] }],
+          },
+        },
+      ]);
+
+      const first = await app.request("/chat/sessions/sdk:stable-abc/messages");
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as Array<{ id: string; content: string }>;
+      const second = await app.request("/chat/sessions/sdk:stable-abc/messages");
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as Array<{ id: string; content: string }>;
+
+      expect(firstBody).toHaveLength(1);
+      expect(secondBody).toHaveLength(1);
+      expect(firstBody[0].id).toBe("tool:question:tool-stable-42");
+      expect(secondBody[0].id).toBe(firstBody[0].id);
+    });
+
     it("passes runtime profile options and headers when loading linked runtime session events", async () => {
       mockFindChatSessionById.mockReturnValue({
         ...SESSION_ROW,

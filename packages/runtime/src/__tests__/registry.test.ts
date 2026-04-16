@@ -586,3 +586,137 @@ describe("runtime error classes", () => {
     expect(load.code).toBe("RUNTIME_MODULE_LOAD_ERROR");
   });
 });
+
+describe("Language directive injection", () => {
+  async function setupTempProject(languageBlock: string | null): Promise<string> {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const root = mkdtempSync(join(tmpdir(), "registry-lang-test-"));
+    mkdirSync(join(root, ".ai-factory"), { recursive: true });
+    if (languageBlock !== null) {
+      writeFileSync(join(root, ".ai-factory", "config.yaml"), languageBlock);
+    }
+    const { clearProjectConfigCache } = await import("@aif/shared");
+    clearProjectConfigCache();
+    return root;
+  }
+
+  function createCapturingAdapter(): {
+    adapter: RuntimeAdapter;
+    captured: { run: string | undefined; resume: string | undefined };
+  } {
+    const captured = {
+      run: undefined as string | undefined,
+      resume: undefined as string | undefined,
+    };
+    const adapter: RuntimeAdapter = {
+      descriptor: {
+        id: "capture",
+        providerId: "capture-provider",
+        displayName: "Capture",
+        capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES, supportsResume: true },
+      },
+      async run(input) {
+        captured.run = input.execution?.systemPromptAppend;
+        return { outputText: "ok", usage: null };
+      },
+      async resume(input) {
+        captured.resume = input.execution?.systemPromptAppend;
+        return { outputText: "ok", usage: null };
+      },
+    };
+    return { adapter, captured };
+  }
+
+  function buildRunInput(projectRoot: string | undefined, existingAppend?: string) {
+    return {
+      runtimeId: "capture",
+      providerId: "capture-provider",
+      profileId: null,
+      workflowKind: "test",
+      transport: "sdk" as const,
+      prompt: "hello",
+      projectRoot,
+      execution: existingAppend ? { systemPromptAppend: existingAppend } : undefined,
+      usageContext: TEST_USAGE_CONTEXT,
+    };
+  }
+
+  it("appends directive to systemPromptAppend when artifacts=ru", async () => {
+    const root = await setupTempProject("language:\n  artifacts: ru\n");
+    const { adapter, captured } = createCapturingAdapter();
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const wrapped = registry.resolveRuntime("capture");
+
+    await wrapped.run(buildRunInput(root, "PROJECT SCOPE RULE"));
+
+    expect(captured.run).toBeDefined();
+    expect(captured.run).toMatch(/^PROJECT SCOPE RULE\n\n/);
+    expect(captured.run).toContain("Russian");
+    expect(captured.run).toContain("identifiers");
+  });
+
+  it("injects directive with no existing systemPromptAppend", async () => {
+    const root = await setupTempProject("language:\n  artifacts: ru\n");
+    const { adapter, captured } = createCapturingAdapter();
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const wrapped = registry.resolveRuntime("capture");
+
+    await wrapped.run(buildRunInput(root));
+
+    expect(captured.run).toBeDefined();
+    expect(captured.run).toContain("Russian");
+    expect(captured.run).not.toMatch(/^\n\n/);
+  });
+
+  it("does not modify systemPromptAppend when artifacts=en", async () => {
+    const root = await setupTempProject("language:\n  artifacts: en\n");
+    const { adapter, captured } = createCapturingAdapter();
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const wrapped = registry.resolveRuntime("capture");
+
+    await wrapped.run(buildRunInput(root, "SCOPE RULE"));
+
+    expect(captured.run).toBe("SCOPE RULE");
+  });
+
+  it("skips injection when projectRoot is missing", async () => {
+    const { adapter, captured } = createCapturingAdapter();
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const wrapped = registry.resolveRuntime("capture");
+
+    await wrapped.run(buildRunInput(undefined, "SCOPE"));
+
+    expect(captured.run).toBe("SCOPE");
+  });
+
+  it("also injects on resume()", async () => {
+    const root = await setupTempProject("language:\n  artifacts: ru\n");
+    const { adapter, captured } = createCapturingAdapter();
+    const registry = createRuntimeRegistry({ builtInAdapters: [adapter] });
+    const wrapped = registry.resolveRuntime("capture");
+
+    await wrapped.resume!({ ...buildRunInput(root, "S"), sessionId: "sid-1" });
+
+    expect(captured.resume).toBeDefined();
+    expect(captured.resume).toContain("Russian");
+    expect(captured.resume).toMatch(/^S\n\n/);
+  });
+
+  it("does not throw and logs WARN when config read fails", async () => {
+    // Point projectRoot at a path where config.yaml exists but is unreadable
+    // garbage — YAML.parse will blow up and we should swallow + warn.
+    const root = await setupTempProject(":::not yaml::\n  - [");
+    const { adapter, captured } = createCapturingAdapter();
+    const logger = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const registry = createRuntimeRegistry({ logger, builtInAdapters: [adapter] });
+    const wrapped = registry.resolveRuntime("capture");
+
+    await expect(wrapped.run(buildRunInput(root, "EXISTING"))).resolves.toBeDefined();
+
+    expect(captured.run).toBe("EXISTING");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeId: "capture" }),
+      expect.stringContaining("skipping language directive"),
+    );
+  });
+});

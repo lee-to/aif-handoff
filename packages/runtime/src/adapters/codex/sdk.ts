@@ -487,7 +487,15 @@ async function runCodexSdkAttempt(
       ? codex.resumeThread(input.sessionId, threadOpts)
       : codex.startThread(threadOpts);
 
-  const { events } = await thread.runStreamed(input.prompt, turnOpts);
+  // The Codex SDK does not expose a dedicated system-prompt slot on
+  // ThreadOptions/TurnOptions, so `execution.systemPromptAppend` (used by the
+  // API transport via a real system message) is prepended to the user prompt
+  // instead. This keeps the registry's language-directive injection effective
+  // across every Codex transport — see packages/runtime/src/registry.ts.
+  const systemAppend = execution?.systemPromptAppend?.trim();
+  const composedPrompt = systemAppend ? `${systemAppend}\n\n${input.prompt}` : input.prompt;
+
+  const { events } = await thread.runStreamed(composedPrompt, turnOpts);
 
   // Wrap event stream with shared timeout utilities
   const abort = execution?.abortController ?? new AbortController();

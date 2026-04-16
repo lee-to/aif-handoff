@@ -122,6 +122,88 @@ describe("getProjectConfig", () => {
     expect(config.git.skip_push_after_commit).toBe(true);
   });
 
+  it("returns default language block when config.yaml does not exist", () => {
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.ui).toBe("en");
+    expect(config.language.artifacts).toBe("en");
+    expect(config.language.technical_terms).toBe("keep");
+  });
+
+  it("returns default language block when config.yaml has no language section", () => {
+    writeFileSync(join(projectRoot, ".ai-factory", "config.yaml"), "paths:\n  plan: p.md\n");
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.ui).toBe("en");
+    expect(config.language.artifacts).toBe("en");
+    expect(config.language.technical_terms).toBe("keep");
+  });
+
+  it("parses partial language block (only artifacts)", () => {
+    writeFileSync(join(projectRoot, ".ai-factory", "config.yaml"), "language:\n  artifacts: ru\n");
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.ui).toBe("en");
+    expect(config.language.artifacts).toBe("ru");
+    expect(config.language.technical_terms).toBe("keep");
+  });
+
+  it("parses full language block", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "language:\n  ui: ru\n  artifacts: ru\n  technical_terms: translate\n",
+    );
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.ui).toBe("ru");
+    expect(config.language.artifacts).toBe("ru");
+    expect(config.language.technical_terms).toBe("translate");
+  });
+
+  it("normalizes language codes to lowercase", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "language:\n  artifacts: RU\n  ui: Fr\n",
+    );
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.artifacts).toBe("ru");
+    expect(config.language.ui).toBe("fr");
+  });
+
+  it("falls back to 'keep' for invalid technical_terms value without throwing", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "language:\n  artifacts: ru\n  technical_terms: nonsense\n",
+    );
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.technical_terms).toBe("keep");
+  });
+
+  it("falls back to default artifacts when language tag is not BCP-47 shaped", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      'language:\n  artifacts: "not a tag"\n  ui: "русский"\n',
+    );
+    const config = getProjectConfig(projectRoot);
+    // Garbage values must not reach the directive builder verbatim.
+    expect(config.language.artifacts).toBe("en");
+    expect(config.language.ui).toBe("en");
+  });
+
+  it("accepts BCP-47 region subtags on artifacts", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "language:\n  artifacts: pt-BR\n",
+    );
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.artifacts).toBe("pt-br");
+  });
+
+  it("normalizes technical_terms case and whitespace ('Translate' → 'translate')", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      'language:\n  artifacts: ru\n  technical_terms: " Translate "\n',
+    );
+    const config = getProjectConfig(projectRoot);
+    expect(config.language.technical_terms).toBe("translate");
+  });
+
   it("clearProjectConfigCache invalidates cache", () => {
     writeFileSync(join(projectRoot, ".ai-factory", "config.yaml"), "paths:\n  plan: v1/PLAN.md\n");
     const first = getProjectConfig(projectRoot);

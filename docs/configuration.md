@@ -114,6 +114,61 @@ Only non-secret fields are persisted (`baseUrl`, `apiKeyEnvVar`, headers/options
 
 For concrete profile payloads and adapter capability differences, see [Providers](providers.md).
 
+## Project Language
+
+`.ai-factory/config.yaml` carries a `language` block that controls the language AI produces for
+generated artifacts (task descriptions, plans, review notes, commit messages, roadmap items,
+chat replies). The setting is wired through a single injection point in the runtime registry
+(`packages/runtime/src/registry.ts` — `wrapAdapter`), so every call path — subagents, roadmap
+generation, fast-fix, commit generation, reviewGate, chat — picks it up automatically across
+all transports (SDK/CLI/API).
+
+```yaml
+# .ai-factory/config.yaml
+language:
+  ui: en # reserved for future UI localisation (currently informational)
+  artifacts: ru # language for AI-produced artifacts; "en" (default) disables injection
+  technical_terms: keep # "keep" or "translate"
+```
+
+Keys:
+
+- `artifacts` — BCP-47-ish language code. Values are validated against a conservative
+  `^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$` pattern after trim+lowercase (both `-` and `_` are
+  accepted as subtag separators, so `en-US` and `en_US` parse identically); tags that fail the
+  pattern (typos, non-ASCII strings) silently fall back to the default `en` rather than being
+  embedded raw in the system directive. Any regional tag whose primary subtag is `en` (`en-US`,
+  `en_GB`, …) is also treated as a no-op. Any other valid tag appends a short system directive
+  asking the model to write artifacts in that language.
+- `technical_terms` — `keep` (default) instructs the model to leave identifiers, API/function
+  names, file paths, CLI flags, environment variables, code snippets, and log/error strings in
+  English even when the rest of the text is translated. `translate` allows natural translation
+  of those tokens where a good equivalent exists.
+- `ui` — reserved for future UI-side localisation; currently informational only.
+
+Injection is uniform at the registry layer: the directive is written to
+`execution.systemPromptAppend` (never to `input.prompt`), so resume sessions, slash commands,
+and agent definitions continue to work unchanged. Existing appends (project-scope,
+review-diff-scope) are preserved verbatim and placed BEFORE the language directive so scope
+rules keep their emphasis.
+
+How each adapter then delivers that append block to the model depends on the transport:
+
+| Adapter    | SDK                          | CLI                      | API            |
+| ---------- | ---------------------------- | ------------------------ | -------------- |
+| Claude     | `options.systemPromptAppend` | `--append-system-prompt` | n/a            |
+| Codex      | prepended to user prompt     | prepended to CLI stdin   | system message |
+| OpenRouter | n/a                          | n/a                      | system message |
+| OpenCode   | n/a                          | n/a                      | system message |
+
+The Codex SDK/CLI paths do not expose a dedicated system-prompt slot, so the adapter prepends
+the append block to the user prompt separated by a blank line. That happens inside the
+adapter, after the registry has set `systemPromptAppend` — the caller and the registry never
+mutate `input.prompt` themselves. This keeps the registry-level injection guaranteed to reach
+the model on every Codex transport, matching the API path.
+
+To disable: leave `artifacts: en` (the default).
+
 ## Database
 
 The database is a single SQLite file. The default path `./data/aif.sqlite` is relative to the project root.
@@ -332,13 +387,13 @@ The config is editable via the **Global Settings** dialog in the web UI (gear ic
 
 ### Sections
 
-**`language`** — controls AI-generated content language:
+**`language`** — controls AI-generated content language. See [Project Language](#project-language) for the full directive contract, validation rules, and per-transport delivery matrix:
 
-| Key               | Default | Options                                                    |
-| ----------------- | ------- | ---------------------------------------------------------- |
-| `ui`              | `en`    | `en`, `ru`, `de`, `fr`, `es`, `zh`, `ja`, `ko`, `pt`, `it` |
-| `artifacts`       | `en`    | Same as `ui`                                               |
-| `technical_terms` | `keep`  | `keep`, `translate`                                        |
+| Key               | Default | Options                                                                                                                                                                                                                       |
+| ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ui`              | `en`    | Reserved for future UI localisation (currently informational).                                                                                                                                                                |
+| `artifacts`       | `en`    | BCP-47-ish tag, validated against `^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$` after trim+lowercase. `-` and `_` are interchangeable separators (`en-US` == `en_US`). Any `en*` primary subtag and invalid tags are treated as no-op. |
+| `technical_terms` | `keep`  | `keep`, `translate`                                                                                                                                                                                                           |
 
 **`paths`** — custom paths for AI Factory artifacts (relative to project root):
 

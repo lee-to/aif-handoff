@@ -121,6 +121,8 @@ export {
 
 export { bootstrapRuntimeRegistry, type BootstrapRuntimeRegistryOptions } from "./bootstrap.js";
 
+export { buildLanguageDirective, type LanguageDirectiveInput } from "./languagePolicy.js";
+
 export { initProject, type InitProjectOptions, type InitProjectResult } from "./projectInit.js";
 
 export { isValidTrustToken, RUNTIME_TRUST_TOKEN, type RuntimeTrustToken } from "./trust.js";

@@ -134,6 +134,7 @@ export {
   type AifProjectPaths,
   type AifProjectWorkflow,
   type AifProjectGit,
+  type AifProjectLanguage,
 } from "./projectConfig.js";
 
 // Telegram notifications

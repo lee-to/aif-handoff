@@ -37,11 +37,15 @@ export function toolQuestionEvent(
   payload: RuntimeToolQuestionPayload,
   timestamp: string,
 ): RuntimeEvent {
+  const joined = payload.questions
+    .map((q) => (typeof q.question === "string" ? q.question.trim() : ""))
+    .filter((text) => text.length > 0)
+    .join(" | ");
   return {
     type: "tool:question",
     timestamp,
     level: "info",
-    message: payload.questions[0]?.question || payload.toolName,
+    message: joined || payload.toolName,
     data: payload as unknown as Record<string, unknown>,
   };
 }

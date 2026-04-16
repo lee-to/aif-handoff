@@ -390,6 +390,107 @@ describe("Claude runtime adapter", () => {
     expect(events[0].data).toEqual({ role: "assistant", id: "m-1" });
   });
 
+  it("emits tool:question events for AskUserQuestion tool_use blocks in session history", async () => {
+    // Reviewer point (PR #77): runtime-only/virtual sessions must surface the
+    // question on reload. Without projecting tool_use → tool:question here, a
+    // question-only assistant turn disappears from GET /chat/sessions/:id/messages.
+    getSessionMessagesMock.mockResolvedValueOnce([
+      {
+        uuid: "m-text",
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "Let me check the options." }],
+        },
+        createdAt: "2026-04-15T00:00:00.000Z",
+      },
+      {
+        uuid: "m-question-only",
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-ask-1",
+              name: "AskUserQuestion",
+              input: {
+                questions: [
+                  {
+                    question: "Which branch?",
+                    header: "Deploy target",
+                    options: [{ label: "main" }, { label: "dev" }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        createdAt: "2026-04-15T00:00:01.000Z",
+      },
+      {
+        uuid: "m-mixed",
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Thinking out loud." },
+            {
+              type: "tool_use",
+              id: "tool-ask-2",
+              name: "AskUserQuestion",
+              input: {
+                questions: [{ question: "Proceed?", options: [{ label: "Yes" }] }],
+              },
+            },
+          ],
+        },
+        createdAt: "2026-04-15T00:00:02.000Z",
+      },
+      {
+        uuid: "m-other-tool",
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "t-bash", name: "Bash", input: { command: "ls" } }],
+        },
+        createdAt: "2026-04-15T00:00:03.000Z",
+      },
+    ]);
+
+    const adapter = createClaudeRuntimeAdapter();
+    const events = await adapter.listSessionEvents!({
+      runtimeId: "claude",
+      providerId: "anthropic",
+      profileId: "profile-1",
+      sessionId: "session-1",
+      projectRoot: "/tmp/project",
+    });
+
+    const toolQuestionEvents = events.filter((event) => event.type === "tool:question");
+    expect(toolQuestionEvents).toHaveLength(2);
+    expect(toolQuestionEvents[0].data).toMatchObject({
+      toolUseId: "tool-ask-1",
+      toolName: "AskUserQuestion",
+    });
+    expect(toolQuestionEvents[1].data).toMatchObject({
+      toolUseId: "tool-ask-2",
+    });
+
+    const sessionMessageEvents = events.filter((event) => event.type === "session-message");
+    expect(sessionMessageEvents.map((event) => event.message)).toEqual([
+      "Let me check the options.",
+      "Thinking out loud.",
+    ]);
+
+    const mixedIndex = events.findIndex(
+      (event) => event.type === "session-message" && event.message === "Thinking out loud.",
+    );
+    expect(mixedIndex).toBeGreaterThanOrEqual(0);
+    expect(events[mixedIndex + 1]?.type).toBe("tool:question");
+
+    // Non-question tool_use blocks (e.g. Bash) are not projected as events here —
+    // the history path only surfaces interactive questions that would otherwise
+    // be lost; activity for other tools is out of scope for chat replay.
+    expect(events.some((event) => event.type === "tool:use")).toBe(false);
+  });
+
   it("returns null from getSession when sdk has no info", async () => {
     getSessionInfoMock.mockResolvedValueOnce(null);
     const adapter = createClaudeRuntimeAdapter();

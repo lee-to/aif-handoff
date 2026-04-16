@@ -933,7 +933,6 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
 
     const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
     let fullAssistantResponse = "";
-    let hasStreamedTokens = false;
     let streamedTextLength = 0;
 
     const sendToken = (text: string) => {
@@ -949,7 +948,6 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
 
     const onRuntimeEvent = (event: RuntimeEvent) => {
       if (event.type === "stream:text" && event.message) {
-        hasStreamedTokens = true;
         streamedTextLength += event.message.length;
         fullAssistantResponse += event.message;
         sendToken(event.message);
@@ -976,11 +974,10 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
             "DEBUG [chat] tool:question rendered",
           );
           sendToken(rendered);
-          hasStreamedTokens = true;
-          // Persist the question into the assistant text so it survives
-          // reload / reopen — runtime session history replays don't include
-          // `tool:question` events with a role, so without this the block
-          // is lost after a round-trip through GET /chat/sessions/:id/messages.
+          // Persist the question into the assistant text so DB-backed history
+          // still has the rendered block after reload. Virtual/runtime-only
+          // sessions now also see the question via listSessionEvents, which
+          // projects tool_use→tool:question on replay.
           fullAssistantResponse += rendered;
           if (payload.toolUseId) lastToolPromptId = payload.toolUseId;
         }

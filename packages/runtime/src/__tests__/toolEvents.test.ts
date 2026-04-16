@@ -55,7 +55,7 @@ describe("buildToolUseEvents", () => {
 });
 
 describe("toolQuestionEvent", () => {
-  it("uses the first question as the event message", () => {
+  it("joins all question texts so the message is a useful fallback, not just the first one", () => {
     const payload: RuntimeToolQuestionPayload = {
       toolUseId: null,
       toolName: "AskUserQuestion",
@@ -66,7 +66,7 @@ describe("toolQuestionEvent", () => {
     };
     const event = toolQuestionEvent(payload, "2026-04-14T00:00:00.000Z");
     expect(event.type).toBe("tool:question");
-    expect(event.message).toBe("First?");
+    expect(event.message).toBe("First? | Second?");
   });
 
   it("falls back to the tool name when no question text is present", () => {
@@ -77,5 +77,21 @@ describe("toolQuestionEvent", () => {
     };
     const event = toolQuestionEvent(payload, "2026-04-14T00:00:00.000Z");
     expect(event.message).toBe("AskUserQuestion");
+  });
+
+  it("preserves the full payload in event.data so consumers can render header + options", () => {
+    const payload: RuntimeToolQuestionPayload = {
+      toolUseId: "t-99",
+      toolName: "AskUserQuestion",
+      questions: [
+        {
+          question: "Branch?",
+          header: "Deploy target",
+          options: [{ label: "main" }, { label: "dev" }],
+        },
+      ],
+    };
+    const event = toolQuestionEvent(payload, "2026-04-14T00:00:00.000Z");
+    expect(event.data).toBe(payload as unknown as Record<string, unknown>);
   });
 });

@@ -6,7 +6,9 @@ import type {
   RuntimeSessionGetInput,
   RuntimeSessionListInput,
 } from "../../types.js";
+import { toolQuestionEvent } from "../../toolEvents.js";
 import { classifyClaudeRuntimeError } from "./errors.js";
+import { parseClaudeAskUserQuestion } from "./questions.js";
 
 interface ClaudeSessionSummary {
   sessionId: string;
@@ -106,24 +108,61 @@ export async function getClaudeRuntimeSession(
   }
 }
 
+function extractAssistantToolQuestionEvents(
+  message: ClaudeSessionMessage,
+  timestamp: string,
+): RuntimeEvent[] {
+  const raw = message.message;
+  if (!raw || typeof raw !== "object") return [];
+  const content = (raw as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+
+  const events: RuntimeEvent[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const item = block as { type?: string; name?: string; id?: string; input?: unknown };
+    if (item.type !== "tool_use" || typeof item.name !== "string") continue;
+    const toolUseId = typeof item.id === "string" ? item.id : null;
+    const payload = parseClaudeAskUserQuestion(item.name, toolUseId, item.input);
+    if (!payload) continue;
+    events.push(toolQuestionEvent(payload, timestamp));
+  }
+  return events;
+}
+
 export async function listClaudeRuntimeSessionEvents(
   input: RuntimeSessionEventsInput,
 ): Promise<RuntimeEvent[]> {
   try {
     const messages = (await getSessionMessages(input.sessionId)) as ClaudeSessionMessage[];
-    const events = messages
-      .filter((message) => message.type === "user" || message.type === "assistant")
-      .map((message) => ({
-        type: "session-message",
-        timestamp: toIso(message.createdAt),
-        level: "info" as const,
-        message: extractTextContent(message.message),
-        data: {
-          role: message.type,
-          id: message.uuid,
-        },
-      }))
-      .filter((event) => event.message && event.message.length > 0);
+    const events: RuntimeEvent[] = [];
+
+    for (const message of messages) {
+      if (message.type !== "user" && message.type !== "assistant") continue;
+      const timestamp = toIso(message.createdAt);
+      const text = extractTextContent(message.message);
+
+      if (text.length > 0) {
+        events.push({
+          type: "session-message",
+          timestamp,
+          level: "info",
+          message: text,
+          data: {
+            role: message.type,
+            id: message.uuid,
+          },
+        });
+      }
+
+      // Assistant turns may contain an AskUserQuestion tool_use block. Without
+      // projecting these as tool:question events, virtual/runtime-only session
+      // replay (GET /chat/sessions/:id/messages for sdk:/runtime: ids) would
+      // drop the question entirely when the turn carried no text alongside it.
+      if (message.type === "assistant") {
+        events.push(...extractAssistantToolQuestionEvents(message, timestamp));
+      }
+    }
 
     return input.limit ? events.slice(-input.limit) : events;
   } catch (error) {

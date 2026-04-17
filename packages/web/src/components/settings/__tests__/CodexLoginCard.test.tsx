@@ -6,7 +6,18 @@ import { CodexLoginCard } from "../CodexLoginCard";
 import { api } from "@/lib/api";
 
 vi.mock("@/lib/api", () => {
+  class ApiError extends Error {
+    status: number;
+    data?: unknown;
+    constructor(message: string, status: number, data?: unknown) {
+      super(message);
+      this.name = "ApiError";
+      this.status = status;
+      this.data = data;
+    }
+  }
   return {
+    ApiError,
     api: {
       getCodexLoginCapabilities: vi.fn(),
       getCodexLoginStatus: vi.fn(),

@@ -68,7 +68,7 @@ EXPOSE 80 443
 # ---- Agent ----
 FROM base AS agent
 ENV NODE_ENV=production HOME=/home/node
-RUN apt-get update && apt-get install -y --no-install-recommends gosu git && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends gosu git curl && rm -rf /var/lib/apt/lists/* \
     && npm i -g @anthropic-ai/claude-code @openai/codex
 COPY --chown=node:node --from=deps /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/packages/shared ./packages/shared
@@ -77,7 +77,10 @@ COPY --chown=node:node --from=build /app/packages/runtime ./packages/runtime
 COPY --chown=node:node --from=build /app/packages/agent ./packages/agent
 COPY --chown=node:node package.json .
 COPY --chown=node:node .docker/docker-entrypoint.sh /usr/local/bin/
+COPY .docker/aif-codex-callback.sh /usr/local/bin/aif-codex-callback
+RUN chmod +x /usr/local/bin/aif-codex-callback
 RUN install -d -o node -g node /app /data /home/www
+EXPOSE 3010
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npx", "tsx", "packages/agent/src/index.ts"]
 

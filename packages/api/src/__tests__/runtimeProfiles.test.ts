@@ -8,12 +8,21 @@ const testDb = { current: createTestDb() };
 const mockValidateConnection = vi.fn();
 const mockListModels = vi.fn();
 const mockListRuntimes = vi.fn();
+const mockGetCodexAuthIdentity = vi.fn();
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
   return {
     ...actual,
     getDb: () => testDb.current,
+  };
+});
+
+vi.mock("@aif/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/runtime")>();
+  return {
+    ...actual,
+    getCodexAuthIdentity: (...args: unknown[]) => mockGetCodexAuthIdentity(...args),
   };
 });
 
@@ -46,6 +55,8 @@ describe("runtimeProfiles API", () => {
     mockValidateConnection.mockReset();
     mockListModels.mockReset();
     mockListRuntimes.mockReset();
+    mockGetCodexAuthIdentity.mockReset();
+    mockGetCodexAuthIdentity.mockResolvedValue(null);
     mockValidateConnection.mockResolvedValue({
       ok: true,
       message: "validation ok",
@@ -267,6 +278,68 @@ describe("runtimeProfiles API", () => {
           costUsd: 0.08,
         },
         lastUsageAt: "2026-04-18T10:00:00.000Z",
+      }),
+    );
+  });
+
+  it("enriches local Codex quota snapshots with auth identity when persisted metadata is stale", async () => {
+    mockGetCodexAuthIdentity.mockResolvedValue({
+      accountId: "account-codex-1",
+      authMode: "chatgpt",
+      accountName: "Anton Ageev",
+      accountEmail: "ichi.chaik@gmail.com",
+      planType: "pro",
+    });
+
+    const db = testDb.current;
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-codex-sdk",
+        projectId: "project-1",
+        name: "gpt-5.4",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        enabled: true,
+        runtimeLimitSnapshotJson: JSON.stringify({
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T06:24:09.174Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-sdk",
+          primaryScope: "time",
+          resetAt: "2026-04-18T07:02:25.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 96,
+              resetAt: "2026-04-18T07:02:25.000Z",
+            },
+          ],
+          providerMeta: {
+            limitId: "codex",
+            planType: "pro",
+          },
+        }),
+        runtimeLimitUpdatedAt: "2026-04-18T06:24:09.174Z",
+      })
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body[0].runtimeLimitSnapshot.providerMeta).toEqual(
+      expect.objectContaining({
+        accountId: "account-codex-1",
+        authMode: "chatgpt",
+        accountName: "Anton Ageev",
+        accountEmail: "ichi.chaik@gmail.com",
+        planType: "pro",
+        limitId: "codex",
       }),
     );
   });

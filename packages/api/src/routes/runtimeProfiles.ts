@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import {
   createRuntimeWorkflowSpec,
+  getCodexAuthIdentity,
   isValidEnvVarName,
   redactResolvedRuntimeProfile,
   resolveRuntimeProfile,
@@ -91,6 +92,79 @@ function inferApiKeyEnvVar(profile: {
 function sanitizeBooleanQuery(value: string | undefined, fallback = false): boolean {
   if (!value) return fallback;
   return value === "1" || value.toLowerCase() === "true";
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isLocalCodexProfile(profile: { runtimeId: string; transport?: string | null }): boolean {
+  return (
+    profile.runtimeId === "codex" && (profile.transport === "sdk" || profile.transport === "cli")
+  );
+}
+
+function readProviderMetaString(
+  providerMeta: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const value = providerMeta?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+interface LocalCodexAccountProfileLike {
+  runtimeId: string;
+  transport?: string | null;
+  runtimeLimitSnapshot?: {
+    providerMeta?: Record<string, unknown> | null;
+  } | null;
+}
+
+function enrichProfileWithCodexIdentity<T extends LocalCodexAccountProfileLike>(
+  profile: T,
+  identity: Awaited<ReturnType<typeof getCodexAuthIdentity>>,
+): T {
+  if (!isLocalCodexProfile(profile) || !profile.runtimeLimitSnapshot || !identity) {
+    return profile;
+  }
+
+  const snapshot = profile.runtimeLimitSnapshot;
+  const providerMeta = isObjectRecord(snapshot.providerMeta) ? snapshot.providerMeta : {};
+  const nextProviderMeta = {
+    ...providerMeta,
+    ...(readProviderMetaString(providerMeta, "accountId") ? {} : { accountId: identity.accountId }),
+    ...(readProviderMetaString(providerMeta, "authMode") ? {} : { authMode: identity.authMode }),
+    ...(readProviderMetaString(providerMeta, "accountName")
+      ? {}
+      : { accountName: identity.accountName }),
+    ...(readProviderMetaString(providerMeta, "accountEmail")
+      ? {}
+      : { accountEmail: identity.accountEmail }),
+    ...(readProviderMetaString(providerMeta, "planType") ? {} : { planType: identity.planType }),
+  };
+
+  return {
+    ...profile,
+    runtimeLimitSnapshot: {
+      ...snapshot,
+      providerMeta: nextProviderMeta,
+    },
+  };
+}
+
+async function enrichProfilesWithCodexIdentity<T extends LocalCodexAccountProfileLike>(
+  profiles: T[],
+): Promise<T[]> {
+  if (!profiles.some((profile) => isLocalCodexProfile(profile) && profile.runtimeLimitSnapshot)) {
+    return profiles;
+  }
+
+  const identity = await getCodexAuthIdentity();
+  if (!identity) {
+    return profiles;
+  }
+
+  return profiles.map((profile) => enrichProfileWithCodexIdentity(profile, identity));
 }
 
 function resolveValidationProfile(input: {
@@ -193,7 +267,8 @@ runtimeProfilesRouter.get("/", async (c) => {
     { projectId, includeGlobal, enabledOnly },
     "DEBUG [runtime-profile-route] List request",
   );
-  return c.json(listRuntimeProfileResponses({ projectId, includeGlobal, enabledOnly }));
+  const profiles = listRuntimeProfileResponses({ projectId, includeGlobal, enabledOnly });
+  return c.json(await enrichProfilesWithCodexIdentity(profiles));
 });
 
 // GET /runtime-profiles/:id
@@ -201,7 +276,7 @@ runtimeProfilesRouter.get("/:id", async (c) => {
   const { id } = c.req.param();
   const profile = getRuntimeProfileResponseById(id);
   if (!profile) return c.json({ error: "Runtime profile not found" }, 404);
-  return c.json(profile);
+  return c.json((await enrichProfilesWithCodexIdentity([profile]))[0]);
 });
 
 // POST /runtime-profiles
@@ -294,7 +369,9 @@ runtimeProfilesRouter.get("/effective/task/:taskId", async (c) => {
 
   return c.json({
     source: effective.source,
-    profile: effective.profile,
+    profile: effective.profile
+      ? (await enrichProfilesWithCodexIdentity([effective.profile]))[0]
+      : effective.profile,
     taskRuntimeProfileId: effective.taskRuntimeProfileId,
     projectRuntimeProfileId: effective.projectRuntimeProfileId,
     systemRuntimeProfileId: effective.systemRuntimeProfileId,
@@ -328,7 +405,9 @@ runtimeProfilesRouter.get("/effective/chat/:projectId", async (c) => {
 
   return c.json({
     source: effective.source,
-    profile: effective.profile,
+    profile: effective.profile
+      ? (await enrichProfilesWithCodexIdentity([effective.profile]))[0]
+      : effective.profile,
     taskRuntimeProfileId: effective.taskRuntimeProfileId,
     projectRuntimeProfileId: effective.projectRuntimeProfileId,
     systemRuntimeProfileId: effective.systemRuntimeProfileId,

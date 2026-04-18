@@ -171,6 +171,8 @@ export type {
   CreateCodexRuntimeAdapterOptions,
 } from "./adapters/codex/index.js";
 
+export { getCodexAuthIdentity, type CodexAuthIdentity } from "./adapters/codex/sessions.js";
+
 export type {
   CreateOpenCodeRuntimeAdapterOptions,
   OpenCodeRuntimeAdapterLogger,

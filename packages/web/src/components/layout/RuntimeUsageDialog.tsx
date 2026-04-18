@@ -401,11 +401,9 @@ export function RuntimeUsageDialog({ open, onOpenChange, projectId }: RuntimeUsa
                           </Badge>
                         )}
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>
-                          {entry.profileNames.length > 1 ? "Profiles" : "Profile"}:{" "}
-                          {entry.profileNames.join(", ")}
-                        </span>
+                      <div className="mt-1.5 break-words text-sm font-medium text-foreground/90">
+                        {entry.profileNames.length > 1 ? "Profiles" : "Profile"}:{" "}
+                        {entry.profileNames.join(", ")}
                       </div>
                     </div>
                     <div className="text-right text-[11px] text-muted-foreground">

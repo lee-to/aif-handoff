@@ -59,7 +59,7 @@ interface CodexSessionRateLimits {
   plan_type?: unknown;
 }
 
-interface CodexAuthIdentity {
+export interface CodexAuthIdentity {
   accountId: string | null;
   authMode: string | null;
   accountName: string | null;
@@ -140,7 +140,7 @@ function decodeJwtPayload(token: unknown): Record<string, unknown> | null {
   }
 }
 
-async function readCodexAuthIdentity(): Promise<CodexAuthIdentity | null> {
+export async function getCodexAuthIdentity(): Promise<CodexAuthIdentity | null> {
   let raw: string;
   try {
     raw = await readFile(AUTH_FILE, "utf-8");
@@ -548,7 +548,7 @@ export async function getCodexSessionLimitSnapshot(input: {
     return null;
   }
 
-  const authIdentity = await readCodexAuthIdentity();
+  const authIdentity = await getCodexAuthIdentity();
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const entry = parseJsonLine(lines[index]!);

@@ -235,14 +235,14 @@ describe("Header", () => {
     fireEvent.click(screen.getByRole("button", { name: "Runtime usage" }));
 
     expect(screen.getByText("Runtime Usage")).toBeDefined();
-    expect(screen.getByText("claude/anthropic")).toBeDefined();
-    expect(screen.getByText("Model: claude-sonnet")).toBeDefined();
+    expect(screen.getByText("claude/anthropic sdk")).toBeDefined();
+    expect(screen.getByText("Profile: Claude Team")).toBeDefined();
     expect(screen.getByText("5h")).toBeDefined();
     expect(screen.getByText("90% remaining")).toBeDefined();
     expect(screen.getByText("7d")).toBeDefined();
     expect(screen.getByText("62% remaining")).toBeDefined();
-    expect(screen.getByText("codex/openai")).toBeDefined();
-    expect(screen.getByText("Model: gpt-5.4")).toBeDefined();
+    expect(screen.getByText("codex/openai API")).toBeDefined();
+    expect(screen.getByText("Profile: Codex API")).toBeDefined();
     expect(screen.getAllByText("Requests").length).toBeGreaterThan(0);
     expect(screen.getByText("12% remaining")).toBeDefined();
     expect(screen.getAllByText("Tokens").length).toBeGreaterThan(0);
@@ -275,7 +275,8 @@ describe("Header", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Runtime usage" }));
 
-    expect(screen.getByText("codex/openai")).toBeDefined();
+    expect(screen.getByText("codex/openai API")).toBeDefined();
+    expect(screen.getByText("Profile: Codex API")).toBeDefined();
     expect(screen.getByText("NO SIGNAL")).toBeDefined();
     expect(
       screen.getByText("No live quota window reported for this runtime/transport yet."),
@@ -319,11 +320,133 @@ describe("Header", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Runtime usage" }));
 
-    expect(screen.getByText("codex/openai")).toBeDefined();
+    expect(screen.getByText("codex/openai sdk")).toBeDefined();
+    expect(screen.getByText("Profile: gpt-5.4")).toBeDefined();
     expect(screen.getByText("USAGE ONLY")).toBeDefined();
     expect(screen.getByText("320")).toBeDefined();
     expect(screen.getByText("88")).toBeDefined();
     expect(screen.getByText("408")).toBeDefined();
     expect(screen.getByText("$0.12")).toBeDefined();
+  });
+
+  it("merges local Codex profiles that share the same account quota", () => {
+    mockRuntimeProfiles = [
+      {
+        id: "profile-codex-cli",
+        projectId: "project-1",
+        name: "CLI gpt-5.3-codex",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "cli",
+        baseUrl: null,
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "gpt-5.3-codex",
+        headers: {},
+        options: {},
+        enabled: true,
+        runtimeLimitSnapshot: {
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T05:21:00.000Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-cli",
+          primaryScope: "time",
+          resetAt: "2099-04-18T07:02:00.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 96,
+              resetAt: "2099-04-18T07:02:00.000Z",
+            },
+            {
+              scope: "time",
+              name: "7d",
+              percentRemaining: 95,
+              resetAt: "2099-04-23T16:55:00.000Z",
+            },
+          ],
+          providerMeta: {
+            accountId: "account-codex-1",
+            accountName: "Anton Ageev",
+            planType: "pro",
+          },
+        },
+        runtimeLimitUpdatedAt: "2026-04-18T05:21:00.000Z",
+        lastUsage: {
+          inputTokens: 1382445,
+          outputTokens: 9865,
+          totalTokens: 1392310,
+        },
+        lastUsageAt: "2026-04-18T05:21:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "profile-codex-sdk",
+        projectId: "project-1",
+        name: "gpt-5.4",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        baseUrl: null,
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "gpt-5.4",
+        headers: {},
+        options: {},
+        enabled: true,
+        runtimeLimitSnapshot: {
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T05:24:00.000Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-sdk",
+          primaryScope: "time",
+          resetAt: "2099-04-18T07:02:00.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 96,
+              resetAt: "2099-04-18T07:02:00.000Z",
+            },
+            {
+              scope: "time",
+              name: "7d",
+              percentRemaining: 95,
+              resetAt: "2099-04-23T16:55:00.000Z",
+            },
+          ],
+          providerMeta: {
+            accountId: "account-codex-1",
+            accountName: "Anton Ageev",
+            planType: "pro",
+          },
+        },
+        runtimeLimitUpdatedAt: "2026-04-18T05:24:00.000Z",
+        lastUsage: {
+          inputTokens: 435229,
+          outputTokens: 6455,
+          totalTokens: 441684,
+        },
+        lastUsageAt: "2026-04-18T05:24:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+
+    renderHeader();
+
+    fireEvent.click(screen.getByRole("button", { name: "Runtime usage" }));
+
+    expect(screen.getAllByText("Anton Ageev Pro codex/openai sdk/cli")).toHaveLength(1);
+    expect(screen.getByText("Profiles: CLI gpt-5.3-codex, gpt-5.4")).toBeDefined();
+    expect(screen.getByText("441,684")).toBeDefined();
   });
 });

@@ -35,6 +35,7 @@ type SessionsModule = typeof import("../adapters/codex/sessions.js");
 
 describe("Codex SDK session store parsing", () => {
   const sessionsRoot = join("C:/Users/test", ".codex", "sessions");
+  const authFile = join("C:/Users/test", ".codex", "auth.json");
   const aprilDir = join(sessionsRoot, "2026", "04", "08");
   const olderSessionId = "019d6e29-f6a5-7991-b695-0ac84756e40f";
   const newerSessionId = "019d6e2c-e143-7642-8917-06f51e30ee84";
@@ -180,6 +181,28 @@ describe("Codex SDK session store parsing", () => {
         ].join("\n");
       }
 
+      if (target === authFile) {
+        return JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: {
+            id_token: [
+              "header",
+              Buffer.from(
+                JSON.stringify({
+                  name: "Anton Ageev",
+                  email: "ichi.chaik@gmail.com",
+                  "https://api.openai.com/auth": {
+                    chatgpt_plan_type: "pro",
+                  },
+                }),
+              ).toString("base64url"),
+              "signature",
+            ].join("."),
+            account_id: "account-codex-1",
+          },
+        });
+      }
+
       throw new Error(`Unexpected readFile path: ${target}`);
     });
 
@@ -301,6 +324,10 @@ describe("Codex SDK session store parsing", () => {
         limitId: "codex",
         limitName: null,
         planType: "pro",
+        accountId: "account-codex-1",
+        authMode: "chatgpt",
+        accountName: "Anton Ageev",
+        accountEmail: "ichi.chaik@gmail.com",
         credits: {
           hasCredits: null,
           unlimited: null,

@@ -24,6 +24,7 @@ import {
  */
 
 const SESSIONS_DIR = join(homedir(), ".codex", "sessions");
+const AUTH_FILE = join(homedir(), ".codex", "auth.json");
 const SESSION_FILE_PATTERN =
   /(?:^|[/\\])rollout-[^/\\]*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
@@ -58,6 +59,14 @@ interface CodexSessionRateLimits {
   plan_type?: unknown;
 }
 
+interface CodexAuthIdentity {
+  accountId: string | null;
+  authMode: string | null;
+  accountName: string | null;
+  accountEmail: string | null;
+  planType: string | null;
+}
+
 const DEFAULT_WARNING_THRESHOLD = 10;
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
 
@@ -89,12 +98,97 @@ function readBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+function readNestedString(
+  value: Record<string, unknown> | null | undefined,
+  ...path: string[]
+): string | null {
+  let current: unknown = value;
+  for (const segment of path) {
+    current = asRecord(current)?.[segment];
+    if (current == null) {
+      return null;
+    }
+  }
+
+  return readString(current) ?? null;
+}
+
 function parseJsonLine(line: string): Record<string, unknown> | null {
   try {
     return asRecord(JSON.parse(line));
   } catch {
     return null;
   }
+}
+
+function decodeJwtPayload(token: unknown): Record<string, unknown> | null {
+  const rawToken = readString(token);
+  if (!rawToken) {
+    return null;
+  }
+
+  const parts = rawToken.split(".");
+  if (parts.length < 2 || !parts[1]) {
+    return null;
+  }
+
+  try {
+    const payload = Buffer.from(parts[1], "base64url").toString("utf8");
+    return asRecord(JSON.parse(payload));
+  } catch {
+    return null;
+  }
+}
+
+async function readCodexAuthIdentity(): Promise<CodexAuthIdentity | null> {
+  let raw: string;
+  try {
+    raw = await readFile(AUTH_FILE, "utf-8");
+  } catch {
+    return null;
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const parsed = asRecord(parsedJson);
+  if (!parsed) {
+    return null;
+  }
+
+  const tokens = asRecord(parsed.tokens);
+  const idTokenPayload = decodeJwtPayload(tokens?.id_token);
+  const accessTokenPayload = decodeJwtPayload(tokens?.access_token);
+  const accountId = readString(tokens?.account_id) ?? null;
+  const authMode = readString(parsed.auth_mode) ?? null;
+  const accountName =
+    readNestedString(idTokenPayload, "name") ??
+    readNestedString(accessTokenPayload, "name") ??
+    null;
+  const accountEmail =
+    readNestedString(accessTokenPayload, "https://api.openai.com/profile", "email") ??
+    readNestedString(idTokenPayload, "email") ??
+    null;
+  const planType =
+    readNestedString(accessTokenPayload, "https://api.openai.com/auth", "chatgpt_plan_type") ??
+    readNestedString(idTokenPayload, "https://api.openai.com/auth", "chatgpt_plan_type") ??
+    null;
+
+  if (!accountId && !authMode && !accountName && !accountEmail && !planType) {
+    return null;
+  }
+
+  return {
+    accountId,
+    authMode,
+    accountName,
+    accountEmail,
+    planType,
+  };
 }
 
 function sessionIdFromFilePath(filePath: string): string | null {
@@ -202,6 +296,7 @@ function buildCodexLimitSnapshot(
     providerId: string;
     profileId?: string | null;
     checkedAt: string;
+    authIdentity?: CodexAuthIdentity | null;
   },
 ): RuntimeLimitSnapshot | null {
   const rateLimits = asRecord(rateLimitsRaw) as CodexSessionRateLimits;
@@ -236,7 +331,11 @@ function buildCodexLimitSnapshot(
     providerMeta: {
       limitId: readString(rateLimits.limit_id) ?? null,
       limitName: readString(rateLimits.limit_name) ?? null,
-      planType: readString(rateLimits.plan_type) ?? null,
+      planType: input.authIdentity?.planType ?? readString(rateLimits.plan_type) ?? null,
+      accountId: input.authIdentity?.accountId ?? null,
+      authMode: input.authIdentity?.authMode ?? null,
+      accountName: input.authIdentity?.accountName ?? null,
+      accountEmail: input.authIdentity?.accountEmail ?? null,
       credits: {
         hasCredits: readBoolean(credits?.has_credits),
         unlimited: readBoolean(credits?.unlimited),
@@ -449,6 +548,8 @@ export async function getCodexSessionLimitSnapshot(input: {
     return null;
   }
 
+  const authIdentity = await readCodexAuthIdentity();
+
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const entry = parseJsonLine(lines[index]!);
     if (!entry || readString(entry.type) !== "event_msg") continue;
@@ -462,6 +563,7 @@ export async function getCodexSessionLimitSnapshot(input: {
       providerId: input.providerId,
       profileId: input.profileId ?? null,
       checkedAt: toIso(entry.timestamp as string | number | undefined),
+      authIdentity,
     });
     if (snapshot) {
       return snapshot;

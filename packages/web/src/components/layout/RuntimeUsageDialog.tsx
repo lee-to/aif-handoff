@@ -26,9 +26,9 @@ interface RuntimeUsageEntry {
   key: string;
   runtimeId: string;
   providerId: string;
-  transport: string | null;
+  transports: string[];
   baseUrl: string | null;
-  defaultModel: string | null;
+  defaultModels: string[];
   profileNames: string[];
   snapshot: RuntimeLimitSnapshot | null;
   snapshotUpdatedAt: string | null;
@@ -49,6 +49,28 @@ function formatPercent(value: number): string {
 
 function formatQuantity(value: number): string {
   return NUMBER_FORMAT.format(value);
+}
+
+function formatPlanLabel(value: string | null): string | null {
+  if (!value) return null;
+  return value
+    .split(/[_\-\s]+/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function transportSortRank(value: string): number {
+  switch (value) {
+    case "sdk":
+      return 0;
+    case "cli":
+      return 1;
+    case "api":
+      return 2;
+    default:
+      return 99;
+  }
 }
 
 function formatTimestamp(value: string | null | undefined): string | null {
@@ -161,6 +183,45 @@ function updatedAtMs(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
+function readProviderMetaString(
+  snapshot: RuntimeLimitSnapshot | null | undefined,
+  key: string,
+): string | null {
+  const providerMeta = snapshot?.providerMeta;
+  if (!providerMeta || typeof providerMeta !== "object") {
+    return null;
+  }
+
+  const rawValue = (providerMeta as Record<string, unknown>)[key];
+  return typeof rawValue === "string" && rawValue.trim().length > 0 ? rawValue.trim() : null;
+}
+
+function appendUnique(target: string[], value: string | null | undefined): void {
+  if (!value) {
+    return;
+  }
+  if (!target.includes(value)) {
+    target.push(value);
+  }
+}
+
+function identityGroupKey(profile: RuntimeProfile): string {
+  const snapshot = profile.runtimeLimitSnapshot ?? null;
+  const accountId = readProviderMetaString(snapshot, "accountId");
+  if (accountId) {
+    return `${profile.runtimeId}|${profile.providerId}|account|${accountId}`;
+  }
+
+  const isLocalAccountRuntime =
+    (profile.runtimeId === "codex" || profile.runtimeId === "claude") &&
+    (profile.transport === "sdk" || profile.transport === "cli");
+  if (isLocalAccountRuntime) {
+    return `${profile.runtimeId}|${profile.providerId}|local-account|${profile.baseUrl ?? "default"}`;
+  }
+
+  return `profile|${profile.id}`;
+}
+
 function usageDetailRows(usage: RuntimeProfileUsage): Array<{ label: string; value: string }> {
   const rows = [
     { label: "Input", value: formatQuantity(usage.inputTokens) },
@@ -178,31 +239,68 @@ function usageDetailRows(usage: RuntimeProfileUsage): Array<{ label: string; val
   return rows;
 }
 
+function isLocalAccountEntry(entry: RuntimeUsageEntry): boolean {
+  return (
+    (entry.runtimeId === "codex" || entry.runtimeId === "claude") &&
+    entry.transports.every((transport) => transport === "sdk" || transport === "cli")
+  );
+}
+
+function formatTransportSummary(entry: RuntimeUsageEntry): string | null {
+  if (entry.transports.length === 0) {
+    return null;
+  }
+
+  const ordered = [...entry.transports].sort((left, right) => {
+    const rankDiff = transportSortRank(left) - transportSortRank(right);
+    return rankDiff !== 0 ? rankDiff : left.localeCompare(right);
+  });
+
+  if (isLocalAccountEntry(entry)) {
+    return ordered.join("/");
+  }
+
+  return ordered.map((transport) => transport.toUpperCase()).join("/");
+}
+
+function formatEntryHeading(entry: RuntimeUsageEntry): string {
+  const accountLabel =
+    readProviderMetaString(entry.snapshot, "accountName") ??
+    readProviderMetaString(entry.snapshot, "accountEmail");
+  const planLabel = formatPlanLabel(readProviderMetaString(entry.snapshot, "planType"));
+  const transportLabel = formatTransportSummary(entry);
+
+  const parts = [
+    isLocalAccountEntry(entry) ? accountLabel : null,
+    isLocalAccountEntry(entry) ? planLabel : null,
+    `${entry.runtimeId}/${entry.providerId}`,
+    transportLabel,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  return parts.join(" ");
+}
+
 function buildRuntimeUsageEntries(profiles: RuntimeProfile[]): RuntimeUsageEntry[] {
   const grouped = new Map<string, RuntimeUsageEntry>();
 
   for (const profile of profiles) {
     if (!profile.enabled) continue;
 
-    const key = [
-      profile.runtimeId,
-      profile.providerId,
-      profile.transport ?? "",
-      profile.baseUrl ?? "",
-      profile.defaultModel ?? "",
-    ].join("|");
+    const key = identityGroupKey(profile);
     const profileLimitUpdatedAt = latestLimitUpdatedAt(profile);
     const profileUsageUpdatedAt = latestUsageUpdatedAt(profile);
     const existing = grouped.get(key);
 
     if (!existing) {
+      const transports = profile.transport ? [profile.transport] : [];
+      const defaultModels = profile.defaultModel ? [profile.defaultModel] : [];
       grouped.set(key, {
         key,
         runtimeId: profile.runtimeId,
         providerId: profile.providerId,
-        transport: profile.transport ?? null,
+        transports,
         baseUrl: profile.baseUrl ?? null,
-        defaultModel: profile.defaultModel ?? null,
+        defaultModels,
         profileNames: [profile.name],
         snapshot: profile.runtimeLimitSnapshot ?? null,
         snapshotUpdatedAt: profileLimitUpdatedAt,
@@ -215,27 +313,35 @@ function buildRuntimeUsageEntries(profiles: RuntimeProfile[]): RuntimeUsageEntry
     if (!existing.profileNames.includes(profile.name)) {
       existing.profileNames.push(profile.name);
     }
+    appendUnique(existing.transports, profile.transport ?? null);
+    appendUnique(existing.defaultModels, profile.defaultModel ?? null);
 
     if (updatedAtMs(profileLimitUpdatedAt) > updatedAtMs(existing.snapshotUpdatedAt)) {
       existing.snapshot = profile.runtimeLimitSnapshot ?? null;
       existing.snapshotUpdatedAt = profileLimitUpdatedAt;
-      existing.transport = profile.transport ?? null;
       existing.baseUrl = profile.baseUrl ?? null;
-      existing.defaultModel = profile.defaultModel ?? null;
     }
 
     if (updatedAtMs(profileUsageUpdatedAt) > updatedAtMs(existing.lastUsageAt)) {
       existing.lastUsage = profile.lastUsage ?? null;
       existing.lastUsageAt = profileUsageUpdatedAt;
-      existing.transport = profile.transport ?? null;
       existing.baseUrl = profile.baseUrl ?? null;
-      existing.defaultModel = profile.defaultModel ?? null;
     }
   }
 
-  return Array.from(grouped.values()).sort((left, right) => {
-    return `${left.runtimeId}/${left.providerId}/${left.defaultModel ?? ""}`.localeCompare(
-      `${right.runtimeId}/${right.providerId}/${right.defaultModel ?? ""}`,
+  const entries = Array.from(grouped.values());
+  for (const entry of entries) {
+    entry.transports.sort((left, right) => {
+      const rankDiff = transportSortRank(left) - transportSortRank(right);
+      return rankDiff !== 0 ? rankDiff : left.localeCompare(right);
+    });
+    entry.defaultModels.sort((left, right) => left.localeCompare(right));
+    entry.profileNames.sort((left, right) => left.localeCompare(right));
+  }
+
+  return entries.sort((left, right) => {
+    return `${formatEntryHeading(left)}|${left.profileNames.join(",")}`.localeCompare(
+      `${formatEntryHeading(right)}|${right.profileNames.join(",")}`,
     );
   });
 }
@@ -271,15 +377,14 @@ export function RuntimeUsageDialog({ open, onOpenChange, projectId }: RuntimeUsa
               const usageUpdatedLabel = formatTimestamp(entry.lastUsageAt);
               const windowList = entry.snapshot?.windows ?? [];
               const usageRows = entry.lastUsage ? usageDetailRows(entry.lastUsage) : [];
+              const headingLabel = formatEntryHeading(entry);
 
               return (
                 <div key={entry.key} className="border border-border bg-background/40 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-sm font-semibold">
-                          {entry.runtimeId}/{entry.providerId}
-                        </span>
+                        <span className="text-sm font-semibold">{headingLabel}</span>
                         {limitDisplay ? (
                           <Badge
                             size="sm"
@@ -297,9 +402,6 @@ export function RuntimeUsageDialog({ open, onOpenChange, projectId }: RuntimeUsa
                         )}
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>Model: {entry.defaultModel ?? "auto"}</span>
-                        <span>Transport: {entry.transport ?? "default"}</span>
-                        {entry.baseUrl ? <span>Custom endpoint</span> : null}
                         <span>
                           {entry.profileNames.length > 1 ? "Profiles" : "Profile"}:{" "}
                           {entry.profileNames.join(", ")}

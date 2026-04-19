@@ -4,15 +4,18 @@ import {
   createRuntimeWorkflowSpec,
   getCodexAuthIdentity,
   isValidEnvVarName,
+  listLatestCodexLimitSnapshots,
   redactResolvedRuntimeProfile,
   resolveClaudeProviderIdentity,
   resolveRuntimeProfile,
+  selectPreferredCodexLimitSnapshot,
 } from "@aif/runtime";
 import { getEnv, logger } from "@aif/shared";
 import {
   createRuntimeProfile,
   deleteRuntimeProfile,
   findRuntimeProfileById,
+  findProjectById,
   findTaskById,
   getRuntimeProfileResponseById,
   listRuntimeProfileResponses,
@@ -118,11 +121,17 @@ function readProviderMetaString(
 }
 
 interface LocalCodexAccountProfileLike {
+  id: string;
+  projectId?: string | null;
   runtimeId: string;
+  providerId: string;
   transport?: string | null;
+  defaultModel?: string | null;
   runtimeLimitSnapshot?: {
+    checkedAt?: string | null;
     providerMeta?: Record<string, unknown> | null;
   } | null;
+  runtimeLimitUpdatedAt?: string | null;
 }
 
 interface ClaudeIdentityProfileLike {
@@ -136,6 +145,8 @@ interface ClaudeIdentityProfileLike {
     providerMeta?: Record<string, unknown> | null;
   } | null;
 }
+
+type CodexLiveSnapshotList = Awaited<ReturnType<typeof listLatestCodexLimitSnapshots>>;
 
 function enrichProfileWithCodexIdentity<T extends LocalCodexAccountProfileLike>(
   profile: T,
@@ -182,6 +193,141 @@ async function enrichProfilesWithCodexIdentity<T extends LocalCodexAccountProfil
   }
 
   return profiles.map((profile) => enrichProfileWithCodexIdentity(profile, identity));
+}
+
+function parseTimestampMs(value: string | null | undefined): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function applyCodexSnapshotToProfile<T extends { profileId?: string | null }>(
+  snapshot: T,
+  profileId: string,
+): T {
+  return snapshot.profileId === profileId ? snapshot : { ...snapshot, profileId };
+}
+
+function mergeCodexLimitSnapshots<
+  T extends { checkedAt?: string | null; providerMeta?: Record<string, unknown> | null },
+>(...groups: T[][]): T[] {
+  const snapshots = groups
+    .flat()
+    .sort((left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt));
+  const merged = new Map<string, T>();
+
+  for (const snapshot of snapshots) {
+    const limitId =
+      readProviderMetaString(
+        isObjectRecord(snapshot.providerMeta) ? snapshot.providerMeta : null,
+        "limitId",
+      ) ?? "__unknown__";
+    if (!merged.has(limitId)) {
+      merged.set(limitId, snapshot);
+    }
+  }
+
+  return [...merged.values()];
+}
+
+function createCodexLiveSnapshotLookup() {
+  const cache = new Map<string, Promise<CodexLiveSnapshotList>>();
+
+  return {
+    async get(input: {
+      runtimeId: string;
+      providerId: string;
+      projectRoot?: string | null;
+    }): Promise<CodexLiveSnapshotList> {
+      const key = `${input.runtimeId}|${input.providerId}|${input.projectRoot ?? "__global__"}`;
+      const cached = cache.get(key);
+      if (cached) {
+        return await cached;
+      }
+
+      const request = listLatestCodexLimitSnapshots({
+        runtimeId: input.runtimeId,
+        providerId: input.providerId,
+        projectRoot: input.projectRoot ?? null,
+      }).catch((error) => {
+        cache.delete(key);
+        throw error;
+      });
+      cache.set(key, request);
+      return await request;
+    },
+  };
+}
+
+async function refreshProfileWithLiveCodexLimit<T extends LocalCodexAccountProfileLike>(
+  profile: T,
+  selectedProjectId?: string | null,
+  snapshotLookup = createCodexLiveSnapshotLookup(),
+): Promise<T> {
+  if (!isLocalCodexProfile(profile)) {
+    return profile;
+  }
+
+  const model = profile.defaultModel?.trim() ?? null;
+  if (!model) {
+    return profile;
+  }
+
+  const effectiveProjectId = profile.projectId ?? selectedProjectId ?? null;
+  const projectRoot = effectiveProjectId
+    ? (findProjectById(effectiveProjectId)?.rootPath ?? null)
+    : null;
+  const projectSnapshots = projectRoot
+    ? await snapshotLookup.get({
+        runtimeId: profile.runtimeId,
+        providerId: profile.providerId,
+        projectRoot,
+      })
+    : [];
+  const globalSnapshots = await snapshotLookup.get({
+    runtimeId: profile.runtimeId,
+    providerId: profile.providerId,
+  });
+  const liveSnapshots = mergeCodexLimitSnapshots(projectSnapshots, globalSnapshots);
+  const persistedProviderMeta = isObjectRecord(profile.runtimeLimitSnapshot?.providerMeta)
+    ? profile.runtimeLimitSnapshot.providerMeta
+    : null;
+  const persistedLimitId = readProviderMetaString(persistedProviderMeta, "limitId");
+  const liveSnapshot = selectPreferredCodexLimitSnapshot({
+    model,
+    snapshots: liveSnapshots,
+    preferredLimitId: persistedLimitId,
+  });
+  if (!liveSnapshot) {
+    return profile;
+  }
+
+  const persistedAtMs = Math.max(
+    parseTimestampMs(profile.runtimeLimitUpdatedAt ?? null),
+    parseTimestampMs(profile.runtimeLimitSnapshot?.checkedAt ?? null),
+  );
+  const liveCheckedAtMs = parseTimestampMs(liveSnapshot.checkedAt);
+  if (persistedAtMs > liveCheckedAtMs) {
+    return profile;
+  }
+
+  return {
+    ...profile,
+    runtimeLimitSnapshot: applyCodexSnapshotToProfile(liveSnapshot, profile.id),
+    runtimeLimitUpdatedAt: liveSnapshot.checkedAt,
+  };
+}
+
+async function refreshProfilesWithLiveCodexLimits<T extends LocalCodexAccountProfileLike>(
+  profiles: T[],
+  selectedProjectId?: string | null,
+): Promise<T[]> {
+  const snapshotLookup = createCodexLiveSnapshotLookup();
+  return await Promise.all(
+    profiles.map((profile) =>
+      refreshProfileWithLiveCodexLimit(profile, selectedProjectId, snapshotLookup),
+    ),
+  );
 }
 
 async function enrichProfileWithClaudeIdentity<T extends ClaudeIdentityProfileLike>(
@@ -339,7 +485,8 @@ runtimeProfilesRouter.get("/", async (c) => {
     "DEBUG [runtime-profile-route] List request",
   );
   const profiles = listRuntimeProfileResponses({ projectId, includeGlobal, enabledOnly });
-  return c.json(await enrichProfilesWithProviderIdentity(profiles));
+  const refreshedProfiles = await refreshProfilesWithLiveCodexLimits(profiles, projectId ?? null);
+  return c.json(await enrichProfilesWithProviderIdentity(refreshedProfiles));
 });
 
 // GET /runtime-profiles/:id
@@ -347,7 +494,11 @@ runtimeProfilesRouter.get("/:id", async (c) => {
   const { id } = c.req.param();
   const profile = getRuntimeProfileResponseById(id);
   if (!profile) return c.json({ error: "Runtime profile not found" }, 404);
-  return c.json((await enrichProfilesWithProviderIdentity([profile]))[0]);
+  const refreshedProfile = await refreshProfileWithLiveCodexLimit(
+    profile,
+    profile.projectId ?? null,
+  );
+  return c.json((await enrichProfilesWithProviderIdentity([refreshedProfile]))[0]);
 });
 
 // POST /runtime-profiles
@@ -441,7 +592,11 @@ runtimeProfilesRouter.get("/effective/task/:taskId", async (c) => {
   return c.json({
     source: effective.source,
     profile: effective.profile
-      ? (await enrichProfilesWithProviderIdentity([effective.profile]))[0]
+      ? (
+          await enrichProfilesWithProviderIdentity([
+            await refreshProfileWithLiveCodexLimit(effective.profile, task.projectId),
+          ])
+        )[0]
       : effective.profile,
     taskRuntimeProfileId: effective.taskRuntimeProfileId,
     projectRuntimeProfileId: effective.projectRuntimeProfileId,
@@ -477,7 +632,11 @@ runtimeProfilesRouter.get("/effective/chat/:projectId", async (c) => {
   return c.json({
     source: effective.source,
     profile: effective.profile
-      ? (await enrichProfilesWithProviderIdentity([effective.profile]))[0]
+      ? (
+          await enrichProfilesWithProviderIdentity([
+            await refreshProfileWithLiveCodexLimit(effective.profile, projectId),
+          ])
+        )[0]
       : effective.profile,
     taskRuntimeProfileId: effective.taskRuntimeProfileId,
     projectRuntimeProfileId: effective.projectRuntimeProfileId,

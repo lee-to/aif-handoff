@@ -112,6 +112,17 @@ function formatPlanLabel(value: string | null): string | null {
     .join(" ");
 }
 
+function normalizeIdentityValue(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
 function transportSortRank(value: string): number {
   switch (value) {
     case "sdk":
@@ -437,6 +448,19 @@ function appendUnique(target: string[], value: string | null | undefined): void 
 function identityGroupKey(profile: RuntimeProfile): string {
   const snapshot = profile.runtimeLimitSnapshot ?? null;
   const accountId = readProviderMetaString(snapshot, "accountId");
+  const limitId = readProviderMetaString(snapshot, "limitId");
+  const isLocalCodexProfile =
+    profile.runtimeId === "codex" && (profile.transport === "sdk" || profile.transport === "cli");
+  if (accountId && limitId) {
+    return `${profile.runtimeId}|${profile.providerId}|account|${accountId}|limit|${limitId}`;
+  }
+  if (accountId && isLocalCodexProfile) {
+    const modelKey =
+      normalizeIdentityValue(profile.defaultModel) ??
+      normalizeIdentityValue(profile.name) ??
+      profile.id;
+    return `${profile.runtimeId}|${profile.providerId}|account|${accountId}|model|${modelKey}`;
+  }
   if (accountId) {
     return `${profile.runtimeId}|${profile.providerId}|account|${accountId}`;
   }
@@ -715,6 +739,7 @@ export function RuntimeUsageDialog({ open, onOpenChange, projectId }: RuntimeUsa
               const limitDisplay = getRuntimeLimitDisplay(entry.snapshot, {
                 checkedAt: entry.snapshotUpdatedAt,
               });
+              const limitPoolId = readProviderMetaString(entry.snapshot, "limitId");
               const quotaUpdatedLabel = formatTimestamp(entry.snapshotUpdatedAt);
               const usageUpdatedLabel = formatTimestamp(entry.lastUsageAt);
               const windowList = entry.snapshot?.windows ?? [];
@@ -755,6 +780,11 @@ export function RuntimeUsageDialog({ open, onOpenChange, projectId }: RuntimeUsa
                         {entry.profileNames.length > 1 ? "Profiles" : "Profile"}:{" "}
                         {entry.profileNames.join(", ")}
                       </div>
+                      {limitPoolId ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Limit pool: {limitPoolId}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="text-right text-[11px] text-muted-foreground">
                       <div>

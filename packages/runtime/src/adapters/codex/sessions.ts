@@ -17,6 +17,7 @@ import {
   RuntimeLimitSource,
   RuntimeLimitStatus as RuntimeLimitStatusEnum,
 } from "../../types.js";
+import { createRuntimeMemoryCache } from "../../cache.js";
 
 /**
  * Codex SDK persists threads in ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
@@ -69,6 +70,17 @@ export interface CodexAuthIdentity {
 
 const DEFAULT_WARNING_THRESHOLD = 10;
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+const DEFAULT_CODEX_LIMIT_ID = "codex";
+const SESSION_CACHE_TTL_MS = 5_000;
+
+const sessionMetasCache = createRuntimeMemoryCache<CodexSessionMeta[]>({
+  defaultTtlMs: SESSION_CACHE_TTL_MS,
+  maxSize: 1,
+});
+const sessionLimitSnapshotsCache = createRuntimeMemoryCache<RuntimeLimitSnapshot[]>({
+  defaultTtlMs: SESSION_CACHE_TTL_MS,
+  maxSize: 512,
+});
 
 function toIso(value: string | number | undefined): string {
   try {
@@ -96,6 +108,27 @@ function readFiniteNumber(value: unknown): number | null {
 
 function readBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function readModelIdentifier(
+  value: Record<string, unknown> | null | undefined,
+): string | undefined {
+  return readString(value?.model) ?? readString(value?.model_slug) ?? readString(value?.modelId);
+}
+
+function readSnapshotLimitId(snapshot: RuntimeLimitSnapshot | null | undefined): string | null {
+  const providerMeta = asRecord(snapshot?.providerMeta);
+  return readString(providerMeta?.limitId) ?? null;
+}
+
+function applySnapshotProfileId(
+  snapshot: RuntimeLimitSnapshot,
+  profileId: string | null | undefined,
+): RuntimeLimitSnapshot {
+  const nextProfileId = profileId ?? null;
+  return snapshot.profileId === nextProfileId
+    ? snapshot
+    : { ...snapshot, profileId: nextProfileId };
 }
 
 function readNestedString(
@@ -421,10 +454,13 @@ async function readSessionMetaFromFile(filePath: string): Promise<CodexSessionMe
           (entry.timestamp as string | number | undefined),
       );
       cwd = readString(payload?.cwd) ?? cwd;
-      model =
-        readString(payload?.model) ??
-        readString(payload?.model_slug) ??
-        readString(payload?.modelId);
+      model = readModelIdentifier(payload) ?? model;
+      continue;
+    }
+
+    if (readString(entry.type) === "turn_context") {
+      const payload = asRecord(entry.payload);
+      model = readModelIdentifier(payload) ?? model;
       continue;
     }
 
@@ -432,7 +468,7 @@ async function readSessionMetaFromFile(filePath: string): Promise<CodexSessionMe
       const payload = asRecord(entry.payload);
       if (readString(payload?.type) === "user_message") {
         prompt = readString(payload?.message) ?? prompt;
-        if (prompt) break;
+        if (prompt && model) break;
       }
     }
   }
@@ -449,12 +485,18 @@ async function readSessionMetaFromFile(filePath: string): Promise<CodexSessionMe
 }
 
 async function readSessionMetas(): Promise<CodexSessionMeta[]> {
+  const cached = sessionMetasCache.get("all");
+  if (cached) {
+    return cached;
+  }
+
   const sessionFiles = await listSessionFiles(SESSIONS_DIR);
   const sessions = (
     await Promise.all(sessionFiles.map((filePath) => readSessionMetaFromFile(filePath)))
   ).filter((session): session is CodexSessionMeta => Boolean(session));
 
   sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  sessionMetasCache.set("all", sessions);
   return sessions;
 }
 
@@ -535,9 +577,49 @@ export async function getCodexSessionLimitSnapshot(input: {
   providerId: string;
   profileId?: string | null;
 }): Promise<RuntimeLimitSnapshot | null> {
+  const snapshots = await getCodexSessionLimitSnapshots(input);
+  return snapshots[0] ?? null;
+}
+
+function normalizeModelIdentifier(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function parseTimestampMs(value: string | null | undefined): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function isSparkCodexModel(model: string | null | undefined): boolean {
+  const normalized = normalizeModelIdentifier(model);
+  return normalized?.includes("spark") ?? false;
+}
+
+async function getCodexSessionLimitSnapshots(input: {
+  sessionId: string;
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+}): Promise<RuntimeLimitSnapshot[]> {
   const session = (await readSessionMetas()).find((meta) => meta.id === input.sessionId);
   if (!session?.filePath) {
-    return null;
+    return [];
+  }
+
+  const cacheKey = `${session.filePath}|${session.updatedAt}|${input.runtimeId}|${input.providerId}`;
+  const cached = sessionLimitSnapshotsCache.get(cacheKey);
+  if (cached) {
+    return cached.map((snapshot) => applySnapshotProfileId(snapshot, input.profileId));
   }
 
   let lines: string[];
@@ -545,10 +627,12 @@ export async function getCodexSessionLimitSnapshot(input: {
     const raw = await readFile(session.filePath, "utf-8");
     lines = raw.split("\n").filter((line) => line.trim().length > 0);
   } catch {
-    return null;
+    return [];
   }
 
   const authIdentity = await getCodexAuthIdentity();
+  const snapshotsByLimitId = new Map<string, RuntimeLimitSnapshot>();
+  let latestUnknownSnapshot: RuntimeLimitSnapshot | null = null;
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const entry = parseJsonLine(lines[index]!);
@@ -564,6 +648,141 @@ export async function getCodexSessionLimitSnapshot(input: {
       profileId: input.profileId ?? null,
       checkedAt: toIso(entry.timestamp as string | number | undefined),
       authIdentity,
+    });
+    if (!snapshot) {
+      continue;
+    }
+
+    const limitId = readSnapshotLimitId(snapshot);
+    if (!limitId) {
+      latestUnknownSnapshot ??= snapshot;
+      continue;
+    }
+    if (!snapshotsByLimitId.has(limitId)) {
+      snapshotsByLimitId.set(limitId, snapshot);
+    }
+  }
+
+  const snapshots = [...snapshotsByLimitId.values()];
+  if (latestUnknownSnapshot) {
+    snapshots.push(latestUnknownSnapshot);
+  }
+  snapshots.sort(
+    (left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt),
+  );
+  const normalizedSnapshots = snapshots.map((snapshot) => ({ ...snapshot, profileId: null }));
+  sessionLimitSnapshotsCache.set(cacheKey, normalizedSnapshots);
+  return normalizedSnapshots.map((snapshot) => applySnapshotProfileId(snapshot, input.profileId));
+}
+
+export async function listLatestCodexLimitSnapshots(input: {
+  runtimeId: string;
+  providerId: string;
+  projectRoot?: string | null;
+  profileId?: string | null;
+}): Promise<RuntimeLimitSnapshot[]> {
+  const normalizedProjectRoot = normalizePath(input.projectRoot ?? undefined);
+  const sessions = await readSessionMetas();
+  const candidates = normalizedProjectRoot
+    ? sessions.filter((session) => normalizePath(session.cwd) === normalizedProjectRoot)
+    : sessions;
+
+  const latestSnapshotsByLimitId = new Map<string, RuntimeLimitSnapshot>();
+  let latestUnknownSnapshot: RuntimeLimitSnapshot | null = null;
+
+  for (const session of candidates) {
+    const snapshots = await getCodexSessionLimitSnapshots({
+      sessionId: session.id,
+      runtimeId: input.runtimeId,
+      providerId: input.providerId,
+      profileId: input.profileId ?? null,
+    });
+    for (const snapshot of snapshots) {
+      const limitId = readSnapshotLimitId(snapshot);
+      if (!limitId) {
+        latestUnknownSnapshot ??= snapshot;
+        continue;
+      }
+      if (!latestSnapshotsByLimitId.has(limitId)) {
+        latestSnapshotsByLimitId.set(limitId, snapshot);
+      }
+    }
+  }
+
+  const latestSnapshots = [...latestSnapshotsByLimitId.values()];
+  if (latestUnknownSnapshot) {
+    latestSnapshots.push(latestUnknownSnapshot);
+  }
+  latestSnapshots.sort(
+    (left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt),
+  );
+  return latestSnapshots;
+}
+
+export function selectPreferredCodexLimitSnapshot(input: {
+  model?: string | null;
+  snapshots: RuntimeLimitSnapshot[];
+  preferredLimitId?: string | null;
+}): RuntimeLimitSnapshot | null {
+  if (input.snapshots.length === 0) {
+    return null;
+  }
+
+  const orderedSnapshots = [...input.snapshots].sort(
+    (left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt),
+  );
+  const explicitSnapshots = orderedSnapshots.filter(
+    (snapshot) => readSnapshotLimitId(snapshot) != null,
+  );
+  const preferredLimitId = input.preferredLimitId?.trim() || null;
+  const defaultSnapshot =
+    explicitSnapshots.find(
+      (snapshot) => readSnapshotLimitId(snapshot) === DEFAULT_CODEX_LIMIT_ID,
+    ) ?? null;
+  const preferredSnapshot =
+    explicitSnapshots.find((snapshot) => readSnapshotLimitId(snapshot) === preferredLimitId) ??
+    null;
+  const alternateSnapshot =
+    explicitSnapshots.find(
+      (snapshot) => readSnapshotLimitId(snapshot) !== DEFAULT_CODEX_LIMIT_ID,
+    ) ?? null;
+
+  if (isSparkCodexModel(input.model)) {
+    return alternateSnapshot ?? preferredSnapshot ?? defaultSnapshot ?? orderedSnapshots[0] ?? null;
+  }
+
+  return (
+    defaultSnapshot ?? preferredSnapshot ?? explicitSnapshots[0] ?? orderedSnapshots[0] ?? null
+  );
+}
+
+export async function getLatestCodexModelLimitSnapshot(input: {
+  runtimeId: string;
+  providerId: string;
+  model?: string | null;
+  projectRoot?: string | null;
+  profileId?: string | null;
+}): Promise<RuntimeLimitSnapshot | null> {
+  const targetModel = normalizeModelIdentifier(input.model ?? null);
+  if (!targetModel) {
+    return null;
+  }
+
+  const normalizedProjectRoot = normalizePath(input.projectRoot ?? undefined);
+  const sessions = await readSessionMetas();
+  const candidates = sessions.filter((session) => {
+    if (normalizedProjectRoot && normalizePath(session.cwd) !== normalizedProjectRoot) {
+      return false;
+    }
+    return normalizeModelIdentifier(session.model ?? null) === targetModel;
+  });
+
+  for (const session of candidates) {
+    const snapshot = await getCodexSessionLimitSnapshot({
+      sessionId: session.id,
+      runtimeId: input.runtimeId,
+      providerId: input.providerId,
+      profileId: input.profileId ?? null,
     });
     if (snapshot) {
       return snapshot;

@@ -520,6 +520,7 @@ describe("Header", () => {
             accountId: "account-codex-1",
             accountName: "Anton Ageev",
             planType: "pro",
+            limitId: "codex",
           },
         },
         runtimeLimitUpdatedAt: "2026-04-18T05:21:00.000Z",
@@ -574,6 +575,7 @@ describe("Header", () => {
             accountId: "account-codex-1",
             accountName: "Anton Ageev",
             planType: "pro",
+            limitId: "codex",
           },
         },
         runtimeLimitUpdatedAt: "2026-04-18T05:24:00.000Z",
@@ -595,5 +597,203 @@ describe("Header", () => {
     expect(screen.getAllByText("Anton Ageev Pro codex/openai sdk/cli")).toHaveLength(1);
     expect(screen.getByText("Profiles: CLI gpt-5.3-codex, gpt-5.4")).toBeDefined();
     expect(screen.getByText("441,684")).toBeDefined();
+  });
+
+  it("keeps local Codex profiles separate when account is shared but limit pool differs", () => {
+    mockRuntimeProfiles = [
+      {
+        id: "profile-codex-spark",
+        projectId: "project-1",
+        name: "gpt-5.3-codex-spark",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        baseUrl: null,
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "gpt-5.3-codex-spark",
+        headers: {},
+        options: {},
+        enabled: true,
+        runtimeLimitSnapshot: {
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T05:21:00.000Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-spark",
+          primaryScope: "time",
+          resetAt: "2099-04-18T07:02:00.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 96,
+              resetAt: "2099-04-18T07:02:00.000Z",
+            },
+          ],
+          providerMeta: {
+            accountId: "account-codex-1",
+            accountName: "Anton Ageev",
+            planType: "pro",
+            limitId: "codex",
+          },
+        },
+        runtimeLimitUpdatedAt: "2026-04-18T05:21:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "profile-codex-standard",
+        projectId: "project-1",
+        name: "gpt-5.3-codex",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        baseUrl: null,
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "gpt-5.3-codex",
+        headers: {},
+        options: {},
+        enabled: true,
+        runtimeLimitSnapshot: {
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T05:24:00.000Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-standard",
+          primaryScope: "time",
+          resetAt: "2099-04-18T07:02:00.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 96,
+              resetAt: "2099-04-18T07:02:00.000Z",
+            },
+          ],
+          providerMeta: {
+            accountId: "account-codex-1",
+            accountName: "Anton Ageev",
+            planType: "pro",
+            limitId: "codex_bengalfox",
+          },
+        },
+        runtimeLimitUpdatedAt: "2026-04-18T05:24:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+
+    renderHeader();
+
+    fireEvent.click(screen.getByRole("button", { name: "Runtime usage" }));
+
+    expect(screen.getByText("Profile: gpt-5.3-codex-spark")).toBeDefined();
+    expect(screen.getByText("Profile: gpt-5.3-codex")).toBeDefined();
+    expect(screen.queryByText(/^Profiles:/)).toBeNull();
+    expect(screen.getByText("Limit pool: codex")).toBeDefined();
+    expect(screen.getByText("Limit pool: codex_bengalfox")).toBeDefined();
+  });
+
+  it("keeps local Codex profiles separate by model when the account is shared but limit pool is unknown", () => {
+    mockRuntimeProfiles = [
+      {
+        id: "profile-codex-spark",
+        projectId: "project-1",
+        name: "cli gpt-5.3-codex-spark",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "cli",
+        baseUrl: null,
+        apiKeyEnvVar: null,
+        defaultModel: "gpt-5.3-codex-spark",
+        headers: {},
+        options: {},
+        enabled: true,
+        runtimeLimitSnapshot: {
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-19T10:09:46.091Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-spark",
+          primaryScope: "time",
+          resetAt: "2099-04-19T13:04:58.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 95,
+              resetAt: "2099-04-19T13:04:58.000Z",
+            },
+          ],
+          providerMeta: {
+            accountId: "account-codex-1",
+            accountName: "Anton Ageev",
+            planType: "pro",
+          },
+        },
+        runtimeLimitUpdatedAt: "2026-04-19T10:09:47.258Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "profile-codex-gpt54",
+        projectId: "project-1",
+        name: "gpt-5.4",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        baseUrl: null,
+        apiKeyEnvVar: null,
+        defaultModel: "gpt-5.4",
+        headers: {},
+        options: {},
+        enabled: true,
+        runtimeLimitSnapshot: {
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-19T10:13:34.496Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-gpt54",
+          primaryScope: "time",
+          resetAt: "2099-04-19T13:04:58.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 95,
+              resetAt: "2099-04-19T13:04:58.000Z",
+            },
+          ],
+          providerMeta: {
+            accountId: "account-codex-1",
+            accountName: "Anton Ageev",
+            planType: "pro",
+          },
+        },
+        runtimeLimitUpdatedAt: "2026-04-19T10:13:35.054Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+
+    renderHeader();
+
+    fireEvent.click(screen.getByRole("button", { name: "Runtime usage" }));
+
+    expect(screen.getByText("Profile: cli gpt-5.3-codex-spark")).toBeDefined();
+    expect(screen.getByText("Profile: gpt-5.4")).toBeDefined();
+    expect(screen.queryByText("Profiles: cli gpt-5.3-codex-spark, gpt-5.4")).toBeNull();
   });
 });

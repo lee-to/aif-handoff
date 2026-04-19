@@ -184,7 +184,13 @@ export type {
   CreateCodexRuntimeAdapterOptions,
 } from "./adapters/codex/index.js";
 
-export { getCodexAuthIdentity, type CodexAuthIdentity } from "./adapters/codex/sessions.js";
+export {
+  getCodexAuthIdentity,
+  listLatestCodexLimitSnapshots,
+  getLatestCodexModelLimitSnapshot,
+  selectPreferredCodexLimitSnapshot,
+  type CodexAuthIdentity,
+} from "./adapters/codex/sessions.js";
 export {
   ClaudeProviderFamily,
   resolveClaudeProviderAuth,

@@ -39,8 +39,13 @@ describe("Codex SDK session store parsing", () => {
   const aprilDir = join(sessionsRoot, "2026", "04", "08");
   const olderSessionId = "019d6e29-f6a5-7991-b695-0ac84756e40f";
   const newerSessionId = "019d6e2c-e143-7642-8917-06f51e30ee84";
+  const alternatePoolSessionId = "019d6e2d-a143-7642-8917-06f51e30ee85";
   const olderFile = join(aprilDir, `rollout-2026-04-08T22-35-37-${olderSessionId}.jsonl`);
   const newerFile = join(aprilDir, `rollout-2026-04-08T22-38-48-${newerSessionId}.jsonl`);
+  const alternatePoolFile = join(
+    aprilDir,
+    `rollout-2026-04-08T22-39-48-${alternatePoolSessionId}.jsonl`,
+  );
 
   let sessionsModule: SessionsModule;
 
@@ -62,6 +67,7 @@ describe("Codex SDK session store parsing", () => {
           return [
             fileEntry(`rollout-2026-04-08T22-35-37-${olderSessionId}.jsonl`),
             fileEntry(`rollout-2026-04-08T22-38-48-${newerSessionId}.jsonl`),
+            fileEntry(`rollout-2026-04-08T22-39-48-${alternatePoolSessionId}.jsonl`),
           ];
         default:
           return [];
@@ -83,6 +89,13 @@ describe("Codex SDK session store parsing", () => {
         };
       }
 
+      if (target === alternatePoolFile) {
+        return {
+          birthtime: new Date("2026-04-08T17:39:48.271Z"),
+          mtime: new Date("2026-04-08T17:40:48.271Z"),
+        };
+      }
+
       throw new Error(`Unexpected stat path: ${target}`);
     });
 
@@ -96,6 +109,7 @@ describe("Codex SDK session store parsing", () => {
               id: olderSessionId,
               timestamp: "2026-04-08T17:35:37.149Z",
               cwd: "C:/projects/other",
+              model: "gpt-5.3-codex",
             },
           }),
           JSON.stringify({
@@ -118,6 +132,13 @@ describe("Codex SDK session store parsing", () => {
               id: newerSessionId,
               timestamp: "2026-04-08T17:38:48.271Z",
               cwd: "C:/projects/current",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-08T17:38:56.000Z",
+            type: "turn_context",
+            payload: {
+              model: "gpt-5.4",
             },
           }),
           JSON.stringify({
@@ -181,6 +202,59 @@ describe("Codex SDK session store parsing", () => {
         ].join("\n");
       }
 
+      if (target === alternatePoolFile) {
+        return [
+          JSON.stringify({
+            timestamp: "2026-04-08T17:39:54.517Z",
+            type: "session_meta",
+            payload: {
+              id: alternatePoolSessionId,
+              timestamp: "2026-04-08T17:39:48.271Z",
+              cwd: "C:/projects/current",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-08T17:39:55.000Z",
+            type: "turn_context",
+            payload: {
+              model: "gpt-5.4",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-04-08T17:40:09.000Z",
+            type: "event_msg",
+            payload: {
+              type: "token_count",
+              info: {
+                total_token_usage: {
+                  input_tokens: 5120,
+                  cached_input_tokens: 1024,
+                  output_tokens: 256,
+                  reasoning_output_tokens: 64,
+                  total_tokens: 5376,
+                },
+              },
+              rate_limits: {
+                limit_id: "codex_bengalfox",
+                limit_name: null,
+                primary: {
+                  used_percent: 0,
+                  window_minutes: 300,
+                  resets_at: 4080123600,
+                },
+                secondary: {
+                  used_percent: 30,
+                  window_minutes: 10080,
+                  resets_at: 4080733200,
+                },
+                credits: null,
+                plan_type: "pro",
+              },
+            },
+          }),
+        ].join("\n");
+      }
+
       if (target === authFile) {
         return JSON.stringify({
           auth_mode: "chatgpt",
@@ -217,15 +291,23 @@ describe("Codex SDK session store parsing", () => {
       limit: 10,
     });
 
-    expect(sessions).toHaveLength(2);
+    expect(sessions).toHaveLength(3);
     expect(sessions[0]).toMatchObject({
+      id: alternatePoolSessionId,
+      model: "gpt-5.4",
+      profileId: "profile-1",
+      createdAt: "2026-04-08T17:39:48.271Z",
+      updatedAt: "2026-04-08T17:40:48.271Z",
+    });
+    expect(sessions[1]).toMatchObject({
       id: newerSessionId,
+      model: "gpt-5.4",
       profileId: "profile-1",
       title: "Continue this conversation",
       createdAt: "2026-04-08T17:38:48.271Z",
       updatedAt: "2026-04-08T17:39:48.271Z",
     });
-    expect(sessions[1]).toMatchObject({
+    expect(sessions[2]).toMatchObject({
       id: olderSessionId,
       title: "Older prompt",
       createdAt: "2026-04-08T17:35:37.149Z",
@@ -242,8 +324,12 @@ describe("Codex SDK session store parsing", () => {
       limit: 10,
     });
 
-    expect(sessions).toHaveLength(1);
+    expect(sessions).toHaveLength(2);
     expect(sessions[0]).toMatchObject({
+      id: alternatePoolSessionId,
+      profileId: "profile-1",
+    });
+    expect(sessions[1]).toMatchObject({
       id: newerSessionId,
       profileId: "profile-1",
       title: "Continue this conversation",
@@ -335,5 +421,62 @@ describe("Codex SDK session store parsing", () => {
         },
       },
     });
+  });
+
+  it("finds the latest limit snapshot for a specific model within the project root", async () => {
+    const snapshot = await sessionsModule.getLatestCodexModelLimitSnapshot({
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+      projectRoot: "C:/projects/current",
+      model: "gpt-5.4",
+    });
+
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        checkedAt: "2026-04-08T17:40:09.000Z",
+        profileId: "profile-1",
+        providerMeta: expect.objectContaining({
+          limitId: "codex_bengalfox",
+          accountId: "account-codex-1",
+        }),
+      }),
+    );
+  });
+
+  it("lists the latest Codex limit snapshots per limit pool for a project root", async () => {
+    const snapshots = await sessionsModule.listLatestCodexLimitSnapshots({
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+      projectRoot: "C:/projects/current",
+    });
+
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.map((snapshot) => snapshot.providerMeta?.limitId)).toEqual([
+      "codex_bengalfox",
+      "codex",
+    ]);
+  });
+
+  it("prefers the alternate Codex pool for Spark models and the default pool otherwise", async () => {
+    const snapshots = await sessionsModule.listLatestCodexLimitSnapshots({
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+      projectRoot: "C:/projects/current",
+    });
+
+    const sparkSnapshot = sessionsModule.selectPreferredCodexLimitSnapshot({
+      model: "gpt-5.3-codex-spark",
+      snapshots,
+    });
+    const mainSnapshot = sessionsModule.selectPreferredCodexLimitSnapshot({
+      model: "gpt-5.4",
+      snapshots,
+    });
+
+    expect(sparkSnapshot?.providerMeta?.limitId).toBe("codex_bengalfox");
+    expect(mainSnapshot?.providerMeta?.limitId).toBe("codex");
   });
 });

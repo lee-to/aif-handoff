@@ -106,6 +106,20 @@ export interface SendChatMessageResponse {
   runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
 }
 
+interface ChatSessionRequestContext {
+  projectId?: string | null;
+  runtimeProfileId?: string | null;
+}
+
+function withChatSessionContext(path: string, context?: ChatSessionRequestContext): string {
+  if (!context) return path;
+  const qs = new URLSearchParams();
+  if (context.projectId) qs.set("projectId", context.projectId);
+  if (context.runtimeProfileId) qs.set("runtimeProfileId", context.runtimeProfileId);
+  const suffix = qs.toString();
+  return suffix ? `${path}?${suffix}` : path;
+}
+
 async function request<T>(
   url: string,
   options?: RequestInit,
@@ -426,14 +440,19 @@ export const api = {
     });
   },
 
-  getChatSession(id: string): Promise<ChatSession> {
+  getChatSession(id: string, context?: ChatSessionRequestContext): Promise<ChatSession> {
     console.debug("[api] GET /chat/sessions/%s", id);
-    return request<ChatSession>(`/chat/sessions/${id}`);
+    return request<ChatSession>(withChatSessionContext(`/chat/sessions/${id}`, context));
   },
 
-  getChatSessionMessages(sessionId: string): Promise<ChatSessionMessage[]> {
+  getChatSessionMessages(
+    sessionId: string,
+    context?: ChatSessionRequestContext,
+  ): Promise<ChatSessionMessage[]> {
     console.debug("[api] GET /chat/sessions/%s/messages", sessionId);
-    return request<ChatSessionMessage[]>(`/chat/sessions/${sessionId}/messages`);
+    return request<ChatSessionMessage[]>(
+      withChatSessionContext(`/chat/sessions/${sessionId}/messages`, context),
+    );
   },
 
   updateChatSession(id: string, input: UpdateChatSessionInput): Promise<ChatSession> {

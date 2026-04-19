@@ -233,7 +233,10 @@ describe("useChat", () => {
       await new Promise<void>((r) => setTimeout(r, 10));
     });
 
-    expect(mockGetChatSessionMessages).toHaveBeenCalledWith("sess-1");
+    expect(mockGetChatSessionMessages).toHaveBeenCalledWith("sess-1", {
+      projectId: "p-1",
+      runtimeProfileId: null,
+    });
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0].content).toBe("Saved msg");
   });

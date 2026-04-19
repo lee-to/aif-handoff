@@ -516,6 +516,105 @@ async function getAdapterForRuntimeId(runtimeId: string): Promise<RuntimeAdapter
   return registry.resolveRuntime(runtimeId);
 }
 
+interface RuntimeSessionLookupContext {
+  providerId: string;
+  profileId: string | null;
+  runtimeProfileId: string | null;
+  projectRoot?: string;
+  options?: Record<string, unknown>;
+  headers?: Record<string, string>;
+}
+
+function parseOptionalQueryParam(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildSessionLookupOptions(input: {
+  options?: Record<string, unknown> | null;
+  baseUrl?: string | null;
+  apiKey?: string | null;
+  apiKeyEnvVar?: string | null;
+}): Record<string, unknown> | undefined {
+  const options: Record<string, unknown> = {
+    ...(input.options ?? {}),
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+    ...(input.apiKeyEnvVar ? { apiKeyEnvVar: input.apiKeyEnvVar } : {}),
+  };
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
+async function resolveVirtualSessionLookupContext(input: {
+  runtimeId: string;
+  adapter: RuntimeAdapter;
+  projectId: string | null;
+  runtimeProfileId: string | null;
+}): Promise<RuntimeSessionLookupContext> {
+  if (input.runtimeProfileId) {
+    const profileRow = findRuntimeProfileById(input.runtimeProfileId);
+    const profile = profileRow ? toRuntimeProfileResponse(profileRow) : null;
+    if (profile && profile.runtimeId === input.runtimeId) {
+      return {
+        providerId: profile.providerId,
+        profileId: profile.id,
+        runtimeProfileId: profile.id,
+        options: buildSessionLookupOptions({
+          options: profile.options ?? {},
+          baseUrl: profile.baseUrl ?? null,
+          apiKeyEnvVar: profile.apiKeyEnvVar ?? null,
+        }),
+        headers: profile.headers ?? {},
+      };
+    }
+  }
+
+  if (input.projectId) {
+    const project = findProjectById(input.projectId);
+    if (project) {
+      try {
+        const systemAppend = buildContextAppend(project.name, null);
+        const { context } = await resolveChatRuntimeAdapter(
+          input.projectId,
+          "session-lookup",
+          systemAppend,
+        );
+        if (context.resolvedProfile.runtimeId === input.runtimeId) {
+          return {
+            providerId: context.resolvedProfile.providerId,
+            profileId: context.resolvedProfile.profileId ?? null,
+            runtimeProfileId: context.resolvedProfile.profileId ?? null,
+            projectRoot: project.rootPath,
+            options: buildSessionLookupOptions({
+              options: context.resolvedProfile.options ?? {},
+              baseUrl: context.resolvedProfile.baseUrl ?? null,
+              apiKey: context.resolvedProfile.apiKey ?? null,
+              apiKeyEnvVar: context.resolvedProfile.apiKeyEnvVar ?? null,
+            }),
+            headers: context.resolvedProfile.headers,
+          };
+        }
+      } catch (err) {
+        log.debug(
+          {
+            err,
+            projectId: input.projectId,
+            runtimeId: input.runtimeId,
+          },
+          "Unable to resolve project runtime context for virtual session lookup",
+        );
+      }
+    }
+  }
+
+  return {
+    providerId: input.adapter.descriptor.providerId,
+    profileId: null,
+    runtimeProfileId: null,
+  };
+}
+
 export const chatRouter = new Hono();
 
 /**
@@ -668,11 +767,20 @@ chatRouter.get("/sessions/:id", async (c) => {
       if (!adapter.getSession) {
         return c.json({ error: "Runtime does not support session details" }, 404);
       }
+      const lookupContext = await resolveVirtualSessionLookupContext({
+        runtimeId: virtual.runtimeId,
+        adapter,
+        projectId: parseOptionalQueryParam(c.req.query("projectId")),
+        runtimeProfileId: parseOptionalQueryParam(c.req.query("runtimeProfileId")),
+      });
       const info = await adapter.getSession({
         runtimeId: virtual.runtimeId,
-        providerId: adapter.descriptor.providerId,
-        profileId: null,
+        providerId: lookupContext.providerId,
+        profileId: lookupContext.profileId,
+        projectRoot: lookupContext.projectRoot,
         sessionId: virtual.sessionId,
+        options: lookupContext.options,
+        headers: lookupContext.headers,
       });
       if (!info) {
         return c.json({ error: "Chat session not found" }, 404);
@@ -682,7 +790,7 @@ chatRouter.get("/sessions/:id", async (c) => {
         projectId: "",
         title: info.title || "Untitled",
         agentSessionId: null,
-        runtimeProfileId: null,
+        runtimeProfileId: lookupContext.runtimeProfileId,
         runtimeSessionId: info.id,
         source: "agent",
         createdAt: info.createdAt,
@@ -714,12 +822,21 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
       if (!adapter.listSessionEvents) {
         return c.json({ error: "Runtime does not support session message listing" }, 404);
       }
+      const lookupContext = await resolveVirtualSessionLookupContext({
+        runtimeId: virtual.runtimeId,
+        adapter,
+        projectId: parseOptionalQueryParam(c.req.query("projectId")),
+        runtimeProfileId: parseOptionalQueryParam(c.req.query("runtimeProfileId")),
+      });
 
       const runtimeEvents = await adapter.listSessionEvents({
         runtimeId: virtual.runtimeId,
-        providerId: adapter.descriptor.providerId,
-        profileId: null,
+        providerId: lookupContext.providerId,
+        profileId: lookupContext.profileId,
+        projectRoot: lookupContext.projectRoot,
         sessionId: virtual.sessionId,
+        options: lookupContext.options,
+        headers: lookupContext.headers,
       });
 
       const messages: ChatSessionMessage[] = runtimeEvents

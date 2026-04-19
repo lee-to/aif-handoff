@@ -2,10 +2,12 @@ import type {
   RuntimeLimitScope,
   RuntimeLimitSnapshot,
   RuntimeLimitWindow,
+  RuntimeLimitFutureHint,
 } from "@aif/shared/browser";
+import { resolveRuntimeLimitFutureHint } from "@aif/shared/browser";
 
 export type RuntimeLimitTone = "success" | "warning" | "error" | "info";
-export type RuntimeLimitDisplayState = "active" | "expired" | "stale";
+export type RuntimeLimitDisplayState = "active" | "expired" | "signal_no_reset" | "historical";
 
 export interface RuntimeLimitDisplay {
   state: RuntimeLimitDisplayState;
@@ -15,19 +17,24 @@ export interface RuntimeLimitDisplay {
   shortLabel: string;
   summary: string;
   detail: string | null;
-  resetAt: string | null;
+  resetAt: string | null; // provider reset hint
   resetText: string | null;
+  taskRetryAt: string | null;
+  taskRetryText: string | null;
+  hintSource: RuntimeLimitFutureHint["source"];
   checkedAt: string | null;
   checkedText: string | null;
 }
 
 interface RuntimeLimitDisplayOptions {
-  fallbackRetryAfter?: string | null;
+  taskRetryAfter?: string | null;
   checkedAt?: string | null;
   nowMs?: number;
+  freshnessMs?: number;
 }
 
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+const DEFAULT_FRESHNESS_MS = 30 * 60_000;
 
 function toFiniteNumber(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -58,6 +65,13 @@ function parseTimestampMs(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatRelativeAge(ageMs: number): string {
+  if (ageMs < 60_000) return "just now";
+  if (ageMs < 60 * 60_000) return `${Math.round(ageMs / 60_000)} min ago`;
+  if (ageMs < 24 * 60 * 60_000) return `${Math.round(ageMs / (60 * 60_000))}h ago`;
+  return `${Math.round(ageMs / (24 * 60 * 60_000))}d ago`;
 }
 
 function scopeLabel(scope: RuntimeLimitScope | null | undefined): string {
@@ -184,23 +198,47 @@ export function getRuntimeLimitDisplay(
   if (!snapshot) return null;
 
   const window = selectPrimaryWindow(snapshot);
-  const resetAt = snapshot.resetAt ?? window?.resetAt ?? options.fallbackRetryAfter ?? null;
-  const retryAfterSeconds = snapshot.retryAfterSeconds ?? window?.retryAfterSeconds ?? null;
-  const checkedAt = options.checkedAt ?? snapshot.checkedAt ?? null;
-  const resetAtMs = parseTimestampMs(resetAt);
   const nowMs = options.nowMs ?? Date.now();
+  const futureHint = resolveRuntimeLimitFutureHint(snapshot, {
+    nowMs,
+    preferredWindow: window,
+  });
+  const resetAt = futureHint.resetAt;
+  const retryAfterSeconds =
+    futureHint.retryAfterSeconds ?? snapshot.retryAfterSeconds ?? window?.retryAfterSeconds ?? null;
+  const taskRetryAt = options.taskRetryAfter ?? null;
+  const taskRetryAtMs = parseTimestampMs(taskRetryAt);
+  const taskRetryLabel = formatTimestamp(taskRetryAt);
+  const checkedAt = options.checkedAt ?? snapshot.checkedAt ?? null;
+  const checkedAtMs = parseTimestampMs(checkedAt);
+  const freshnessMs = options.freshnessMs ?? DEFAULT_FRESHNESS_MS;
   const isActiveLimitSignal = snapshot.status === "blocked" || snapshot.status === "warning";
-  const hasFutureResetHint = resetAtMs != null && resetAtMs > nowMs;
+  const isFresh = checkedAtMs != null ? nowMs - checkedAtMs <= freshnessMs : false;
+
   const displayState: RuntimeLimitDisplayState = isActiveLimitSignal
-    ? hasFutureResetHint
+    ? futureHint.isFuture
       ? "active"
-      : resetAtMs != null
+      : futureHint.resetAtMs != null
         ? "expired"
-        : "stale"
-    : "active";
+        : "signal_no_reset"
+    : isFresh
+      ? "active"
+      : "historical";
 
   const resetLabel = formatTimestamp(resetAt);
   const checkedLabel = formatTimestamp(checkedAt);
+  const checkedText =
+    checkedAtMs != null
+      ? `Last checked ${formatRelativeAge(Math.max(0, nowMs - checkedAtMs))}${checkedLabel ? ` (${checkedLabel})` : ""}.`
+      : checkedLabel
+        ? `Last checked ${checkedLabel}.`
+        : null;
+  const taskRetryText =
+    taskRetryAtMs == null
+      ? null
+      : taskRetryAtMs > nowMs
+        ? `Task retry is scheduled for ${taskRetryLabel}.`
+        : `Task retry was scheduled for ${taskRetryLabel}.`;
 
   if (displayState === "expired") {
     return {
@@ -209,30 +247,72 @@ export function getRuntimeLimitDisplay(
       isExpired: true,
       label: "Expired",
       shortLabel: "EXPIRED",
-      summary: "The last runtime limit window has expired. Waiting for a fresh provider update.",
+      summary: "The provider reset window has elapsed. Waiting for a fresh limit signal.",
       detail: "This persisted provider signal is no longer treated as an active runtime block.",
       resetAt,
-      resetText: resetLabel ? `Reset window elapsed ${resetLabel}.` : null,
+      resetText: resetLabel ? `Provider reset window elapsed ${resetLabel}.` : null,
+      taskRetryAt,
+      taskRetryText,
+      hintSource: futureHint.source,
       checkedAt,
-      checkedText: checkedLabel ? `Checked ${checkedLabel}.` : null,
+      checkedText,
     };
   }
 
-  if (displayState === "stale") {
+  if (displayState === "signal_no_reset") {
     return {
-      state: "stale",
+      state: "signal_no_reset",
       tone: "info",
       isExpired: false,
-      label: "Inactive",
-      shortLabel: "INACTIVE",
-      summary:
-        "The last runtime limit signal has no active reset hint. Waiting for a fresh provider update.",
+      label: "Signal Without Reset",
+      shortLabel: "NO RESET",
+      summary: "Limit signal observed without a future reset hint. Auto-pause is disabled.",
       detail:
-        "This persisted provider signal is not treated as an active runtime block until the provider reports a future reset window.",
+        "Provider limit state and task retry schedule are shown separately until a future provider reset hint is available.",
       resetAt,
       resetText: null,
+      taskRetryAt,
+      taskRetryText,
+      hintSource: futureHint.source,
       checkedAt,
-      checkedText: checkedLabel ? `Checked ${checkedLabel}.` : null,
+      checkedText,
+    };
+  }
+
+  if (displayState === "historical") {
+    const historicalSummary =
+      snapshot.status === "ok"
+        ? "Last known healthy state. Waiting for a recent provider signal."
+        : snapshot.status === "unknown"
+          ? "No recent provider limit signal is available."
+          : "Last known provider limit signal is stale.";
+    const historicalLabel =
+      snapshot.status === "ok"
+        ? "Last Known Healthy"
+        : snapshot.status === "unknown"
+          ? "No Recent Signal"
+          : "Historical Signal";
+    const historicalShortLabel =
+      snapshot.status === "ok"
+        ? "LAST KNOWN"
+        : snapshot.status === "unknown"
+          ? "NO SIGNAL"
+          : "HIST";
+    return {
+      state: "historical",
+      tone: "info",
+      isExpired: false,
+      label: historicalLabel,
+      shortLabel: historicalShortLabel,
+      summary: historicalSummary,
+      detail: summarizeWindow(snapshot, window),
+      resetAt,
+      resetText: resetLabel ? `Provider reset ${resetLabel}.` : null,
+      taskRetryAt,
+      taskRetryText,
+      hintSource: futureHint.source,
+      checkedAt,
+      checkedText,
     };
   }
 
@@ -274,12 +354,15 @@ export function getRuntimeLimitDisplay(
         : "Uses a provider status signal rather than an exact remaining count.",
     resetAt,
     resetText: resetLabel
-      ? `Resets ${resetLabel}.`
+      ? `Provider reset ${resetLabel}.`
       : typeof retryAfterSeconds === "number"
-        ? `Retry after ${Math.max(0, Math.round(retryAfterSeconds))}s.`
+        ? `Provider retry after ${Math.max(0, Math.round(retryAfterSeconds))}s.`
         : null,
+    taskRetryAt,
+    taskRetryText,
+    hintSource: futureHint.source,
     checkedAt,
-    checkedText: checkedLabel ? `Checked ${checkedLabel}.` : null,
+    checkedText,
   };
 }
 

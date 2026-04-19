@@ -8,6 +8,23 @@ import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
 const mockBroadcast = vi.fn();
+const mockInternalBroadcastToken = { value: "" };
+const baseMockEnv = {
+  AIF_DEFAULT_RUNTIME_ID: "claude",
+  AIF_DEFAULT_PROVIDER_ID: "anthropic",
+  INTERNAL_BROADCAST_TOKEN: "",
+};
+
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  return {
+    ...actual,
+    getEnv: () => ({
+      ...baseMockEnv,
+      INTERNAL_BROADCAST_TOKEN: mockInternalBroadcastToken.value,
+    }),
+  };
+});
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
@@ -61,6 +78,7 @@ describe("projects API", () => {
     testDb.current = createTestDb();
     app = createApp();
     mockBroadcast.mockReset();
+    mockInternalBroadcastToken.value = "";
   });
 
   it("returns projects list", async () => {
@@ -360,6 +378,93 @@ describe("projects API", () => {
       type: "project:runtime_limit_updated",
       payload: {
         projectId: "proj-broadcast",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      },
+    });
+  });
+
+  it("rejects unauthorized broadcast request when internal token is configured", async () => {
+    const db = testDb.current;
+    mockInternalBroadcastToken.value = "internal-token";
+    db.insert(projects)
+      .values({ id: "proj-broadcast-auth", name: "Broadcast Auth", rootPath: "/tmp/ba" })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast-auth/broadcast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("accepts authorized broadcast request with internal token header", async () => {
+    const db = testDb.current;
+    mockInternalBroadcastToken.value = "internal-token";
+    db.insert(projects)
+      .values({ id: "proj-broadcast-auth-ok", name: "Broadcast Auth OK", rootPath: "/tmp/bao" })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast-auth-ok/broadcast", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Broadcast-Token": "internal-token",
+      },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-broadcast-auth-ok",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      },
+    });
+  });
+
+  it("accepts authorized broadcast request with bearer token", async () => {
+    const db = testDb.current;
+    mockInternalBroadcastToken.value = "internal-token";
+    db.insert(projects)
+      .values({
+        id: "proj-broadcast-auth-bearer",
+        name: "Broadcast Auth Bearer",
+        rootPath: "/tmp/bab",
+      })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast-auth-bearer/broadcast", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer internal-token",
+      },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-broadcast-auth-bearer",
         runtimeProfileId: "profile-1",
         taskId: "task-1",
       },

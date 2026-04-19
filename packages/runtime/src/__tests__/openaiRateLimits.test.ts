@@ -160,4 +160,38 @@ describe("buildOpenAiCompatibleLimitSnapshot", () => {
       },
     ]);
   });
+
+  it("parses x-ratelimit-reset-* numeric values as epoch seconds when applicable", () => {
+    const snapshot = buildOpenAiCompatibleLimitSnapshot(
+      createHeaders({
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "10",
+        "x-ratelimit-reset-requests": "1776389400",
+      }),
+      {
+        providerId: "openai",
+        runtimeId: "codex",
+      },
+    );
+
+    expect(snapshot?.resetAt).toBe("2026-04-17T01:30:00.000Z");
+    expect(snapshot?.windows[0]?.resetAt).toBe("2026-04-17T01:30:00.000Z");
+  });
+
+  it("parses x-ratelimit-reset-* numeric values as epoch milliseconds when applicable", () => {
+    const snapshot = buildOpenAiCompatibleLimitSnapshot(
+      createHeaders({
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "10",
+        "x-ratelimit-reset-requests": "1776389400000",
+      }),
+      {
+        providerId: "openai",
+        runtimeId: "codex",
+      },
+    );
+
+    expect(snapshot?.resetAt).toBe("2026-04-17T01:30:00.000Z");
+    expect(snapshot?.windows[0]?.resetAt).toBe("2026-04-17T01:30:00.000Z");
+  });
 });

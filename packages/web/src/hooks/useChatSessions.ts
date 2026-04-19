@@ -100,9 +100,13 @@ export function useChatSessions(projectId: string | null) {
   const loadSessionMessages = useCallback(
     async (sessionId: string): Promise<ChatSessionMessage[]> => {
       console.debug("[useChatSessions] Loading messages for session %s", sessionId);
-      return api.getChatSessionMessages(sessionId);
+      const session = sessionsQuery.data?.find((item) => item.id === sessionId);
+      return api.getChatSessionMessages(sessionId, {
+        projectId,
+        runtimeProfileId: session?.runtimeProfileId ?? null,
+      });
     },
-    [],
+    [projectId, sessionsQuery.data],
   );
 
   const selectSession = useCallback(

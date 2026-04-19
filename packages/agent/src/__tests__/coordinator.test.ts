@@ -6,12 +6,26 @@ import { eq } from "drizzle-orm";
 
 // Set up test db
 const testDb = { current: createTestDb() };
+const blockTaskForRuntimeGateIfEligibleMock = vi.fn();
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
   return {
     ...actual,
     getDb: () => testDb.current,
+  };
+});
+
+vi.mock("@aif/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/data")>();
+  blockTaskForRuntimeGateIfEligibleMock.mockImplementation(
+    actual.blockTaskForRuntimeGateIfEligible,
+  );
+  return {
+    ...actual,
+    blockTaskForRuntimeGateIfEligible: (
+      ...args: Parameters<typeof actual.blockTaskForRuntimeGateIfEligible>
+    ) => blockTaskForRuntimeGateIfEligibleMock(...args),
   };
 });
 
@@ -606,6 +620,68 @@ describe("coordinator", () => {
     expect(task!.blockedReason).toContain("5% <= 10%");
     expect(task!.retryAfter).toBe(resetAt);
     expect(task!.runtimeLimitSnapshotJson).toContain('"precision":"exact"');
+  });
+
+  it("should skip proactive runtime block side-effects when CAS update fails after candidate changes", async () => {
+    const db = testDb.current;
+    const resetAt = new Date(Date.now() + 30 * 60_000).toISOString();
+    insertRuntimeProfile({
+      id: "profile-plan-race",
+      snapshot: {
+        source: "sdk_event",
+        status: "blocked",
+        precision: "heuristic",
+        checkedAt: "2026-04-17T00:00:00.000Z",
+        providerId: "anthropic",
+        runtimeId: "claude",
+        profileId: "profile-plan-race",
+        primaryScope: "time",
+        resetAt,
+        retryAfterSeconds: null,
+        warningThreshold: null,
+        windows: [{ scope: "time", resetAt }],
+        providerMeta: null,
+      },
+    });
+    db.update(projects)
+      .set({ defaultPlanRuntimeProfileId: "profile-plan-race" })
+      .where(eq(projects.id, "test-project"))
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-gate-race",
+        projectId: "test-project",
+        title: "Gate race",
+        status: "planning",
+      })
+      .run();
+
+    blockTaskForRuntimeGateIfEligibleMock.mockImplementationOnce(() => {
+      db.update(tasks)
+        .set({
+          paused: true,
+          lockedBy: "other-coordinator",
+          lockedUntil: new Date(Date.now() + 5 * 60_000).toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(tasks.id, "task-gate-race"))
+        .run();
+      return false;
+    });
+
+    await pollAndProcess();
+
+    expect(blockTaskForRuntimeGateIfEligibleMock).toHaveBeenCalledTimes(1);
+    expect(runPlanner).not.toHaveBeenCalledWith("task-gate-race", "/tmp/test");
+
+    const task = db.select().from(tasks).where(eq(tasks.id, "task-gate-race")).get();
+    expect(task!.status).toBe("planning");
+    expect(task!.paused).toBe(true);
+    expect(task!.blockedReason).toBeNull();
+    expect(task!.blockedFromStatus).toBeNull();
+    expect(task!.retryAfter).toBeNull();
+    expect(task!.runtimeLimitSnapshotJson).toBeNull();
+    expect(task!.agentActivityLog).toBeNull();
   });
 
   it("should continue to later runnable candidates when the first planning task is gated by runtime limits", async () => {

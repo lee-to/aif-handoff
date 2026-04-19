@@ -159,3 +159,17 @@ export type { PlannerMode, PlannerFlagDefaults } from "./plannerDefaults.js";
 // Utilities
 export { withTimeout } from "./withTimeout.js";
 export { parseMcpPortSetting, type ParsedMcpPortSetting } from "./mcpPort.js";
+
+// Runtime-limit shared helpers
+export {
+  buildRuntimeLimitSignature,
+  mapSafeRuntimeErrorReason,
+  normalizeRuntimeLimitSnapshot,
+  resolveRuntimeLimitFutureHint,
+  sanitizeProviderMeta,
+  selectViolatedWindowForExactThreshold,
+  type RuntimeLimitFutureHint,
+  type RuntimeLimitFutureHintSource,
+  type SafeRuntimeErrorCategory,
+  type SafeRuntimeErrorReason,
+} from "./runtimeLimitUtils.js";

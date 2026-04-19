@@ -80,7 +80,7 @@ export function TaskDetailHeader({
     (action) => action.visible?.(task) ?? true,
   );
   const runtimeLimitDisplay = getRuntimeLimitDisplay(task.runtimeLimitSnapshot, {
-    fallbackRetryAfter: task.retryAfter ?? null,
+    taskRetryAfter: task.retryAfter ?? null,
     checkedAt: task.runtimeLimitUpdatedAt ?? null,
   });
   // Pause is also shown in `backlog` so users can park a task that auto-queue
@@ -154,10 +154,11 @@ export function TaskDetailHeader({
           <span className="font-medium">
             {runtimeLimitDisplay.state === "active"
               ? "Auto-paused by runtime limit."
-              : "Last runtime limit signal is no longer active."}
+              : "Provider runtime signal is not actively gating this task."}
           </span>
           <span>{runtimeLimitDisplay.summary}</span>
           {runtimeLimitDisplay.resetText && <span>{runtimeLimitDisplay.resetText}</span>}
+          {runtimeLimitDisplay.taskRetryText && <span>{runtimeLimitDisplay.taskRetryText}</span>}
         </AlertBox>
       )}
 

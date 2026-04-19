@@ -5,7 +5,7 @@
  */
 
 import type { RuntimeLimitSnapshot } from "@aif/runtime";
-import { logger, type TaskStatus } from "@aif/shared";
+import { logger, mapSafeRuntimeErrorReason, type TaskStatus } from "@aif/shared";
 import { logActivity } from "./hooks.js";
 import {
   findRuntimeExecutionError,
@@ -17,14 +17,20 @@ import { getRandomBackoffMinutes } from "./taskWatchdog.js";
 
 const log = logger("stage-error-handler");
 
-type RetryAfterSource = "resetAt" | "retryAfterSeconds" | "random_backoff";
+type RetryAfterSource = "resetAt" | "retryAfterSeconds" | "random_backoff" | "none";
+
+const NON_RETRYABLE_RUNTIME_CATEGORIES = new Set([
+  "model_not_found",
+  "context_length",
+  "content_filter",
+]);
 
 export type ErrorRecovery =
   | { kind: "fast_retry" }
   | {
       kind: "blocked_external";
       blockedReason: string;
-      retryAfter: string;
+      retryAfter: string | null;
       retryAfterSource: RetryAfterSource;
       retryCount: number;
       limitSnapshot: RuntimeLimitSnapshot | null;
@@ -111,6 +117,39 @@ function resolveRetryAfter(err: unknown): {
  */
 export function classifyStageError(input: StageErrorInput): ErrorRecovery {
   const { taskId, stageLabel, sourceStatus, err } = input;
+  const runtimeError = findRuntimeExecutionError(err);
+  if (runtimeError && NON_RETRYABLE_RUNTIME_CATEGORIES.has(runtimeError.category)) {
+    const safeReason = mapSafeRuntimeErrorReason(runtimeError);
+    const blockedReason = `${safeReason.reason} Manual action required before retry.`;
+    const limitSnapshot = runtimeError.limitSnapshot ?? null;
+
+    logActivity(
+      taskId,
+      "Agent",
+      `coordinator moved to blocked_external from ${sourceStatus} at ${stageLabel}; retryAfter=manual; source=none; reason=${truncateReason(blockedReason)}`,
+    );
+
+    log.error(
+      {
+        taskId,
+        stage: stageLabel,
+        err,
+        retryAfter: null,
+        retryAfterSource: "none",
+        runtimeCategory: runtimeError.category,
+      },
+      "Subagent failed with non-retryable runtime error, task requires manual action",
+    );
+
+    return {
+      kind: "blocked_external",
+      blockedReason,
+      retryAfter: null,
+      retryAfterSource: "none",
+      retryCount: input.retryCount ?? 0,
+      limitSnapshot,
+    };
+  }
 
   if (isFastRetryableFailure(err)) {
     const reason = err instanceof Error ? err.message : String(err);

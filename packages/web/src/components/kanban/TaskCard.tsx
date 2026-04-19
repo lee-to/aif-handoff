@@ -48,7 +48,7 @@ export function TaskCard({
     task.status === "backlog" && (onMoveUp !== undefined || onMoveDown !== undefined);
   const showPauseToggle = task.status === "backlog" && onTogglePause !== undefined;
   const runtimeLimitDisplay = getRuntimeLimitDisplay(task.runtimeLimitSnapshot, {
-    fallbackRetryAfter: task.retryAfter ?? null,
+    taskRetryAfter: task.retryAfter ?? null,
     checkedAt: task.runtimeLimitUpdatedAt ?? null,
   });
 
@@ -197,13 +197,14 @@ export function TaskCard({
       {task.status === "blocked_external" && runtimeLimitDisplay && (
         <div className="mt-2 ml-2 border border-red-500/30 bg-red-500/10 px-2 py-1 text-3xs text-red-300">
           <div className="font-medium">
-            {runtimeLimitDisplay.state === "active"
-              ? "Runtime auto-pause"
-              : "Last runtime limit signal"}
+            {runtimeLimitDisplay.state === "active" ? "Runtime auto-pause" : "Runtime limit status"}
           </div>
           <div className="line-clamp-2">{runtimeLimitDisplay.summary}</div>
           {runtimeLimitDisplay.resetText && (
             <div className="line-clamp-1">{runtimeLimitDisplay.resetText}</div>
+          )}
+          {runtimeLimitDisplay.taskRetryText && (
+            <div className="line-clamp-1">{runtimeLimitDisplay.taskRetryText}</div>
           )}
         </div>
       )}

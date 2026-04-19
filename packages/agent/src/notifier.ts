@@ -13,6 +13,18 @@ export interface TaskNotificationInfo {
 type ProjectBroadcastType = "project:auto_queue_mode_changed" | "project:auto_queue_advanced";
 type RuntimeLimitBroadcastType = "project:runtime_limit_updated";
 
+function internalBroadcastHeaders(): Record<string, string> {
+  const token = getEnv().INTERNAL_BROADCAST_TOKEN?.trim() ?? "";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    headers["X-Internal-Broadcast-Token"] = token;
+  }
+  return headers;
+}
+
 /** Best-effort project-scoped WS broadcast via the API. */
 export async function notifyProjectBroadcast(
   projectId: string,
@@ -24,7 +36,7 @@ export async function notifyProjectBroadcast(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: internalBroadcastHeaders(),
       body: JSON.stringify({ type, taskId: info.taskId }),
     });
     if (res.ok) {
@@ -44,14 +56,14 @@ export async function notifyProjectRuntimeLimitBroadcast(
   projectId: string,
   runtimeProfileId: string | null,
   info: { taskId?: string | null } = {},
-): Promise<void> {
+): Promise<boolean> {
   const baseUrl = getEnv().API_BASE_URL;
   const type: RuntimeLimitBroadcastType = "project:runtime_limit_updated";
   const url = `${baseUrl}/projects/${projectId}/broadcast`;
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: internalBroadcastHeaders(),
       body: JSON.stringify({
         type,
         taskId: info.taskId ?? null,
@@ -63,17 +75,20 @@ export async function notifyProjectRuntimeLimitBroadcast(
         { projectId, type, taskId: info.taskId ?? null, runtimeProfileId },
         "Runtime limit broadcast sent",
       );
+      return true;
     } else {
       log.warn(
         { projectId, type, taskId: info.taskId ?? null, runtimeProfileId, status: res.status, url },
         "Runtime limit broadcast request returned non-OK status",
       );
+      return false;
     }
   } catch (err) {
     log.warn(
       { projectId, type, taskId: info.taskId ?? null, runtimeProfileId, err, url },
       "Runtime limit broadcast request failed",
     );
+    return false;
   }
 }
 

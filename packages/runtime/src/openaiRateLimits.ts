@@ -10,6 +10,9 @@ import {
 
 const DEFAULT_WARNING_THRESHOLD = 10;
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
+const EPOCH_SECONDS_MIN = 1_000_000_000;
+const EPOCH_MILLISECONDS_MIN = 1_000_000_000_000;
+const EPOCH_MILLISECONDS_MAX = 9_999_999_999_999;
 const log = logger("openai-rate-limits");
 
 interface BuildOpenAiCompatibleLimitSnapshotInput {
@@ -66,25 +69,11 @@ function toSafeIsoTimestamp(
   return date.toISOString();
 }
 
-function parseDurationMs(raw: string | null): number | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric) && numeric >= 0) {
-    return numeric * 1000;
-  }
-
-  const parsedDate = Date.parse(trimmed);
-  if (Number.isFinite(parsedDate)) {
-    return Math.max(0, parsedDate - Date.now());
-  }
-
+function parseDurationLikeMs(raw: string): number | null {
   const pattern = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/gi;
   let totalMs = 0;
   let matchCount = 0;
-  const normalized = trimmed.replace(/\s+/g, "");
+  const normalized = raw.replace(/\s+/g, "");
   let consumed = "";
 
   for (const match of normalized.matchAll(pattern)) {
@@ -122,8 +111,57 @@ function parseDurationMs(raw: string | null): number | null {
   return totalMs;
 }
 
+function parseRetryAfterMs(raw: string | null): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    // Retry-After numeric semantics: duration in seconds.
+    return numeric * 1000;
+  }
+
+  const parsedDate = Date.parse(trimmed);
+  if (Number.isFinite(parsedDate)) {
+    return Math.max(0, parsedDate - Date.now());
+  }
+
+  const durationMs = parseDurationLikeMs(trimmed);
+  if (durationMs == null) {
+    return null;
+  }
+
+  return durationMs;
+}
+
+function parseRateLimitResetMs(raw: string | null): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    if (numeric >= EPOCH_MILLISECONDS_MIN && numeric <= EPOCH_MILLISECONDS_MAX) {
+      return Math.max(0, numeric - Date.now());
+    }
+    if (numeric >= EPOCH_SECONDS_MIN) {
+      return Math.max(0, numeric * 1000 - Date.now());
+    }
+    // Low numeric reset header is treated as duration in seconds.
+    return numeric * 1000;
+  }
+
+  const parsedDate = Date.parse(trimmed);
+  if (Number.isFinite(parsedDate)) {
+    return Math.max(0, parsedDate - Date.now());
+  }
+
+  return parseDurationLikeMs(trimmed);
+}
+
 function parseResetAtIso(raw: string | null): string | null {
-  const durationMs = parseDurationMs(raw);
+  const durationMs = parseRateLimitResetMs(raw);
   if (durationMs == null) return null;
   const normalizedRaw = raw ?? "";
   return toSafeIsoTimestamp(Date.now() + durationMs, {
@@ -134,7 +172,7 @@ function parseResetAtIso(raw: string | null): string | null {
 }
 
 function parseRetryAfterSeconds(raw: string | null): number | null {
-  const durationMs = parseDurationMs(raw);
+  const durationMs = parseRetryAfterMs(raw);
   if (durationMs == null) return null;
   const normalizedRaw = raw ?? "";
   const retryAtIso = toSafeIsoTimestamp(Date.now() + durationMs, {

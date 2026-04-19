@@ -96,7 +96,9 @@ describe("classifyStageError", () => {
 
     expect(result.kind).toBe("blocked_external");
     if (result.kind === "blocked_external") {
-      const retryMs = new Date(result.retryAfter).getTime();
+      expect(result.retryAfter).not.toBeNull();
+      const retryAfter = result.retryAfter as string;
+      const retryMs = new Date(retryAfter).getTime();
       // 10 min backoff (mocked)
       expect(retryMs).toBeGreaterThanOrEqual(before + 10 * 60_000 - 1000);
       expect(retryMs).toBeLessThanOrEqual(before + 10 * 60_000 + 1000);

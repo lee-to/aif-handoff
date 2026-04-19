@@ -63,6 +63,17 @@ export {
 export { STATUS_CONFIG, ORDERED_STATUSES } from "./constants.js";
 export { HUMAN_ACTIONS_BY_STATUS } from "./stateMachine.js";
 export { withTimeout } from "./withTimeout.js";
+export {
+  buildRuntimeLimitSignature,
+  normalizeRuntimeLimitSnapshot,
+  resolveRuntimeLimitFutureHint,
+  sanitizeProviderMeta,
+  selectViolatedWindowForExactThreshold,
+  type RuntimeLimitFutureHint,
+  type RuntimeLimitFutureHintSource,
+  type SafeRuntimeErrorCategory,
+  type SafeRuntimeErrorReason,
+} from "./runtimeLimitUtils.js";
 
 // Plan path utilities (pure functions, browser-safe — separate module with no Node.js deps)
 export { slugify, generatePlanPath } from "./planPath.js";

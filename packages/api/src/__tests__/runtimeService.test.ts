@@ -59,6 +59,8 @@ const mockCreateRuntimeWorkflowSpec = vi.fn(
 );
 const mockRedactResolvedRuntimeProfile = vi.fn((profile: Record<string, unknown>) => profile);
 const mockResolveRuntimeProfile = vi.fn();
+const mockNormalizeRuntimeLimitSnapshot = vi.fn((snapshot: unknown) => snapshot);
+const mockBuildRuntimeLimitSignature = vi.fn((snapshot: unknown) => JSON.stringify(snapshot));
 const mockPersistRuntimeProfileLimitSnapshot = vi.fn();
 const mockClearRuntimeProfileLimitSnapshot = vi.fn();
 const mockBroadcast = vi.fn();
@@ -93,10 +95,12 @@ vi.mock("@aif/shared", () => ({
 
 vi.mock("@aif/runtime", () => ({
   bootstrapRuntimeRegistry: mockBootstrapRuntimeRegistry,
+  buildRuntimeLimitSignature: mockBuildRuntimeLimitSignature,
   checkRuntimeCapabilities: mockCheckRuntimeCapabilities,
   createRuntimeMemoryCache: mockCreateRuntimeMemoryCache,
   createRuntimeModelDiscoveryService: mockCreateRuntimeModelDiscoveryService,
   createRuntimeWorkflowSpec: mockCreateRuntimeWorkflowSpec,
+  normalizeRuntimeLimitSnapshot: mockNormalizeRuntimeLimitSnapshot,
   redactResolvedRuntimeProfile: mockRedactResolvedRuntimeProfile,
   resolveAdapterCapabilities: (adapter: { descriptor: { capabilities: unknown } }) =>
     adapter.descriptor.capabilities,

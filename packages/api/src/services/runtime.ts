@@ -1,5 +1,6 @@
 import {
   bootstrapRuntimeRegistry,
+  buildRuntimeLimitSignature,
   checkRuntimeCapabilities,
   createRuntimeMemoryCache,
   createRuntimeModelDiscoveryService,
@@ -7,6 +8,7 @@ import {
   redactResolvedRuntimeProfile,
   resolveAdapterCapabilities,
   resolveRuntimeProfile,
+  normalizeRuntimeLimitSnapshot,
   RUNTIME_LIMIT_EVENT_TYPE,
   RuntimeExecutionError,
   RUNTIME_TRUST_TOKEN,
@@ -164,7 +166,7 @@ function buildRuntimeLimitCacheSignature(
   clearOnMissing: boolean,
 ): string | null {
   if (snapshot) {
-    return `persist:${JSON.stringify(snapshot)}`;
+    return `persist:${buildRuntimeLimitSignature(snapshot)}`;
   }
   if (clearOnMissing) {
     return "clear";
@@ -256,12 +258,13 @@ export function refreshRuntimeProfileLimitState(input: {
   workflowKind?: string | null;
   reason: string;
 }): void {
-  const runtimeProfileId = input.runtimeProfileId ?? input.snapshot?.profileId ?? null;
+  const normalizedSnapshot = input.snapshot ? normalizeRuntimeLimitSnapshot(input.snapshot) : null;
+  const runtimeProfileId = input.runtimeProfileId ?? normalizedSnapshot?.profileId ?? null;
   if (!runtimeProfileId) {
     log.debug(
       {
-        runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-        providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+        runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+        providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
         taskId: input.taskId ?? null,
         projectId: input.projectId ?? null,
         conversationId: input.conversationId ?? null,
@@ -274,15 +277,15 @@ export function refreshRuntimeProfileLimitState(input: {
   }
 
   const signature = buildRuntimeLimitCacheSignature(
-    input.snapshot ?? null,
+    normalizedSnapshot,
     input.clearOnMissing === true,
   );
   if (!signature) {
     log.debug(
       {
         runtimeProfileId,
-        runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-        providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+        runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+        providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
         taskId: input.taskId ?? null,
         projectId: input.projectId ?? null,
         conversationId: input.conversationId ?? null,
@@ -318,21 +321,21 @@ export function refreshRuntimeProfileLimitState(input: {
       log.debug(
         {
           runtimeProfileId,
-          runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-          providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+          runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+          providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
           taskId: input.taskId ?? null,
           projectId: input.projectId ?? null,
           conversationId: input.conversationId ?? null,
           workflowKind: input.workflowKind ?? null,
           reason: input.reason,
           cacheHit: false,
-          action: input.snapshot ? "persist" : "clear",
+          action: normalizedSnapshot ? "persist" : "clear",
         },
         "Refreshing runtime profile limit state",
       );
 
-      if (input.snapshot) {
-        persistRuntimeProfileLimitSnapshot(runtimeProfileId, input.snapshot, persistedAt);
+      if (normalizedSnapshot) {
+        persistRuntimeProfileLimitSnapshot(runtimeProfileId, normalizedSnapshot, persistedAt);
       } else {
         clearRuntimeProfileLimitSnapshot(runtimeProfileId, persistedAt);
       }
@@ -349,8 +352,8 @@ export function refreshRuntimeProfileLimitState(input: {
       {
         err: error,
         runtimeProfileId,
-        runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-        providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+        runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+        providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
         taskId: input.taskId ?? null,
         projectId: input.projectId ?? null,
         conversationId: input.conversationId ?? null,

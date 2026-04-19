@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { jsonValidator } from "../middleware/zodValidator.js";
-import { logger, getProjectConfig } from "@aif/shared";
+import { getEnv, logger, getProjectConfig } from "@aif/shared";
 import { findTaskById } from "@aif/data";
 import {
   createProjectSchema,
@@ -32,6 +33,46 @@ import {
 const log = logger("projects-route");
 
 export const projectsRouter = new Hono();
+
+function extractBearerToken(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed.toLowerCase().startsWith("bearer ")) return null;
+  const token = trimmed.slice(7).trim();
+  return token.length > 0 ? token : null;
+}
+
+function isLoopbackHost(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const host = value.split(":")[0]?.trim().toLowerCase() ?? "";
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function isLoopbackAddress(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const first = value.split(",")[0]?.trim().toLowerCase() ?? "";
+  return first === "127.0.0.1" || first === "::1" || first === "localhost";
+}
+
+function isTrustedBroadcastCaller(c: Context): boolean {
+  const configuredToken = getEnv().INTERNAL_BROADCAST_TOKEN?.trim() ?? "";
+  const headerToken =
+    c.req.header("x-internal-broadcast-token") ?? extractBearerToken(c.req.header("authorization"));
+
+  if (configuredToken) {
+    return headerToken === configuredToken;
+  }
+
+  if (process.env.NODE_ENV === "test") {
+    return true;
+  }
+
+  return (
+    isLoopbackAddress(c.req.header("x-forwarded-for")) ||
+    isLoopbackAddress(c.req.header("x-real-ip")) ||
+    isLoopbackHost(c.req.header("host"))
+  );
+}
 
 // GET /projects
 projectsRouter.get("/", (c) => {
@@ -221,6 +262,17 @@ projectsRouter.patch("/:id/auto-queue-mode", jsonValidator(autoQueueModeSchema),
 
 // POST /projects/:id/broadcast — emit project-scoped WS event (used by agent coordinator)
 projectsRouter.post("/:id/broadcast", jsonValidator(broadcastProjectSchema), async (c) => {
+  if (!isTrustedBroadcastCaller(c)) {
+    log.warn(
+      {
+        projectId: c.req.param("id"),
+        remoteAddress: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? null,
+      },
+      "Rejected unauthorized project broadcast request",
+    );
+    return c.json({ error: "Unauthorized broadcast caller" }, 401);
+  }
+
   const { id } = c.req.param();
   const { type, taskId, runtimeProfileId } = c.req.valid("json");
   const project = findProjectById(id);

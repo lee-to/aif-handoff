@@ -31,6 +31,7 @@ const {
   updateTaskRuntimeOverride,
   persistTaskRuntimeLimitSnapshot,
   clearTaskRuntimeLimitSnapshot,
+  blockTaskForRuntimeGateIfEligible,
   updateChatSessionRuntime,
   resolveEffectiveRuntimeProfile,
   toTaskResponse,
@@ -194,11 +195,13 @@ describe("runtime profiles data layer", () => {
     const mapped = toRuntimeProfileResponse(persisted!);
     expect(mapped.runtimeLimitSnapshot).toEqual(snapshot);
     expect(mapped.runtimeLimitUpdatedAt).toBe("2026-04-17T10:00:05.000Z");
+    expect(persisted!.updatedAt).toBe(profile!.updatedAt);
 
     const cleared = clearRuntimeProfileLimitSnapshot(profile!.id, "2026-04-17T11:00:00.000Z");
     const clearedMapped = toRuntimeProfileResponse(cleared!);
     expect(clearedMapped.runtimeLimitSnapshot).toBeNull();
     expect(clearedMapped.runtimeLimitUpdatedAt).toBe("2026-04-17T11:00:00.000Z");
+    expect(cleared!.updatedAt).toBe(profile!.updatedAt);
   });
 
   it("does not proactively gate provider-blocked snapshots without reset hints", () => {
@@ -223,6 +226,72 @@ describe("runtime profiles data layer", () => {
     const decision = evaluateRuntimeLimitGate(toRuntimeProfileResponse(findRuntimeProfileById(profile!.id)!), 0);
     expect(decision.blocked).toBe(false);
     expect(decision.reason).toBe("none");
+  });
+
+  it("proactively gates provider-blocked snapshots with retryAfterSeconds even without resetAt", () => {
+    const profile = createRuntimeProfile({
+      projectId: "proj-1",
+      name: "RetryAfter profile",
+      runtimeId: "claude",
+      providerId: "anthropic",
+    });
+    persistRuntimeProfileLimitSnapshot(
+      profile!.id,
+      {
+        ...makeLimitSnapshot(),
+        status: "blocked",
+        profileId: profile!.id,
+        resetAt: null,
+        retryAfterSeconds: 120,
+        windows: [{ scope: "time", percentUsed: 100, percentRemaining: 0, resetAt: null }],
+      },
+      "2026-04-17T10:00:05.000Z",
+    );
+
+    const decision = evaluateRuntimeLimitGate(
+      toRuntimeProfileResponse(findRuntimeProfileById(profile!.id)!),
+      0,
+    );
+    expect(decision.blocked).toBe(true);
+    expect(decision.reason).toBe("provider_blocked");
+    expect(decision.futureHint.source).toBe("snapshot_retry_after");
+  });
+
+  it("proactively gates provider-blocked snapshots with window reset fallback", () => {
+    const nowMs = Date.parse("2026-04-17T10:00:00.000Z");
+    const profile = createRuntimeProfile({
+      projectId: "proj-1",
+      name: "Window reset profile",
+      runtimeId: "claude",
+      providerId: "anthropic",
+    });
+    persistRuntimeProfileLimitSnapshot(
+      profile!.id,
+      {
+        ...makeLimitSnapshot(),
+        status: "blocked",
+        profileId: profile!.id,
+        resetAt: null,
+        retryAfterSeconds: null,
+        windows: [
+          {
+            scope: "time",
+            percentUsed: 100,
+            percentRemaining: 0,
+            resetAt: "2026-04-17T10:30:00.000Z",
+          },
+        ],
+      },
+      "2026-04-17T10:00:05.000Z",
+    );
+
+    const decision = evaluateRuntimeLimitGate(
+      toRuntimeProfileResponse(findRuntimeProfileById(profile!.id)!),
+      nowMs,
+    );
+    expect(decision.blocked).toBe(true);
+    expect(decision.reason).toBe("provider_blocked");
+    expect(decision.futureHint.source).toBe("window_reset_at");
   });
 
   it("does not proactively gate exact-threshold warnings without reset hints", () => {
@@ -260,6 +329,54 @@ describe("runtime profiles data layer", () => {
     const decision = evaluateRuntimeLimitGate(toRuntimeProfileResponse(findRuntimeProfileById(profile!.id)!), 0);
     expect(decision.blocked).toBe(false);
     expect(decision.reason).toBe("none");
+  });
+
+  it("uses violated-window reset hint for exact-threshold proactive gate", () => {
+    const nowMs = Date.parse("2026-04-17T10:00:00.000Z");
+    const profile = createRuntimeProfile({
+      projectId: "proj-1",
+      name: "Threshold profile",
+      runtimeId: "openai",
+      providerId: "openai",
+    });
+    persistRuntimeProfileLimitSnapshot(
+      profile!.id,
+      {
+        ...makeLimitSnapshot(),
+        source: "api_headers",
+        status: "warning",
+        precision: "exact",
+        profileId: profile!.id,
+        primaryScope: "requests",
+        resetAt: "2026-04-17T10:05:00.000Z",
+        warningThreshold: 10,
+        windows: [
+          {
+            scope: "requests",
+            percentRemaining: 4,
+            warningThreshold: 10,
+            resetAt: "2026-04-17T11:00:00.000Z",
+          },
+          {
+            scope: "tokens",
+            percentRemaining: 50,
+            warningThreshold: 10,
+            resetAt: "2026-04-17T10:05:00.000Z",
+          },
+        ],
+      },
+      "2026-04-17T10:00:05.000Z",
+    );
+
+    const decision = evaluateRuntimeLimitGate(
+      toRuntimeProfileResponse(findRuntimeProfileById(profile!.id)!),
+      nowMs,
+    );
+    expect(decision.blocked).toBe(true);
+    expect(decision.reason).toBe("exact_threshold");
+    expect(decision.violatedWindow?.scope).toBe("requests");
+    expect(decision.futureHint.source).toBe("window_reset_at");
+    expect(decision.futureHint.resetAt).toBe("2026-04-17T11:00:00.000Z");
   });
 
   it("lists runtime profiles with global fallback", () => {
@@ -330,11 +447,47 @@ describe("runtime profiles data layer", () => {
     const mapped = toTaskResponse(persisted!);
     expect(mapped.runtimeLimitSnapshot).toEqual(snapshot);
     expect(mapped.runtimeLimitUpdatedAt).toBe("2026-04-17T10:00:05.000Z");
+    expect(persisted!.updatedAt).toBe(task!.updatedAt);
 
     const cleared = clearTaskRuntimeLimitSnapshot(task!.id, "2026-04-17T11:00:00.000Z");
     const clearedMapped = toTaskResponse(cleared!);
     expect(clearedMapped.runtimeLimitSnapshot).toBeNull();
     expect(clearedMapped.runtimeLimitUpdatedAt).toBe("2026-04-17T11:00:00.000Z");
+    expect(cleared!.updatedAt).toBe(task!.updatedAt);
+  });
+
+  it("applies proactive runtime gate block only when the CAS guard matches", () => {
+    const task = createTask({ projectId: "proj-1", title: "CAS", description: "D" });
+    const snapshot = makeLimitSnapshot();
+
+    const applied = blockTaskForRuntimeGateIfEligible({
+      taskId: task!.id,
+      expectedStatus: "backlog",
+      blockedFromStatus: "backlog",
+      blockedReason: "Coordinator pre-start runtime gate",
+      retryAfter: "2026-04-17T12:00:00.000Z",
+      retryCount: 1,
+      snapshot,
+      persistedAt: "2026-04-17T10:10:00.000Z",
+    });
+
+    expect(applied).toBe(true);
+    const blocked = findTaskById(task!.id)!;
+    expect(blocked.status).toBe("blocked_external");
+    expect(blocked.blockedReason).toBe("Coordinator pre-start runtime gate");
+
+    const secondApply = blockTaskForRuntimeGateIfEligible({
+      taskId: task!.id,
+      expectedStatus: "backlog",
+      blockedFromStatus: "backlog",
+      blockedReason: "Coordinator pre-start runtime gate",
+      retryAfter: "2026-04-17T13:00:00.000Z",
+      retryCount: 2,
+      snapshot,
+      persistedAt: "2026-04-17T10:11:00.000Z",
+    });
+
+    expect(secondApply).toBe(false);
   });
 
   it("resolves task override first", () => {

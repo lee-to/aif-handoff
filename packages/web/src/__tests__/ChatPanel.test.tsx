@@ -251,7 +251,7 @@ describe("ChatPanel", () => {
     expect(
       screen.getByText("Request quota crossed the 10% safety threshold (0% remaining)."),
     ).toBeDefined();
-    expect(screen.getByText(/Resets/)).toBeDefined();
+    expect(screen.getByText(/Provider reset/)).toBeDefined();
   });
 
   it("shows a persistent runtime limit banner from the active profile even without a chat error", () => {
@@ -290,7 +290,7 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Runtime Near Limit")).toBeDefined();
     expect(screen.getAllByText("Claude Team").length).toBeGreaterThan(0);
     expect(screen.getByText("Request quota is at 8% remaining (threshold 10%).")).toBeDefined();
-    expect(screen.getByText(/Resets/)).toBeDefined();
+    expect(screen.getByText(/Provider reset/)).toBeDefined();
   });
 
   it("shows a neutral banner when the runtime limit signal has no active reset hint", () => {
@@ -309,9 +309,9 @@ describe("ChatPanel", () => {
       providerMeta: { status: "rejected" },
     };
     renderPanel();
-    expect(screen.getByText("Limit Signal Inactive")).toBeDefined();
-    expect(screen.getByText(/no active reset hint/i)).toBeDefined();
-    expect(screen.queryByText(/Resets/)).toBeNull();
+    expect(screen.getByText("Limit Signal (No Reset)")).toBeDefined();
+    expect(screen.getByText(/without a future reset hint/i)).toBeDefined();
+    expect(screen.queryByText(/Provider reset/)).toBeNull();
   });
 
   it("calls onClose when close button is clicked", () => {

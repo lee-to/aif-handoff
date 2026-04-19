@@ -93,6 +93,8 @@ vi.mock("@aif/shared", async (importOriginal) => {
     ...actual,
     getEnv: () => ({
       AGENT_BYPASS_PERMISSIONS: false,
+      AIF_DEFAULT_RUNTIME_ID: "claude",
+      AIF_DEFAULT_PROVIDER_ID: "anthropic",
     }),
   };
 });
@@ -250,6 +252,53 @@ describe("chat session API", () => {
       expect(body.id).toBe("sdk:abc-123");
       expect(body.title).toBe("Runtime Session");
     });
+
+    it("passes runtime profile context to virtual session lookup", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "profile-claude",
+        projectId: null,
+        name: "Claude Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        baseUrl: "https://api.example.test",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "claude-sonnet",
+        headersJson: JSON.stringify({ "x-profile": "1" }),
+        optionsJson: JSON.stringify({ region: "us" }),
+        enabled: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      mockGetSession.mockResolvedValue({
+        id: "abc-123",
+        title: "Runtime Session",
+        createdAt: "2026-04-01T00:00:00Z",
+        updatedAt: "2026-04-01T12:00:00Z",
+      });
+
+      const res = await app.request(
+        "/chat/sessions/sdk:abc-123?projectId=proj-1&runtimeProfileId=profile-claude",
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockGetSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileId: "profile-claude",
+          sessionId: "abc-123",
+          options: expect.objectContaining({
+            region: "us",
+            baseUrl: "https://api.example.test",
+            apiKeyEnvVar: "OPENAI_API_KEY",
+          }),
+          headers: { "x-profile": "1" },
+        }),
+      );
+      const body = await res.json();
+      expect(body.runtimeProfileId).toBe("profile-claude");
+    });
   });
 
   describe("GET /chat/sessions/:id/messages", () => {
@@ -294,6 +343,45 @@ describe("chat session API", () => {
       expect(body).toHaveLength(2);
       expect(body[0].role).toBe("user");
       expect(body[1].role).toBe("assistant");
+    });
+
+    it("passes runtime profile context to virtual session event listing", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "profile-claude",
+        projectId: null,
+        name: "Claude Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        baseUrl: "https://api.example.test",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "claude-sonnet",
+        headersJson: JSON.stringify({ "x-profile": "1" }),
+        optionsJson: JSON.stringify({ region: "us" }),
+        enabled: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      mockListSessionEvents.mockResolvedValue([]);
+
+      const res = await app.request(
+        "/chat/sessions/sdk:abc-123/messages?projectId=proj-1&runtimeProfileId=profile-claude",
+      );
+      expect(res.status).toBe(200);
+      expect(mockListSessionEvents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileId: "profile-claude",
+          sessionId: "abc-123",
+          options: expect.objectContaining({
+            region: "us",
+            baseUrl: "https://api.example.test",
+            apiKeyEnvVar: "OPENAI_API_KEY",
+          }),
+          headers: { "x-profile": "1" },
+        }),
+      );
     });
 
     it("deduplicates a mixed text+question turn on reload of a linked DB session", async () => {

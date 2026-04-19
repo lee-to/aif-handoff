@@ -11,9 +11,12 @@ import {
 } from "@aif/data";
 import {
   assertRuntimeCapabilities,
+  buildRuntimeLimitSignature,
   bootstrapRuntimeRegistry,
   createRuntimeMemoryCache,
   createRuntimeWorkflowSpec,
+  mapSafeRuntimeErrorReason,
+  normalizeRuntimeLimitSnapshot,
   getResultSessionId,
   redactResolvedRuntimeProfile,
   resolveAdapterCapabilities,
@@ -50,6 +53,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const FIRST_ACTIVITY_TIMEOUT_ERROR = "first_activity_timeout";
 const FIRST_ACTIVITY_MAX_RETRIES = 2;
 const runtimeLimitStateCache = createRuntimeMemoryCache<string>({ defaultTtlMs: 30_000 });
+const runtimeLimitBroadcastCache = createRuntimeMemoryCache<string>({ defaultTtlMs: 30_000 });
 
 function notifyRuntimeUsageRefresh(input: {
   projectId?: string | null;
@@ -132,12 +136,22 @@ function buildRuntimeLimitCacheSignature(
   clearOnMissing: boolean,
 ): string | null {
   if (snapshot) {
-    return `persist:${JSON.stringify(snapshot)}`;
+    return `persist:${buildRuntimeLimitSignature(snapshot)}`;
   }
   if (clearOnMissing) {
     return "clear";
   }
   return null;
+}
+
+function buildRuntimeLimitBroadcastCacheKey(input: {
+  projectId?: string | null;
+  taskId?: string | null;
+  runtimeProfileId: string;
+}): string | null {
+  const projectId = input.projectId ?? null;
+  if (!projectId) return null;
+  return `${projectId}:${input.runtimeProfileId}:${input.taskId ?? ""}`;
 }
 
 function refreshRuntimeProfileLimitState(input: {
@@ -150,13 +164,14 @@ function refreshRuntimeProfileLimitState(input: {
   workflowKind?: string | null;
   reason: string;
 }): void {
-  const runtimeProfileId = input.runtimeProfileId ?? input.snapshot?.profileId ?? null;
+  const normalizedSnapshot = input.snapshot ? normalizeRuntimeLimitSnapshot(input.snapshot) : null;
+  const runtimeProfileId = input.runtimeProfileId ?? normalizedSnapshot?.profileId ?? null;
   if (!runtimeProfileId) {
     log.debug(
       {
         taskId: input.taskId,
-        runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-        providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+        runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+        providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
         workflowKind: input.workflowKind ?? null,
         reason: input.reason,
       },
@@ -166,7 +181,7 @@ function refreshRuntimeProfileLimitState(input: {
   }
 
   const signature = buildRuntimeLimitCacheSignature(
-    input.snapshot ?? null,
+    normalizedSnapshot,
     input.clearOnMissing === true,
   );
   if (!signature) {
@@ -174,8 +189,8 @@ function refreshRuntimeProfileLimitState(input: {
       {
         taskId: input.taskId,
         runtimeProfileId,
-        runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-        providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+        runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+        providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
         workflowKind: input.workflowKind ?? null,
         reason: input.reason,
       },
@@ -185,46 +200,73 @@ function refreshRuntimeProfileLimitState(input: {
   }
 
   const cachedSignature = runtimeLimitStateCache.get(runtimeProfileId);
-  if (cachedSignature === signature) {
+  const shouldPersist = cachedSignature !== signature;
+  if (!shouldPersist) {
     log.debug(
       {
         taskId: input.taskId,
         runtimeProfileId,
-        runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-        providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+        runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+        providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
         workflowKind: input.workflowKind ?? null,
         reason: input.reason,
       },
-      "Skipped runtime limit state refresh because identical state is still cached",
+      "Skipped runtime limit DB write because identical state is still cached",
     );
-    return;
   }
 
   const persistedAt = new Date().toISOString();
-  log.debug(
-    {
-      taskId: input.taskId,
-      runtimeProfileId,
-      runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-      providerId: input.providerId ?? input.snapshot?.providerId ?? null,
-      workflowKind: input.workflowKind ?? null,
-      reason: input.reason,
-      action: input.snapshot ? "persist" : "clear",
-    },
-    "Refreshing runtime profile limit state for subagent execution",
-  );
+  const taskRow = findTaskById(input.taskId);
+  const projectId = taskRow?.projectId ?? null;
+  const broadcastCacheKey = buildRuntimeLimitBroadcastCacheKey({
+    projectId,
+    taskId: input.taskId,
+    runtimeProfileId,
+  });
+  const cachedBroadcastSignature = broadcastCacheKey
+    ? runtimeLimitBroadcastCache.get(broadcastCacheKey)
+    : null;
+  const shouldBroadcast = Boolean(broadcastCacheKey) && cachedBroadcastSignature !== signature;
 
   try {
-    if (input.snapshot) {
-      persistRuntimeProfileLimitSnapshot(runtimeProfileId, input.snapshot, persistedAt);
-    } else {
-      clearRuntimeProfileLimitSnapshot(runtimeProfileId, persistedAt);
+    if (shouldPersist) {
+      log.debug(
+        {
+          taskId: input.taskId,
+          runtimeProfileId,
+          runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+          providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
+          workflowKind: input.workflowKind ?? null,
+          reason: input.reason,
+          action: normalizedSnapshot ? "persist" : "clear",
+        },
+        "Refreshing runtime profile limit state for subagent execution",
+      );
+
+      if (normalizedSnapshot) {
+        persistRuntimeProfileLimitSnapshot(runtimeProfileId, normalizedSnapshot, persistedAt);
+      } else {
+        clearRuntimeProfileLimitSnapshot(runtimeProfileId, persistedAt);
+      }
+      runtimeLimitStateCache.set(runtimeProfileId, signature);
     }
-    runtimeLimitStateCache.set(runtimeProfileId, signature);
-    const projectId = findTaskById(input.taskId)?.projectId ?? null;
-    if (projectId) {
+
+    if (shouldBroadcast && projectId && broadcastCacheKey) {
       void notifyProjectRuntimeLimitBroadcast(projectId, runtimeProfileId, {
         taskId: input.taskId,
+      }).then((sent) => {
+        if (!sent) {
+          log.warn(
+            {
+              taskId: input.taskId,
+              projectId,
+              runtimeProfileId,
+            },
+            "Runtime limit broadcast was not delivered",
+          );
+          return;
+        }
+        runtimeLimitBroadcastCache.set(broadcastCacheKey, signature);
       });
     }
   } catch (error) {
@@ -233,8 +275,8 @@ function refreshRuntimeProfileLimitState(input: {
         err: error,
         taskId: input.taskId,
         runtimeProfileId,
-        runtimeId: input.runtimeId ?? input.snapshot?.runtimeId ?? null,
-        providerId: input.providerId ?? input.snapshot?.providerId ?? null,
+        runtimeId: input.runtimeId ?? normalizedSnapshot?.runtimeId ?? null,
+        providerId: input.providerId ?? normalizedSnapshot?.providerId ?? null,
         workflowKind: input.workflowKind ?? null,
         reason: input.reason,
       },
@@ -929,27 +971,49 @@ export async function executeSubagentQuery(
       workflowKind: workflowKindForError,
       reason: "subagent:error",
     });
-    let reason: string;
+    const safeReason = mapSafeRuntimeErrorReason(error);
+    let diagnosticsReason: string | null = null;
     if (adapter?.diagnoseError) {
-      reason = await adapter.diagnoseError({
+      diagnosticsReason = await adapter.diagnoseError({
         error,
         stderrTail: stderrCollector.getTail(),
         projectRoot,
       });
     } else {
-      reason = error instanceof Error ? error.message : String(error);
+      diagnosticsReason = error instanceof Error ? error.message : String(error);
     }
-    logActivity(taskId, "Agent", `${agentName} failed (runtime=${runtimeIdForError}) — ${reason}`);
+    if (
+      diagnosticsReason &&
+      diagnosticsReason.trim().length > 0 &&
+      diagnosticsReason.trim() !== safeReason.reason
+    ) {
+      log.debug(
+        {
+          taskId,
+          runtimeId: runtimeIdForError,
+          category: safeReason.category,
+          diagnosticsReason,
+        },
+        "Redacted runtime diagnostics before writing task activity",
+      );
+    }
+    logActivity(
+      taskId,
+      "Agent",
+      `${agentName} failed (runtime=${runtimeIdForError}) — ${safeReason.reason}`,
+    );
     log.error(
       {
         taskId,
         err: error,
         runtimeId: runtimeIdForError,
+        category: safeReason.category,
+        diagnosticsReason,
         runtimeStderr: stderrCollector.getTail(),
       },
       `${agentName} execution failed`,
     );
-    throw new Error(reason, { cause: error });
+    throw new Error(safeReason.reason, { cause: error });
   } finally {
     try {
       watchdog?.clear();

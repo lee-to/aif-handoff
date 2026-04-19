@@ -61,6 +61,7 @@ const envSchema = z.object({
       return value;
     }, z.boolean())
     .default(true),
+  INTERNAL_BROADCAST_TOKEN: z.string().optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("debug"),
   ACTIVITY_LOG_MODE: z
     .preprocess((value) => {

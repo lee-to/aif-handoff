@@ -92,7 +92,7 @@ describe("ProjectRuntimeSettings", () => {
     expect(
       screen.getAllByText("Request quota crossed the 10% safety threshold (5% remaining).").length,
     ).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Resets/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Checked/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Provider reset/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Last checked/).length).toBeGreaterThan(0);
   });
 });

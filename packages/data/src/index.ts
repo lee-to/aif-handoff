@@ -18,9 +18,11 @@ import {
 import {
   AUTO_REVIEW_FINDING_SOURCES,
   AUTO_REVIEW_STRATEGIES,
+  buildRuntimeLimitSignature,
   generatePlanPath,
   getProjectConfig,
   logger as createLogger,
+  normalizeRuntimeLimitSnapshot,
   parseAttachments,
   parseTaskTokenUsage,
   persistTaskPlan,
@@ -37,9 +39,12 @@ import {
   type RuntimeProfileUsage,
   type RuntimeLimitSnapshot,
   type RuntimeLimitWindow,
+  type RuntimeLimitFutureHint,
   type UpdateRuntimeProfileInput,
   type Task,
   type TaskStatus,
+  resolveRuntimeLimitFutureHint,
+  selectViolatedWindowForExactThreshold,
   type AutoReviewState,
   type ChatSession,
   type ChatSessionMessage,
@@ -481,8 +486,9 @@ export type TaskSummaryRow = Pick<TaskRow,
   | "id" | "projectId" | "title" | "status" | "priority" | "position"
   | "autoMode" | "isFix" | "paused" | "roadmapAlias" | "tags"
   | "runtimeProfileId" | "modelOverride"
-  | "blockedReason" | "blockedFromStatus" | "retryCount"
+  | "blockedReason" | "blockedFromStatus" | "retryAfter" | "retryCount"
   | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations" | "manualReviewRequired"
+  | "runtimeLimitSnapshotJson" | "runtimeLimitUpdatedAt"
   | "tokenTotal" | "costUsd" | "lastSyncedAt" | "createdAt" | "updatedAt"
 >;
 
@@ -502,11 +508,14 @@ const SUMMARY_COLUMNS = {
   modelOverride: tasks.modelOverride,
   blockedReason: tasks.blockedReason,
   blockedFromStatus: tasks.blockedFromStatus,
+  retryAfter: tasks.retryAfter,
   retryCount: tasks.retryCount,
   reworkRequested: tasks.reworkRequested,
   reviewIterationCount: tasks.reviewIterationCount,
   maxReviewIterations: tasks.maxReviewIterations,
   manualReviewRequired: tasks.manualReviewRequired,
+  runtimeLimitSnapshotJson: tasks.runtimeLimitSnapshotJson,
+  runtimeLimitUpdatedAt: tasks.runtimeLimitUpdatedAt,
   tokenTotal: tasks.tokenTotal,
   costUsd: tasks.costUsd,
   lastSyncedAt: tasks.lastSyncedAt,
@@ -600,10 +609,15 @@ export function searchTasksPaginated(options: {
 
 /** Convert a TaskSummaryRow to a JSON-safe object (parse tags). */
 export function toTaskSummary(row: TaskSummaryRow) {
-  const { tags, ...rest } = row;
+  const { tags, runtimeLimitSnapshotJson, ...rest } = row;
   return {
     ...rest,
     tags: parseTags(tags),
+    runtimeLimitSnapshot: parseRuntimeLimitSnapshot(
+      runtimeLimitSnapshotJson,
+      "task",
+      row.id,
+    ),
   };
 }
 
@@ -749,13 +763,14 @@ export function persistTaskRuntimeLimitSnapshot(
   snapshot: RuntimeLimitSnapshot,
   persistedAt = new Date().toISOString(),
 ): TaskRow | undefined {
+  const normalizedSnapshot = normalizeRuntimeLimitSnapshot(snapshot);
   log.info(
     {
       taskId,
-      status: snapshot.status,
-      source: snapshot.source,
-      precision: snapshot.precision,
-      resetAt: snapshot.resetAt ?? null,
+      status: normalizedSnapshot.status,
+      source: normalizedSnapshot.source,
+      precision: normalizedSnapshot.precision,
+      resetAt: normalizedSnapshot.resetAt ?? null,
       persistedAt,
     },
     "Persisting task runtime limit snapshot",
@@ -763,9 +778,8 @@ export function persistTaskRuntimeLimitSnapshot(
   getDb()
     .update(tasks)
     .set({
-      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(snapshot),
+      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
       runtimeLimitUpdatedAt: persistedAt,
-      updatedAt: persistedAt,
     })
     .where(eq(tasks.id, taskId))
     .run();
@@ -782,7 +796,6 @@ export function clearTaskRuntimeLimitSnapshot(
     .set({
       runtimeLimitSnapshotJson: null,
       runtimeLimitUpdatedAt: persistedAt,
-      updatedAt: persistedAt,
     })
     .where(eq(tasks.id, taskId))
     .run();
@@ -1027,6 +1040,50 @@ export function claimTask(taskId: string, coordinatorId: string, lockDurationMs:
         lte(tasks.lockedUntil, nowIso),
       ),
     ))
+    .run();
+
+  return result.changes > 0;
+}
+
+/**
+ * Conditional proactive runtime gate block (CAS).
+ * Applies the block only if the candidate row is still in the expected state
+ * and remains available (unpaused + unlocked) at write time.
+ */
+export function blockTaskForRuntimeGateIfEligible(input: {
+  taskId: string;
+  expectedStatus: TaskStatus;
+  blockedFromStatus: TaskStatus;
+  blockedReason: string;
+  retryAfter: string | null;
+  retryCount: number;
+  snapshot: RuntimeLimitSnapshot | null;
+  persistedAt?: string;
+}): boolean {
+  const nowIso = input.persistedAt ?? new Date().toISOString();
+  const normalizedSnapshot = input.snapshot ? normalizeRuntimeLimitSnapshot(input.snapshot) : null;
+
+  const result = getDb()
+    .update(tasks)
+    .set({
+      status: "blocked_external",
+      blockedFromStatus: input.blockedFromStatus,
+      blockedReason: input.blockedReason,
+      retryAfter: input.retryAfter,
+      retryCount: input.retryCount,
+      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
+      runtimeLimitUpdatedAt: nowIso,
+      lastHeartbeatAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .where(
+      and(
+        eq(tasks.id, input.taskId),
+        eq(tasks.status, input.expectedStatus),
+        eq(tasks.paused, false),
+        or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
+      ),
+    )
     .run();
 
   return result.changes > 0;
@@ -1802,13 +1859,14 @@ export function persistRuntimeProfileLimitSnapshot(
   snapshot: RuntimeLimitSnapshot,
   persistedAt = new Date().toISOString(),
 ): RuntimeProfileRow | undefined {
+  const normalizedSnapshot = normalizeRuntimeLimitSnapshot(snapshot);
   log.info(
     {
       runtimeProfileId,
-      status: snapshot.status,
-      source: snapshot.source,
-      precision: snapshot.precision,
-      resetAt: snapshot.resetAt ?? null,
+      status: normalizedSnapshot.status,
+      source: normalizedSnapshot.source,
+      precision: normalizedSnapshot.precision,
+      resetAt: normalizedSnapshot.resetAt ?? null,
       persistedAt,
     },
     "Persisting runtime profile limit snapshot",
@@ -1816,9 +1874,8 @@ export function persistRuntimeProfileLimitSnapshot(
   getDb()
     .update(runtimeProfiles)
     .set({
-      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(snapshot),
+      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
       runtimeLimitUpdatedAt: persistedAt,
-      updatedAt: persistedAt,
     })
     .where(eq(runtimeProfiles.id, runtimeProfileId))
     .run();
@@ -1835,7 +1892,6 @@ export function clearRuntimeProfileLimitSnapshot(
     .set({
       runtimeLimitSnapshotJson: null,
       runtimeLimitUpdatedAt: persistedAt,
-      updatedAt: persistedAt,
     })
     .where(eq(runtimeProfiles.id, runtimeProfileId))
     .run();
@@ -1930,17 +1986,9 @@ export interface RuntimeLimitGateDecision {
   reason: "none" | "provider_blocked" | "exact_threshold";
   runtimeProfileId: string | null;
   snapshot: RuntimeLimitSnapshot | null;
-}
-
-function parseRuntimeLimitResetMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function isFutureRuntimeLimitReset(value: string | null | undefined, nowMs: number): boolean {
-  const parsed = parseRuntimeLimitResetMs(value);
-  return parsed != null && parsed > nowMs;
+  futureHint: RuntimeLimitFutureHint;
+  violatedWindow: RuntimeLimitWindow | null;
+  signature: string | null;
 }
 
 export function evaluateRuntimeLimitGate(
@@ -1950,63 +1998,75 @@ export function evaluateRuntimeLimitGate(
   const snapshot = profile?.runtimeLimitSnapshot ?? null;
   const runtimeProfileId = profile?.id ?? null;
   if (!snapshot) {
-    return { blocked: false, reason: "none", runtimeProfileId, snapshot: null };
+    return {
+      blocked: false,
+      reason: "none",
+      runtimeProfileId,
+      snapshot: null,
+      futureHint: resolveRuntimeLimitFutureHint(null, { nowMs }),
+      violatedWindow: null,
+      signature: null,
+    };
   }
 
-  const resetAtMs = parseRuntimeLimitResetMs(snapshot.resetAt ?? null);
-  const resetPending = resetAtMs != null && resetAtMs > nowMs;
-  const requiresResetHint = snapshot.status === "blocked";
-  if (requiresResetHint && resetAtMs == null) {
+  const signature = buildRuntimeLimitSignature(snapshot);
+  const providerBlockedHint = resolveRuntimeLimitFutureHint(snapshot, { nowMs });
+
+  if (snapshot.status === "blocked" && providerBlockedHint.source === "none") {
     log.debug(
       {
         runtimeProfileId,
         status: snapshot.status,
         precision: snapshot.precision,
         checkedAt: snapshot.checkedAt,
+        signature,
       },
-      "[FIX] Skipping proactive runtime gate because the persisted snapshot has no structured reset hint",
+      "Skipping proactive runtime gate because the persisted snapshot has no reset hint",
     );
   }
-  if (snapshot.status === "blocked" && resetPending) {
+  if (snapshot.status === "blocked" && providerBlockedHint.isFuture) {
     return {
       blocked: true,
       reason: "provider_blocked",
       runtimeProfileId,
       snapshot,
+      futureHint: providerBlockedHint,
+      violatedWindow: null,
+      signature,
     };
   }
 
-  const warningThreshold = snapshot.warningThreshold ?? null;
+  const violatedWindow = selectViolatedWindowForExactThreshold(snapshot, null, nowMs);
   const exactThresholdReached =
-    snapshot.precision === "exact" &&
-    snapshot.status === "warning" &&
-    snapshot.windows.some((window) => {
-      const threshold = window.warningThreshold ?? warningThreshold;
-      return (
-        typeof window.percentRemaining === "number" &&
-        typeof threshold === "number" &&
-        window.percentRemaining <= threshold
-      );
-    });
+    snapshot.precision === "exact" && snapshot.status === "warning" && violatedWindow != null;
+  const exactThresholdHint = resolveRuntimeLimitFutureHint(snapshot, {
+    nowMs,
+    preferredWindow: violatedWindow,
+    windowFirst: true,
+  });
 
-  if (exactThresholdReached && resetAtMs == null) {
+  if (exactThresholdReached && exactThresholdHint.source === "none") {
     log.debug(
       {
         runtimeProfileId,
         status: snapshot.status,
         precision: snapshot.precision,
         checkedAt: snapshot.checkedAt,
+        signature,
       },
-      "[FIX] Skipping proactive exact-threshold gate because the persisted snapshot has no structured reset hint",
+      "Skipping proactive exact-threshold gate because the violated window has no reset hint",
     );
   }
 
-  if (exactThresholdReached && resetPending) {
+  if (exactThresholdReached && exactThresholdHint.isFuture) {
     return {
       blocked: true,
       reason: "exact_threshold",
       runtimeProfileId,
       snapshot,
+      futureHint: exactThresholdHint,
+      violatedWindow,
+      signature,
     };
   }
 
@@ -2015,6 +2075,9 @@ export function evaluateRuntimeLimitGate(
     reason: "none",
     runtimeProfileId,
     snapshot,
+    futureHint: providerBlockedHint,
+    violatedWindow: violatedWindow ?? null,
+    signature,
   };
 }
 

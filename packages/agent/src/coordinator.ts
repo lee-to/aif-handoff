@@ -1,5 +1,6 @@
 import {
   clearTaskRuntimeLimitSnapshot,
+  blockTaskForRuntimeGateIfEligible,
   evaluateRuntimeLimitGate,
   findCoordinatorTaskCandidates,
   findProjectById,
@@ -21,14 +22,7 @@ import {
   type TaskRow,
 } from "@aif/data";
 import { initProject, type RuntimeRegistry } from "@aif/runtime";
-import {
-  logger,
-  getEnv,
-  CLEAN_STATE_RESET,
-  withTimeout,
-  type RuntimeLimitSnapshot,
-  type TaskStatus,
-} from "@aif/shared";
+import { logger, getEnv, CLEAN_STATE_RESET, withTimeout, type TaskStatus } from "@aif/shared";
 import { runPlanner } from "./subagents/planner.js";
 import { runPlanChecker } from "./subagents/planChecker.js";
 import { runImplementer } from "./subagents/implementer.js";
@@ -203,28 +197,28 @@ function runtimeProfileModeForStage(stage: CoordinatorStage): "task" | "plan" | 
   return "task";
 }
 
-function resolveRuntimeGateRetryAfter(snapshot: RuntimeLimitSnapshot | null): {
+function resolveRuntimeGateRetryAfter(gateDecision: ReturnType<typeof evaluateRuntimeLimitGate>): {
   retryAfter: string;
   source: "resetAt" | "retryAfterSeconds" | "random_backoff";
 } {
-  if (snapshot?.resetAt) {
-    const resetAtMs = Date.parse(snapshot.resetAt);
-    if (Number.isFinite(resetAtMs)) {
-      return {
-        retryAfter: new Date(Math.max(resetAtMs, Date.now())).toISOString(),
-        source: "resetAt",
-      };
-    }
+  if (gateDecision.futureHint.resetAt && gateDecision.futureHint.isFuture) {
+    return {
+      retryAfter: gateDecision.futureHint.resetAt,
+      source: gateDecision.futureHint.source.includes("retry_after")
+        ? "retryAfterSeconds"
+        : "resetAt",
+    };
   }
 
   if (
-    snapshot &&
-    typeof snapshot.retryAfterSeconds === "number" &&
-    Number.isFinite(snapshot.retryAfterSeconds) &&
-    snapshot.retryAfterSeconds >= 0
+    typeof gateDecision.futureHint.retryAfterSeconds === "number" &&
+    Number.isFinite(gateDecision.futureHint.retryAfterSeconds) &&
+    gateDecision.futureHint.retryAfterSeconds >= 0
   ) {
     return {
-      retryAfter: new Date(Date.now() + snapshot.retryAfterSeconds * 1000).toISOString(),
+      retryAfter: new Date(
+        Date.now() + gateDecision.futureHint.retryAfterSeconds * 1000,
+      ).toISOString(),
       source: "retryAfterSeconds",
     };
   }
@@ -235,19 +229,18 @@ function resolveRuntimeGateRetryAfter(snapshot: RuntimeLimitSnapshot | null): {
   };
 }
 
-function buildRuntimeGateBlockedReason(snapshot: RuntimeLimitSnapshot | null): string {
-  if (snapshot?.precision === "exact" && snapshot.status === "warning") {
-    const threshold = snapshot.windows.find((window) => {
-      const windowThreshold = window.warningThreshold ?? snapshot.warningThreshold;
-      return (
-        typeof window.percentRemaining === "number" &&
-        typeof windowThreshold === "number" &&
-        window.percentRemaining <= windowThreshold
-      );
-    });
-    if (threshold) {
-      const thresholdValue = threshold.warningThreshold ?? snapshot.warningThreshold;
-      return `Coordinator pre-start runtime gate: exact quota threshold reached (${threshold.percentRemaining}% <= ${thresholdValue}%)`;
+function buildRuntimeGateBlockedReason(
+  gateDecision: ReturnType<typeof evaluateRuntimeLimitGate>,
+): string {
+  const snapshot = gateDecision.snapshot;
+  if (gateDecision.reason === "exact_threshold") {
+    const thresholdWindow = gateDecision.violatedWindow;
+    if (thresholdWindow) {
+      const thresholdValue = thresholdWindow.warningThreshold ?? snapshot?.warningThreshold;
+      const percentRemaining = thresholdWindow.percentRemaining;
+      if (typeof percentRemaining === "number" && typeof thresholdValue === "number") {
+        return `Coordinator pre-start runtime gate: exact quota threshold reached (${percentRemaining}% <= ${thresholdValue}%)`;
+      }
     }
     return "Coordinator pre-start runtime gate: exact quota threshold reached";
   }
@@ -259,32 +252,45 @@ function proactivelyBlockTaskForRuntimeGate(
   task: TaskRow,
   stage: CoordinatorStage,
   selection: ReturnType<typeof resolveEffectiveRuntimeProfile>,
-  snapshot: RuntimeLimitSnapshot | null,
+  gateDecision: ReturnType<typeof evaluateRuntimeLimitGate>,
 ): void {
-  const { retryAfter, source } = resolveRuntimeGateRetryAfter(snapshot);
-  const blockedReason = buildRuntimeGateBlockedReason(snapshot);
+  const snapshot = gateDecision.snapshot;
+  const { retryAfter, source } = resolveRuntimeGateRetryAfter(gateDecision);
+  const blockedReason = buildRuntimeGateBlockedReason(gateDecision);
+  const retryCount = (task.retryCount ?? 0) + 1;
+  const persistedAt = new Date().toISOString();
+  const applied = blockTaskForRuntimeGateIfEligible({
+    taskId: task.id,
+    expectedStatus: task.status,
+    blockedFromStatus: task.status,
+    blockedReason,
+    retryAfter,
+    retryCount,
+    snapshot,
+    persistedAt,
+  });
 
-  if (snapshot) {
-    persistTaskRuntimeLimitSnapshot(task.id, snapshot);
-  } else {
-    clearTaskRuntimeLimitSnapshot(task.id);
+  if (!applied) {
+    log.debug(
+      {
+        taskId: task.id,
+        stage,
+        runtimeProfileId: selection.profile?.id ?? null,
+      },
+      "Skipped proactive runtime gate block because candidate changed before CAS update",
+    );
+    return;
   }
 
   appendTaskActivityLog(
     task.id,
-    `[${new Date().toISOString()}] Coordinator runtime gate blocked task before ${stage}: profile=${selection.profile?.id ?? "none"} source=${selection.source} retryAfter=${retryAfter} retryAfterSource=${source}`,
+    `[${persistedAt}] Coordinator runtime gate blocked task before ${stage}: profile=${selection.profile?.id ?? "none"} source=${selection.source} retryAfter=${retryAfter} retryAfterSource=${source}`,
   );
-  updateTaskStatus(
-    task.id,
-    "blocked_external",
-    {
-      blockedFromStatus: task.status,
-      blockedReason,
-      retryAfter,
-      retryCount: (task.retryCount ?? 0) + 1,
-    },
-    { title: task.title, fromStatus: task.status },
-  );
+  void notifyTaskBroadcast(task.id, "task:moved", {
+    title: task.title,
+    fromStatus: task.status,
+    toStatus: "blocked_external",
+  });
 
   log.info(
     {
@@ -299,6 +305,7 @@ function proactivelyBlockTaskForRuntimeGate(
       limitPrecision: snapshot?.precision ?? null,
       retryAfter,
       retryAfterSource: source,
+      applied,
     },
     "Blocked task before claim due to runtime limit gate",
   );
@@ -811,12 +818,7 @@ export async function pollAndProcess(): Promise<void> {
           },
           "Task candidate blocked by proactive runtime gate",
         );
-        proactivelyBlockTaskForRuntimeGate(
-          task,
-          stage.label,
-          runtimeSelection,
-          gateDecision.snapshot,
-        );
+        proactivelyBlockTaskForRuntimeGate(task, stage.label, runtimeSelection, gateDecision);
         continue;
       }
 

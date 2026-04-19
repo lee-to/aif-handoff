@@ -68,6 +68,8 @@ export function ChatPanel({
     renameSession,
   } = useChatSessions(projectId);
 
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+
   const {
     messages,
     isStreaming,
@@ -80,7 +82,13 @@ export function ChatPanel({
     abortStream,
     clearMessages,
     newSession,
-  } = useChat(projectId, activeSessionId, taskId, setActiveSessionId);
+  } = useChat(
+    projectId,
+    activeSessionId,
+    taskId,
+    setActiveSessionId,
+    activeSession?.runtimeProfileId ?? null,
+  );
 
   const { data: currentTask } = useTask(taskId);
   const { data: effectiveChatRuntime } = useEffectiveChatRuntime(projectId);
@@ -174,9 +182,6 @@ export function ChatPanel({
     [renameSession],
   );
 
-  // Find active session title
-  const activeSession = sessions.find((s) => s.id === activeSessionId);
-
   // Detect runtime mismatch: session was created with a different runtime profile
   const currentProfileId = effectiveChatRuntime?.profile?.id ?? null;
   const sessionProfileId = activeSession?.runtimeProfileId ?? null;
@@ -221,20 +226,26 @@ export function ChatPanel({
   const chatRuntimeLimitLabel = chatRuntimeLimitDisplay
     ? chatRuntimeLimitDisplay.state === "expired"
       ? "Limit Window Expired"
-      : chatRuntimeLimitDisplay.state === "stale"
-        ? "Limit Signal Inactive"
-        : chatRuntimeLimitDisplay.label === "Blocked"
-          ? "Runtime Blocked"
-          : chatRuntimeLimitDisplay.label === "Healthy"
-            ? "Runtime Healthy"
-            : "Runtime Near Limit"
+      : chatRuntimeLimitDisplay.state === "signal_no_reset"
+        ? "Limit Signal (No Reset)"
+        : chatRuntimeLimitDisplay.state === "historical"
+          ? "Historical Limit Signal"
+          : chatRuntimeLimitDisplay.label === "Blocked"
+            ? "Runtime Blocked"
+            : chatRuntimeLimitDisplay.label === "Healthy"
+              ? "Runtime Healthy"
+              : "Runtime Near Limit"
     : "Usage Limit Reached";
   const chatRuntimeLimitSummary =
     chatRuntimeLimitDisplay?.summary ??
     "Runtime usage limit is currently exhausted. Wait for reset time and send again.";
   const chatRuntimeLimitMeta =
     chatRuntimeLimitDisplay &&
-    [chatRuntimeLimitDisplay.resetText, chatRuntimeLimitDisplay.checkedText]
+    [
+      chatRuntimeLimitDisplay.resetText,
+      chatRuntimeLimitDisplay.taskRetryText,
+      chatRuntimeLimitDisplay.checkedText,
+    ]
       .filter(Boolean)
       .join(" ");
 

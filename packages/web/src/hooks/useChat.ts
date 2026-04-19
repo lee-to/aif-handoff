@@ -43,6 +43,7 @@ export function useChat(
   sessionId: string | null = null,
   taskId: string | null = null,
   onSessionResolved?: (sessionId: string) => void,
+  sessionRuntimeProfileId: string | null = null,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -158,7 +159,10 @@ export function useChat(
     console.debug("[useChat] Loading session messages sessionId=%s", sessionId);
 
     api
-      .getChatSessionMessages(sessionId)
+      .getChatSessionMessages(sessionId, {
+        projectId,
+        runtimeProfileId: sessionRuntimeProfileId,
+      })
       .then((msgs) => {
         if (currentSessionIdRef.current !== sessionId) return;
         if (isSessionStreaming(sessionId)) {
@@ -184,7 +188,7 @@ export function useChat(
           setIsLoadingMessages(false);
         }
       });
-  }, [sessionId, isSessionStreaming]);
+  }, [projectId, sessionId, sessionRuntimeProfileId, isSessionStreaming]);
 
   // Listen for chat stream events dispatched by useWebSocket
   useEffect(() => {

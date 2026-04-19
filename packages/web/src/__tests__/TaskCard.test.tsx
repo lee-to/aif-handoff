@@ -119,7 +119,8 @@ describe("TaskCard", () => {
     expect(
       screen.getByText("Request quota crossed the 10% safety threshold (5% remaining)."),
     ).toBeDefined();
-    expect(screen.getByText(/Resets/)).toBeDefined();
+    expect(screen.getByText(/Provider reset/)).toBeDefined();
+    expect(screen.getByText(/Task retry .*scheduled/)).toBeDefined();
   });
 
   describe("scheduled banner", () => {

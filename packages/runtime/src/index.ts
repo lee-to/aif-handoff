@@ -150,6 +150,19 @@ export {
   withStreamTimeouts,
 } from "./timeouts.js";
 
+export {
+  buildRuntimeLimitSignature,
+  mapSafeRuntimeErrorReason,
+  normalizeRuntimeLimitSnapshot,
+  resolveRuntimeLimitFutureHint,
+  sanitizeProviderMeta,
+  selectViolatedWindowForExactThreshold,
+  type RuntimeLimitFutureHint,
+  type RuntimeLimitFutureHintSource,
+  type SafeRuntimeErrorCategory,
+  type SafeRuntimeErrorReason,
+} from "@aif/shared";
+
 /**
  * Adapter factories are intentionally NOT re-exported from the package root.
  *

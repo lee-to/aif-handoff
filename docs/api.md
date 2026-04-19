@@ -262,6 +262,13 @@ POST /projects/:id/broadcast
 
 Used by API/agent services to trigger project-scoped WebSocket broadcasts without polling.
 
+**Security contract:**
+
+- Intended for trusted internal callers (API/agent/mcp services).
+- If `INTERNAL_BROADCAST_TOKEN` is configured, callers must provide the same token via `Authorization: Bearer <token>` or `X-Internal-Broadcast-Token`.
+- If no token is configured, development fallback only trusts loopback callers (`localhost`, `127.0.0.1`, `::1`).
+- Unauthorized callers receive `401`.
+
 **Body:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -728,7 +735,12 @@ All events are JSON with this structure:
 
 ### Connection
 
-The WebSocket endpoint is a simple broadcast channel — no authentication, no subscription topics. All connected clients receive all events.
+The WebSocket endpoint is a broadcast channel with no topic subscriptions; connected clients receive all events. Keep this endpoint behind trusted network boundaries and do not include raw provider diagnostics or secrets in event payloads.
+
+Runtime-limit invalidation is project-scoped:
+
+- `project:runtime_limit_updated` payload is `{ projectId, runtimeProfileId, taskId? }`.
+- API/agent callers emit this via `POST /projects/:id/broadcast` after runtime snapshot/usage updates.
 
 ## MCP Sync Integration
 

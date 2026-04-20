@@ -14,6 +14,8 @@ services:
     environment:
       - DATABASE_URL=/data/aif.sqlite
       - PORT=3009
+      - AIF_ENABLE_CODEX_LOGIN_PROXY=true
+      - AGENT_INTERNAL_URL=http://agent:3010
     volumes:
       - db-data:/data
       - ${PROJECTS_DIR:-./projects}:${PROJECTS_MOUNT:-/home/www}
@@ -50,6 +52,11 @@ services:
       - DATABASE_URL=/data/aif.sqlite
       - API_BASE_URL=http://api:3009
       - AGENT_BYPASS_PERMISSIONS=true
+      - AIF_ENABLE_CODEX_LOGIN_PROXY=true
+      - AIF_CODEX_LOGIN_BROKER_PORT=3010
+      - AGENT_INTERNAL_URL=http://agent:3010
+    expose:
+      - "3010"
     volumes:
       - db-data:/data
       - ${PROJECTS_DIR:-./projects}:${PROJECTS_MOUNT:-/home/www}

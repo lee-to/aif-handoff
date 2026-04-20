@@ -8,6 +8,7 @@ export interface RuntimeMeta {
   transport?: string;
   profileId?: string;
   model?: string;
+  effort?: string;
 }
 
 export interface ParsedEntry {
@@ -62,6 +63,7 @@ function parseRuntimeMeta(content: string): RuntimeMeta | undefined {
     transport: get("transport"),
     profileId: get("profile"),
     model: get("model"),
+    effort: get("effort"),
   };
 }
 

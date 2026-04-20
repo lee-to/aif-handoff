@@ -17,7 +17,10 @@
   "dependencies": {
     "@aif/data": "*",
     "@aif/runtime": "*",
-    "@aif/shared": "*"
+    "@aif/shared": "*",
+    "@hono/node-server": "^1.19.13",
+    "hono": "^4.12.12",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "tsx": "^4.21.0",

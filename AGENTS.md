@@ -85,6 +85,7 @@ packages/
         ├── hooks.ts         # Activity logging, project root
         ├── stderrCollector.ts # Generic stderr ring-buffer
         ├── notifier.ts      # Notification system
+        ├── codex/           # Codex login broker (OAuth-in-Docker bridge)
         └── subagents/       # planner.ts, implementer.ts, reviewer.ts
 
 .claude/agents/          # Agent definitions (loaded by runtimes that support them)

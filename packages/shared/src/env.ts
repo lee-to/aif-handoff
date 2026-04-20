@@ -113,6 +113,19 @@ const envSchema = z.object({
       return value;
     }, z.boolean())
     .default(false),
+  AIF_ENABLE_CODEX_LOGIN_PROXY: z
+    .preprocess((value) => {
+      if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+      }
+      return value;
+    }, z.boolean())
+    .default(false),
+  AIF_CODEX_LOGIN_BROKER_PORT: z.coerce.number().default(3010),
+  AIF_CODEX_LOGIN_LOOPBACK_PORT: z.coerce.number().default(1455),
+  AGENT_INTERNAL_URL: z.string().default("http://agent:3010"),
   TELEGRAM_BOT_API_URL: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_USER_ID: z.string().optional(),

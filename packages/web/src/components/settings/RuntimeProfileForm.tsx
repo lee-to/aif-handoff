@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { CodexLoginCard } from "./CodexLoginCard";
 
 interface Props {
   mode: "create" | "edit";
@@ -165,6 +166,7 @@ export function RuntimeProfileForm({
   const modelLoadRequestIdRef = useRef(0);
   const runtimeModels = useRuntimeModels();
   const currentRuntime = runtimes.find((runtime) => runtime.id === runtimeId);
+  const showCodexLoginCard = runtimeId === "codex";
   const supportsModelDiscovery = Boolean(currentRuntime?.capabilities.supportsModelDiscovery);
   const preferredDiscoveredModel = pickPreferredDiscoveredModel(
     discoveredModels,
@@ -513,6 +515,12 @@ export function RuntimeProfileForm({
       </p>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
+
+      {showCodexLoginCard && (
+        <div className="space-y-1">
+          <CodexLoginCard />
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">

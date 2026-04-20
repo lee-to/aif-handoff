@@ -83,6 +83,7 @@ export function AgentTimeline({ activityLog }: AgentTimelineProps) {
                     <span>transport:{parsed.runtimeMeta.transport}</span>
                   )}
                   {parsed.runtimeMeta.model && <span>model:{parsed.runtimeMeta.model}</span>}
+                  {parsed.runtimeMeta.effort && <span>effort:{parsed.runtimeMeta.effort}</span>}
                   {parsed.runtimeMeta.profileId && (
                     <span>profile:{parsed.runtimeMeta.profileId}</span>
                   )}

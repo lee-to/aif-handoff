@@ -207,6 +207,69 @@ Invalid `options.approvalPolicy` / `options.sandboxMode` values are ignored with
 }
 ```
 
+### Codex OAuth login in Docker (broker)
+
+Running `codex login` directly inside the `agent` container starts an HTTP
+listener on `127.0.0.1:1455` waiting for the OAuth callback. Because container
+loopback is not reachable from the host browser, the flow stalls. As of
+codex `0.118`, the CLI does not expose a flag to bind the listener to another
+interface (verified against `codex login --help`).
+
+To bridge this, the agent ships a small HTTP broker (`packages/agent/src/codex/loginBroker.ts`)
+that runs alongside the coordinator when `AIF_ENABLE_CODEX_LOGIN_PROXY=true`:
+
+```
+[Browser]
+  ├─ GET auth URL → ChatGPT OAuth
+  └─ redirect: http://localhost:1455/?code=…&state=…  (fails on host)
+  ▼ user copies URL into the UI
+[API /auth/codex/login/*]  (zod + SSRF guard)
+  ▼ proxies over docker network
+[Agent :3010 broker]
+  ├─ start    → spawn `codex login`, parse auth URL
+  ├─ callback → fetch 127.0.0.1:1455/?code=…&state=…  (own loopback)
+  └─ cancel   → SIGTERM child
+```
+
+**Endpoints** (api-side, all behind the feature flag):
+
+| Method | Path                         | Purpose                                             |
+| ------ | ---------------------------- | --------------------------------------------------- |
+| GET    | `/auth/codex/capabilities`   | Always mounted. Returns `{loginProxyEnabled}`.      |
+| POST   | `/auth/codex/login/start`    | Spawn `codex login`, return the auth URL.           |
+| POST   | `/auth/codex/login/callback` | Forward the user-pasted redirect URL to the broker. |
+| POST   | `/auth/codex/login/cancel`   | SIGTERM the active child process.                   |
+| GET    | `/auth/codex/login/status`   | Poll while a session is active.                     |
+
+**Security guards** (defence in depth — enforced in **both** api and broker):
+
+- `scheme = http`, `host ∈ {127.0.0.1, localhost}`, `port = AIF_CODEX_LOGIN_LOOPBACK_PORT` (default `1455`).
+- Query must include both `code` and `state`; `state` must match what the broker captured from the spawned CLI.
+- One-shot session: repeat `start` without `cancel`/success → `409 session_already_active`.
+- Broker binds `0.0.0.0:3010` but is **not** port-mapped to the host in compose; only services on the same docker network can reach it.
+- Logs redact `code` / `state` before write (`***redacted***`).
+
+**Environment variables:**
+
+| Variable                        | Default             | Purpose                                          |
+| ------------------------------- | ------------------- | ------------------------------------------------ |
+| `AIF_ENABLE_CODEX_LOGIN_PROXY`  | `false`             | Enable broker + `/auth/codex/*` routes.          |
+| `AIF_CODEX_LOGIN_BROKER_PORT`   | `3010`              | Port the broker listens on inside the container. |
+| `AIF_CODEX_LOGIN_LOOPBACK_PORT` | `1455`              | Port the codex CLI binds for its callback.       |
+| `AGENT_INTERNAL_URL`            | `http://agent:3010` | Base URL the api uses to reach the broker.       |
+
+**Production guidance:** the broker is a dev-only convenience. In production,
+set `AIF_ENABLE_CODEX_LOGIN_PROXY=false` (the default in `docker-compose.production.yml`)
+and provision `OPENAI_API_KEY` via `.env` instead.
+
+**Fallback CLI:** the agent image ships a helper at `/usr/local/bin/aif-codex-callback`
+that validates the callback URL (same allowlist) and forwards it to the codex
+loopback. Use it when the broker or UI is unavailable:
+
+```bash
+docker compose exec agent aif-codex-callback "http://localhost:1455/?code=…&state=…"
+```
+
 ### Bypass semantics (AGENT_BYPASS_PERMISSIONS)
 
 When `AGENT_BYPASS_PERMISSIONS=1` is set in the environment, the runtime layer flips `execution.bypassPermissions=true`. This is intended for trusted, externally sandboxed environments (Docker containers) where the agent should run unattended.

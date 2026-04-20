@@ -250,3 +250,48 @@ export const runtimeProfileListQuerySchema = z.object({
   enabledOnly: z.string().optional(),
   scope: z.enum(["global", "project", "visible"]).optional(),
 });
+/**
+ * Strict allowlist schema for the Codex login callback URL the user pastes in
+ * the UI. Both the api and the agent broker validate this - double protection.
+ * Only http://127.0.0.1|localhost:{loopbackPort}/?code=…&state=… is accepted.
+ */
+export const codexCallbackSchema = z
+  .object({
+    url: z.string().min(1, "url is required").max(4096),
+  })
+  .superRefine((value, ctx) => {
+    const env = getEnv();
+    const expectedPort = env.AIF_CODEX_LOGIN_LOOPBACK_PORT;
+    let parsed: URL;
+    try {
+      parsed = new URL(value.url);
+    } catch {
+      ctx.addIssue({
+        code: "custom",
+        path: ["url"],
+        message: "invalid_url",
+      });
+      return;
+    }
+
+    if (parsed.protocol !== "http:") {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "scheme_not_allowed" });
+    }
+
+    const allowedHosts = new Set(["127.0.0.1", "localhost"]);
+    if (!allowedHosts.has(parsed.hostname)) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "host_not_allowed" });
+    }
+
+    const port = parsed.port ? Number(parsed.port) : 80;
+    if (port !== expectedPort) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "port_not_allowed" });
+    }
+
+    if (!parsed.searchParams.get("code")) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "missing_code" });
+    }
+    if (!parsed.searchParams.get("state")) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "missing_state" });
+    }
+  });

@@ -690,8 +690,11 @@ describe("executeSubagentQuery error redaction", () => {
     }
 
     expect(captured).toBeInstanceOf(RuntimeExecutionError);
-    expect((captured as RuntimeExecutionError).message).toBe("Runtime usage limit reached.");
-    expect((captured as RuntimeExecutionError).category).toBe("rate_limit");
+    if (!(captured instanceof RuntimeExecutionError)) {
+      throw new Error("Expected RuntimeExecutionError");
+    }
+    expect(captured.message).toBe("Runtime usage limit reached.");
+    expect(captured.category).toBe("rate_limit");
     expect((captured as Error & { cause?: unknown }).cause).toBeUndefined();
     expect(JSON.stringify(captured)).not.toContain("SECRET");
   });

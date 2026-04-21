@@ -34,6 +34,7 @@ const mockTask: Task = {
   lastHeartbeatAt: null,
   lastSyncedAt: null,
   sessionId: null,
+  scheduledAt: null,
   roadmapAlias: null,
   tags: [],
   status: "backlog",
@@ -111,11 +112,14 @@ describe("TaskSettings", () => {
     });
   });
 
-  it("saves planner settings changes", () => {
+  it("saves planner settings changes (fast mode flips flags to fast defaults, then docs/tests re-enabled)", () => {
     render(<TaskSettings task={mockTask} onSave={onSave} />);
     fireEvent.click(screen.getByText("Settings"));
 
+    // Switching to Fast auto-flips flags to fast-mode defaults
+    // (skipReview=true, planDocs=false, planTests=false).
     fireEvent.click(screen.getByLabelText("Fast"));
+    // Re-enable docs and tests manually.
     fireEvent.click(screen.getByLabelText("Docs"));
     fireEvent.click(screen.getByLabelText("Tests"));
     fireEvent.change(screen.getByPlaceholderText(".ai-factory/PLAN.md"), {
@@ -127,6 +131,42 @@ describe("TaskSettings", () => {
     expect(onSave).toHaveBeenCalledWith({
       plannerMode: "fast",
       planPath: ".ai-factory/custom.md",
+      planDocs: true,
+      planTests: true,
+      skipReview: true,
+    });
+  });
+
+  it("preserves saved task values on mount (no auto-flip)", () => {
+    const savedTask: Task = {
+      ...mockTask,
+      plannerMode: "full",
+      skipReview: true,
+      planDocs: false,
+      planTests: false,
+    };
+    render(<TaskSettings task={savedTask} onSave={onSave} />);
+    fireEvent.click(screen.getByText("Settings"));
+    // No Save button — nothing changed on mount.
+    expect(screen.queryByText("Save")).toBeNull();
+  });
+
+  it("flips flags to full-mode defaults when user manually selects Full", () => {
+    const fastTask: Task = {
+      ...mockTask,
+      plannerMode: "fast",
+      skipReview: true,
+      planDocs: false,
+      planTests: false,
+    };
+    render(<TaskSettings task={fastTask} onSave={onSave} />);
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByLabelText("Full"));
+    fireEvent.click(screen.getByText("Save"));
+
+    expect(onSave).toHaveBeenCalledWith({
+      plannerMode: "full",
+      skipReview: false,
       planDocs: true,
       planTests: true,
     });
@@ -216,5 +256,72 @@ describe("TaskSettings", () => {
     fireEvent.click(screen.getByText("Save"));
 
     expect(onSave).toHaveBeenCalledWith({ autoMode: false });
+  });
+
+  describe("scheduled start picker", () => {
+    it("is visible only for backlog tasks", () => {
+      render(<TaskSettings task={mockTask} onSave={onSave} />);
+      fireEvent.click(screen.getByText("Settings"));
+      expect(screen.getByText("Scheduled start")).toBeDefined();
+    });
+
+    it("is hidden once the task leaves backlog", () => {
+      const planning = { ...mockTask, status: "planning" as const };
+      render(<TaskSettings task={planning} onSave={onSave} />);
+      fireEvent.click(screen.getByText("Settings"));
+      expect(screen.queryByText("Scheduled start")).toBeNull();
+    });
+
+    it("saves scheduledAt as ISO when user picks a future date", () => {
+      render(<TaskSettings task={mockTask} onSave={onSave} />);
+      fireEvent.click(screen.getByText("Settings"));
+
+      const futureLocal = "2099-01-15T10:30";
+      const picker = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      expect(picker).not.toBeNull();
+      fireEvent.change(picker, { target: { value: futureLocal } });
+      fireEvent.click(screen.getByText("Save"));
+
+      expect(onSave).toHaveBeenCalledTimes(1);
+      const payload = onSave.mock.calls[0][0];
+      expect(typeof payload.scheduledAt).toBe("string");
+      // Local → UTC ISO conversion produces a Z-string
+      expect(payload.scheduledAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(new Date(payload.scheduledAt).getTime()).toBe(new Date(futureLocal).getTime());
+    });
+
+    it("saves scheduledAt: null when user clears a previously set schedule", () => {
+      const scheduled = { ...mockTask, scheduledAt: "2099-01-15T10:30:00.000Z" };
+      render(<TaskSettings task={scheduled} onSave={onSave} />);
+      fireEvent.click(screen.getByText("Settings"));
+
+      fireEvent.click(screen.getByText("Clear"));
+      fireEvent.click(screen.getByText("Save"));
+
+      expect(onSave).toHaveBeenCalledWith({ scheduledAt: null });
+    });
+  });
+
+  describe("priority picker", () => {
+    it("is rendered with the current priority preselected", () => {
+      const high = { ...mockTask, priority: 3 };
+      render(<TaskSettings task={high} onSave={onSave} />);
+      fireEvent.click(screen.getByText("Settings"));
+      // Custom Select shows the selected option's label inside a <span>
+      expect(screen.getAllByText("High").length).toBeGreaterThan(0);
+    });
+
+    it("emits priority in onSave when changed", () => {
+      render(<TaskSettings task={mockTask} onSave={onSave} />);
+      fireEvent.click(screen.getByText("Settings"));
+
+      // Open the Select (the trigger button shows the current label)
+      fireEvent.click(screen.getByText("None"));
+      // Click the "Urgent" option
+      fireEvent.click(screen.getByText("Urgent"));
+      fireEvent.click(screen.getByText("Save"));
+
+      expect(onSave).toHaveBeenCalledWith({ priority: 4 });
+    });
   });
 });

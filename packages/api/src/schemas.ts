@@ -1,6 +1,27 @@
 import { z } from "zod";
 import { TASK_EVENTS, TASK_STATUSES, getEnv } from "@aif/shared";
 
+/**
+ * ISO-8601 datetime accepted with any offset, but **normalized to UTC `Z`**
+ * before storage. We compare `scheduledAt` as TEXT in the DB (`<=` against
+ * `new Date().toISOString()`), and lexical string compare only matches
+ * instant compare when both sides use the same UTC `Z` form. Without
+ * normalization, `+03:00` values would silently never trigger.
+ *
+ * `null` is allowed to clear a previously-set schedule.
+ * Past timestamps are rejected here so the scheduler is never asked to
+ * fire something already overdue.
+ */
+export const scheduledAtSchema = z
+  .string()
+  .datetime({ offset: true, message: "scheduledAt must be ISO-8601" })
+  .transform((s) => new Date(s).toISOString())
+  .refine((iso) => Date.parse(iso) > Date.now(), {
+    message: "scheduledAt must be a future timestamp",
+  })
+  .nullable()
+  .optional();
+
 const taskAttachmentSchema = z.object({
   name: z.string().min(1).max(500),
   mimeType: z.string().max(200),
@@ -34,9 +55,9 @@ export const createTaskSchema = z.object({
   isFix: z.boolean().default(false),
   plannerMode: z.enum(["fast", "full"]).default("fast"),
   planPath: z.string().max(500).optional(),
-  planDocs: z.boolean().default(false),
-  planTests: z.boolean().default(false),
-  skipReview: z.boolean().default(false),
+  planDocs: z.boolean().optional(),
+  planTests: z.boolean().optional(),
+  skipReview: z.boolean().optional(),
   useSubagents: z.boolean().default(getEnv().AGENT_USE_SUBAGENTS),
   maxReviewIterations: z
     .number()
@@ -50,6 +71,7 @@ export const createTaskSchema = z.object({
   runtimeOptions: z.record(z.string(), z.unknown()).nullable().optional(),
   roadmapAlias: z.string().max(200).optional(),
   tags: z.array(z.string().max(100)).max(50).default([]),
+  scheduledAt: scheduledAtSchema,
 });
 
 export const updateTaskSchema = z.object({
@@ -82,6 +104,7 @@ export const updateTaskSchema = z.object({
   runtimeProfileId: z.string().min(1).nullable().optional(),
   modelOverride: z.string().max(200).nullable().optional(),
   runtimeOptions: z.record(z.string(), z.unknown()).nullable().optional(),
+  scheduledAt: scheduledAtSchema,
 });
 
 export const taskEventSchema = z.object({
@@ -100,7 +123,18 @@ export const reorderTaskSchema = z.object({
 });
 
 export const broadcastTaskSchema = z.object({
-  type: z.enum(["task:updated", "task:moved", "task:activity"]).default("task:updated"),
+  type: z
+    .enum(["task:updated", "task:moved", "task:activity", "task:scheduled_fired"])
+    .default("task:updated"),
+});
+
+export const autoQueueModeSchema = z.object({
+  enabled: z.boolean(),
+});
+
+export const broadcastProjectSchema = z.object({
+  type: z.enum(["project:auto_queue_mode_changed", "project:auto_queue_advanced"]),
+  taskId: z.string().uuid().optional(),
 });
 
 export const roadmapImportSchema = z.object({
@@ -198,3 +232,49 @@ export const runtimeProfileModelsSchema = z.object({
   apiKey: z.string().min(1).optional(),
   forceRefresh: z.boolean().optional(),
 });
+
+/**
+ * Strict allowlist schema for the Codex login callback URL the user pastes in
+ * the UI. Both the api and the agent broker validate this — double protection.
+ * Only http://127.0.0.1|localhost:{loopbackPort}/?code=…&state=… is accepted.
+ */
+export const codexCallbackSchema = z
+  .object({
+    url: z.string().min(1, "url is required").max(4096),
+  })
+  .superRefine((value, ctx) => {
+    const env = getEnv();
+    const expectedPort = env.AIF_CODEX_LOGIN_LOOPBACK_PORT;
+    let parsed: URL;
+    try {
+      parsed = new URL(value.url);
+    } catch {
+      ctx.addIssue({
+        code: "custom",
+        path: ["url"],
+        message: "invalid_url",
+      });
+      return;
+    }
+
+    if (parsed.protocol !== "http:") {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "scheme_not_allowed" });
+    }
+
+    const allowedHosts = new Set(["127.0.0.1", "localhost"]);
+    if (!allowedHosts.has(parsed.hostname)) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "host_not_allowed" });
+    }
+
+    const port = parsed.port ? Number(parsed.port) : 80;
+    if (port !== expectedPort) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "port_not_allowed" });
+    }
+
+    if (!parsed.searchParams.get("code")) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "missing_code" });
+    }
+    if (!parsed.searchParams.get("state")) {
+      ctx.addIssue({ code: "custom", path: ["url"], message: "missing_state" });
+    }
+  });

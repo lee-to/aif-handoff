@@ -20,6 +20,17 @@ import type {
   UpdateRuntimeProfileInput,
 } from "@aif/shared/browser";
 
+export class ApiError extends Error {
+  status: number;
+  data?: unknown;
+  constructor(message: string, status: number, data?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
 export interface AifConfig {
   language?: {
     ui?: string;
@@ -138,7 +149,7 @@ async function request<T>(
         message = firstFieldError[0] ?? null;
       }
     }
-    throw new Error(message ?? `HTTP ${res.status}`);
+    throw new ApiError(message ?? `HTTP ${res.status}`, res.status, body);
   }
 
   return res.json();
@@ -169,6 +180,19 @@ export const api = {
     return request<Project>(`/projects/${id}`, {
       method: "PUT",
       body: JSON.stringify(input),
+    });
+  },
+
+  getAutoQueueMode(id: string): Promise<{ enabled: boolean }> {
+    console.debug("[api] GET /projects/%s/auto-queue-mode", id);
+    return request<{ enabled: boolean }>(`/projects/${id}/auto-queue-mode`);
+  },
+
+  setAutoQueueMode(id: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    console.debug("[api] PATCH /projects/%s/auto-queue-mode", id, enabled);
+    return request<{ enabled: boolean }>(`/projects/${id}/auto-queue-mode`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
     });
   },
 
@@ -381,6 +405,14 @@ export const api = {
     );
   },
 
+  async abortChat(conversationId: string): Promise<void> {
+    console.debug("[api] POST /chat/%s/abort", conversationId);
+    const res = await fetch(`${API_PREFIX}/chat/${conversationId}/abort`, { method: "POST" });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`Failed to abort chat: ${res.status}`);
+    }
+  },
+
   // Chat Sessions
   listChatSessions(projectId: string): Promise<ChatSession[]> {
     console.debug("[api] GET /chat/sessions projectId=%s", projectId);
@@ -531,5 +563,36 @@ export const api = {
     };
   }> {
     return request(`/runtime-profiles/effective/chat/${projectId}`);
+  },
+
+  // Codex login proxy (feature-flagged)
+  getCodexLoginCapabilities(): Promise<{ loginProxyEnabled: boolean; loopbackPort: number }> {
+    console.debug("[api] GET /auth/codex/capabilities");
+    return request("/auth/codex/capabilities");
+  },
+
+  getCodexLoginStatus(): Promise<
+    { active: false } | { active: true; sessionId: string; authUrl: string; startedAt: string }
+  > {
+    return request("/auth/codex/login/status");
+  },
+
+  startCodexLogin(): Promise<{ sessionId: string; authUrl: string; startedAt: string }> {
+    console.debug("[api] POST /auth/codex/login/start");
+    return request("/auth/codex/login/start", { method: "POST" }, PLAN_FAST_FIX_TIMEOUT_MS);
+  },
+
+  submitCodexCallback(url: string): Promise<{ ok: boolean; exitCode: number | null }> {
+    console.debug("[api] POST /auth/codex/login/callback");
+    return request(
+      "/auth/codex/login/callback",
+      { method: "POST", body: JSON.stringify({ url }) },
+      PLAN_FAST_FIX_TIMEOUT_MS,
+    );
+  },
+
+  cancelCodexLogin(): Promise<{ ok: boolean; cancelled: boolean }> {
+    console.debug("[api] POST /auth/codex/login/cancel");
+    return request("/auth/codex/login/cancel", { method: "POST" });
   },
 };

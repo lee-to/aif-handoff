@@ -7,6 +7,7 @@ import { tasksRouter } from "./routes/tasks.js";
 import { chatRouter } from "./routes/chat.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { runtimeProfilesRouter } from "./routes/runtimeProfiles.js";
+import { codexAuthRouter } from "./routes/codexAuth.js";
 import { setupWebSocket } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
 import { getApiRuntimeRegistry } from "./services/runtime.js";
@@ -116,6 +117,22 @@ app.route("/tasks", tasksRouter);
 app.route("/chat", chatRouter);
 app.route("/settings", settingsRoutes);
 app.route("/runtime-profiles", runtimeProfilesRouter);
+
+// Codex OAuth login proxy (feature-flagged — see AIF_ENABLE_CODEX_LOGIN_PROXY).
+// The /auth/codex/capabilities endpoint is always registered so the frontend can
+// discover whether the feature is available; the mutating endpoints register only
+// when the flag is true.
+if (getEnv().AIF_ENABLE_CODEX_LOGIN_PROXY) {
+  log.info("Codex login proxy enabled — mounting /auth/codex routes");
+  app.route("/auth/codex", codexAuthRouter);
+} else {
+  log.debug("Codex login proxy disabled — mounting capabilities endpoint only");
+  const disabledRouter = new Hono();
+  disabledRouter.get("/capabilities", (c) =>
+    c.json({ loginProxyEnabled: false, loopbackPort: getEnv().AIF_CODEX_LOGIN_LOOPBACK_PORT }),
+  );
+  app.route("/auth/codex", disabledRouter);
+}
 
 // Initialize DB and start server
 const port = Number(process.env.PORT) || 3009;

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { generatePlanPath, projects } from "@aif/shared";
+import { eq } from "drizzle-orm";
 import { createTestDb } from "@aif/shared/server";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -350,6 +351,46 @@ describe("roadmapGeneration", () => {
 
       const stored = findTasksByRoadmapAlias(projectId, "sprint-1");
       expect(stored).toHaveLength(2);
+      // Every generated task must have skipReview=true so the auto-pipeline
+      // doesn't pause on review for roadmap imports. Regular (non-parallel)
+      // projects fall back to fast-mode flag defaults.
+      for (const task of stored) {
+        expect(task.skipReview).toBe(true);
+        expect(task.plannerMode).toBe("fast");
+        expect(task.planDocs).toBe(false);
+        expect(task.planTests).toBe(false);
+      }
+    });
+
+    it("should apply full-mode defaults for parallel-enabled projects (still skipReview=true)", () => {
+      const { projectId } = createProjectWithRoadmap("# Roadmap");
+      // Force parallelEnabled — roadmap import must honor the same rule
+      // POST /tasks applies: parallel projects are locked to full mode.
+      testDb.current
+        .update(projects)
+        .set({ parallelEnabled: true })
+        .where(eq(projects.id, projectId))
+        .run();
+
+      const result = importGeneratedTasks(projectId, {
+        alias: "sprint-parallel",
+        tasks: [
+          {
+            title: "Parallel task",
+            description: "",
+            phase: 1,
+            phaseName: "P",
+            sequence: 1,
+          },
+        ],
+      });
+
+      expect(result.created).toBe(1);
+      const [task] = findTasksByRoadmapAlias(projectId, "sprint-parallel");
+      expect(task.plannerMode).toBe("full");
+      expect(task.planDocs).toBe(true);
+      expect(task.planTests).toBe(true);
+      expect(task.skipReview).toBe(true);
     });
 
     it("should skip duplicates by normalized title", () => {

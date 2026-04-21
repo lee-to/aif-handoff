@@ -164,6 +164,57 @@ describe("runClaudeCli", () => {
     expect(spawnOptions).toEqual(expect.objectContaining({ cwd: "/tmp/project" }));
   });
 
+  it("emits a tool:question event alongside tool:use for AskUserQuestion", async () => {
+    const onEvent = vi.fn();
+    const input = createInput({ execution: { onEvent } });
+    const promise = runClaudeCli(input);
+
+    simulateStreamAndClose(0, [
+      { type: "system", subtype: "init", session_id: "sess-q", model: "claude-haiku" },
+      {
+        type: "assistant",
+        session_id: "sess-q",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-abc",
+              name: "AskUserQuestion",
+              input: {
+                questions: [
+                  {
+                    question: "Choose mode",
+                    options: [{ label: "Fast" }, { label: "Full" }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "sess-q",
+        result: "",
+        num_turns: 1,
+        duration_ms: 10,
+      },
+    ]);
+
+    await promise;
+
+    const questionEvents = onEvent.mock.calls
+      .map(
+        (call) => call[0] as { type: string; data?: { toolUseId?: string; questions?: unknown[] } },
+      )
+      .filter((event) => event.type === "tool:question");
+    expect(questionEvents.length).toBe(1);
+    expect(questionEvents[0].data?.toolUseId).toBe("tool-abc");
+    expect(questionEvents[0].data?.questions).toHaveLength(1);
+  });
+
   it("passes very large prompts via stdin without putting them on argv", async () => {
     // 2 MB prompt — well beyond macOS ARG_MAX (1 MiB) and Windows cmd.exe (~8 KB).
     const largePrompt = "x".repeat(2_000_000);

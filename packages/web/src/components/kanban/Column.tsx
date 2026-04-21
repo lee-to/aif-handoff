@@ -2,6 +2,7 @@ import type { Task, TaskStatus } from "@aif/shared/browser";
 import { STATUS_CONFIG } from "@aif/shared/browser";
 import { TaskCard } from "./TaskCard";
 import { AddTaskForm } from "./AddTaskForm";
+import { useReorderTask, useUpdateTask } from "@/hooks/useTasks";
 
 interface ColumnProps {
   status: TaskStatus;
@@ -41,6 +42,32 @@ const OWNER_BADGES: Record<TaskStatus, Array<{ label: string; className: string 
   ],
 };
 
+function reorderBacklog(
+  tasks: Task[],
+  idx: number,
+  dir: "up" | "down",
+  reorder: ReturnType<typeof useReorderTask>,
+): void {
+  const current = tasks[idx];
+  if (!current) return;
+  // Backlog is sorted ascending by position. Move up = smaller position.
+  if (dir === "up") {
+    if (idx === 0) return;
+    const above = tasks[idx - 1];
+    const aboveAbove = tasks[idx - 2];
+    const newPos =
+      aboveAbove !== undefined ? (aboveAbove.position + above.position) / 2 : above.position - 100;
+    reorder.mutate({ id: current.id, position: newPos });
+    return;
+  }
+  if (idx === tasks.length - 1) return;
+  const below = tasks[idx + 1];
+  const belowBelow = tasks[idx + 2];
+  const newPos =
+    belowBelow !== undefined ? (below.position + belowBelow.position) / 2 : below.position + 100;
+  reorder.mutate({ id: current.id, position: newPos });
+}
+
 export function Column({
   status,
   tasks,
@@ -54,6 +81,8 @@ export function Column({
   const owners = OWNER_BADGES[status];
   const share = totalVisibleTasks > 0 ? Math.round((tasks.length / totalVisibleTasks) * 100) : 0;
   const isCompact = density === "compact";
+  const reorder = useReorderTask();
+  const updateTask = useUpdateTask();
 
   return (
     <div
@@ -109,14 +138,28 @@ export function Column({
       )}
 
       <div className={`min-h-[100px] ${density === "compact" ? "space-y-1.5" : "space-y-2"}`}>
-        {tasks.map((task) => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            density={density}
-            onClick={() => onTaskClick(task.id)}
-          />
-        ))}
+        {tasks.map((task, idx) => {
+          const reorderProps =
+            status === "backlog"
+              ? {
+                  canMoveUp: idx > 0,
+                  canMoveDown: idx < tasks.length - 1,
+                  onMoveUp: () => reorderBacklog(tasks, idx, "up", reorder),
+                  onMoveDown: () => reorderBacklog(tasks, idx, "down", reorder),
+                  onTogglePause: () =>
+                    updateTask.mutate({ id: task.id, input: { paused: !task.paused } }),
+                }
+              : {};
+          return (
+            <TaskCard
+              key={task.id}
+              task={task}
+              density={density}
+              onClick={() => onTaskClick(task.id)}
+              {...reorderProps}
+            />
+          );
+        })}
 
         {tasks.length === 0 && (
           <div className="border border-dashed border-border py-8 text-center text-2xs text-muted-foreground">

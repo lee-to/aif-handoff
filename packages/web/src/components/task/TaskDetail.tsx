@@ -18,6 +18,7 @@ import { Section } from "./Section";
 import { useTaskDetailActions } from "./useTaskDetailActions";
 import { AlertBox } from "@/components/ui/alert-box";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Spinner } from "@/components/ui/spinner";
 
 interface TaskDetailProps {
   taskId: string | null;
@@ -254,7 +255,12 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
       </Dialog>
       <Dialog
         open={actions.showApproveDoneConfirm}
-        onOpenChange={actions.setShowApproveDoneConfirm}
+        onOpenChange={(next) => {
+          // Block dismissing the modal while a commit is in flight so the
+          // user waits for the WS ack (commit_done / commit_failed).
+          if (!next && actions.commitPending) return;
+          actions.setShowApproveDoneConfirm(next);
+        }}
       >
         <DialogContent>
           <DialogHeader>
@@ -267,6 +273,7 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
             <Checkbox
               checked={actions.deletePlanOnApprove}
               onChange={(event) => actions.setDeletePlanOnApprove(event.target.checked)}
+              disabled={actions.commitPending}
             />
             Delete plan file ({task?.isFix ? "FIX_PLAN.md" : "PLAN.md"})
           </label>
@@ -274,13 +281,21 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
             <Checkbox
               checked={actions.commitOnApprove}
               onChange={(event) => actions.setCommitOnApprove(event.target.checked)}
+              disabled={actions.commitPending}
             />
             Create commit (/aif-commit)
           </label>
+          {actions.commitPending && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+              <Spinner size="sm" />
+              <span>Running /aif-commit… waiting for server ack.</span>
+            </div>
+          )}
           <div className="mt-4 flex justify-end gap-2">
             <Button
               variant="ghost"
               size="sm"
+              disabled={actions.commitPending}
               onClick={() => {
                 actions.setShowApproveDoneConfirm(false);
                 actions.setDeletePlanOnApprove(false);
@@ -289,8 +304,15 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
             >
               Cancel
             </Button>
-            <Button size="sm" onClick={actions.handleApproveDone}>
-              Approve
+            <Button size="sm" onClick={actions.handleApproveDone} disabled={actions.commitPending}>
+              {actions.commitPending ? (
+                <span className="flex items-center gap-2">
+                  <Spinner size="sm" />
+                  Committing…
+                </span>
+              ) : (
+                "Approve"
+              )}
             </Button>
           </div>
         </DialogContent>

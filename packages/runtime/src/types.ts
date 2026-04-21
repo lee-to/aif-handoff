@@ -99,6 +99,13 @@ export interface RuntimeCapabilities {
    * on `RuntimeRunResult.usage`.
    */
   usageReporting: UsageReporting;
+  /**
+   * Adapter emits interactive `tool:question` events (e.g. Claude's
+   * `AskUserQuestion`). Consumers use this flag to gate provider-specific
+   * prompt hints and UI affordances so other runtimes don't inherit noise.
+   * Optional — defaults to false for adapters that don't declare it.
+   */
+  supportsInteractiveQuestions?: boolean;
 }
 
 export const DEFAULT_RUNTIME_CAPABILITIES: RuntimeCapabilities = {
@@ -112,6 +119,7 @@ export const DEFAULT_RUNTIME_CAPABILITIES: RuntimeCapabilities = {
   supportsIsolatedSubagentWorkflows: false,
   supportsNativeSubagentWorkflows: false,
   usageReporting: UsageReporting.NONE,
+  supportsInteractiveQuestions: false,
 };
 
 export interface RuntimeDescriptor {
@@ -249,6 +257,27 @@ export interface RuntimeEvent {
   level?: "debug" | "info" | "warn" | "error";
   message?: string;
   data?: Record<string, unknown>;
+}
+
+/**
+ * Runtime-neutral payload for interactive question events (`tool:question`).
+ * Adapters that expose a "ask the user something" tool (e.g. Claude's
+ * `AskUserQuestion`) parse their native shape into this before emitting, so
+ * consumers (chat UI, schedulers) render questions the same way regardless
+ * of which runtime produced them.
+ */
+export interface RuntimeToolQuestionPayload {
+  /** Adapter-native tool call id, when available — used to de-duplicate re-emits. */
+  toolUseId: string | null;
+  /** Original tool name as seen by the adapter (e.g. "AskUserQuestion"). */
+  toolName: string;
+  /** One or more questions bundled together. Most adapters send exactly one. */
+  questions: Array<{
+    question: string;
+    header?: string;
+    multiSelect?: boolean;
+    options: Array<{ label: string; description?: string }>;
+  }>;
 }
 
 export interface RuntimeUsage {

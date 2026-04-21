@@ -8,11 +8,19 @@ import {
 import type { TaskMetricsSummary } from "@/lib/taskMetrics";
 import type { Project } from "@aif/shared/browser";
 
+export interface AggregateProjectTotals {
+  tokenInput: number;
+  tokenOutput: number;
+  tokenTotal: number;
+  costUsd: number;
+}
+
 interface MetricsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   taskMetrics: TaskMetricsSummary;
   project: Project | null;
+  aggregateTotals?: AggregateProjectTotals | null;
 }
 
 const integerFmt = new Intl.NumberFormat("en-US");
@@ -27,20 +35,30 @@ const fmtInt = (v: number) => integerFmt.format(Math.round(v));
 const fmtUsd = (v: number) => usdFmt.format(v);
 const fmtPct = (v: number) => `${v.toFixed(1)}%`;
 
-export function MetricsDialog({ open, onOpenChange, taskMetrics, project }: MetricsDialogProps) {
+export function MetricsDialog({
+  open,
+  onOpenChange,
+  taskMetrics,
+  project,
+  aggregateTotals,
+}: MetricsDialogProps) {
   // Project-level totals include ALL sources (tasks + chat + commit + roadmap).
-  // Fall back to task-only totals when no project is selected.
-  const projectTokenTotal = project?.tokenTotal ?? taskMetrics.totalTokenTotal;
-  const projectTokenInput = project?.tokenInput ?? taskMetrics.totalTokenInput;
-  const projectTokenOutput = project?.tokenOutput ?? taskMetrics.totalTokenOutput;
-  const projectCostUsd = project?.costUsd ?? taskMetrics.totalCostUsd;
+  // When no project is selected, prefer aggregated sums across all projects; fall back to task-only totals.
+  const projectTokenTotal =
+    project?.tokenTotal ?? aggregateTotals?.tokenTotal ?? taskMetrics.totalTokenTotal;
+  const projectTokenInput =
+    project?.tokenInput ?? aggregateTotals?.tokenInput ?? taskMetrics.totalTokenInput;
+  const projectTokenOutput =
+    project?.tokenOutput ?? aggregateTotals?.tokenOutput ?? taskMetrics.totalTokenOutput;
+  const projectCostUsd = project?.costUsd ?? aggregateTotals?.costUsd ?? taskMetrics.totalCostUsd;
+  const title = project ? "Metrics" : aggregateTotals ? "Metrics — all projects" : "Metrics";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogClose onClose={() => onOpenChange(false)} />
         <DialogHeader>
-          <DialogTitle>Metrics</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="border border-border bg-card/50 px-3 py-2">

@@ -168,6 +168,58 @@ Tasks have a `paused` flag (default `false`). When `true`, the coordinator skips
 
 The Pause/Resume button is shown in the TaskDetail Actions bar for active processing stages (`planning`, `plan_ready`, `implementing`, `review`, `blocked_external`). It is hidden for `backlog`, `done`, and `verified` where the agent pipeline is not running.
 
+### Scheduled Execution
+
+Tasks expose an optional `scheduledAt` column (ISO-8601 UTC, nullable). On every
+poll cycle the coordinator calls `processDueScheduledTasks()` which:
+
+1. Lists backlog tasks with `scheduledAt <= now` (paused tasks skipped).
+2. Transitions each from `backlog` to `planning` using the same state patch as
+   the human `start_ai` event, clearing `scheduledAt` in the same write.
+3. Appends a `[scheduler]` entry to the task activity log.
+4. Broadcasts `task:scheduled_fired` via WebSocket.
+
+Past timestamps are rejected at the API layer with `400`; `null` clears a
+previous schedule. Scheduled firing is one-shot — the task never re-fires
+automatically after `scheduledAt` is cleared.
+
+### Auto-Queue Mode
+
+Projects expose an `autoQueueMode` flag (default `false`). When `true`,
+`processAutoQueueAdvance()` runs every poll cycle and for each such project
+fills the pipeline up to a **pool depth**:
+
+- **Sequential project** (`parallelEnabled = false`): pool depth = `1`. The
+  next backlog task fires into `planning` only after the previous one
+  reaches a terminal status (`done` / `verified`). "In-flight" is counted by
+  pipeline status, not by lock — so transitions between stages do not open a
+  window for early advance.
+- **Parallel project** (`parallelEnabled = true`): pool depth =
+  `COORDINATOR_MAX_CONCURRENT_TASKS`. Auto-queue keeps that many tasks in
+  flight, advancing as soon as room frees up.
+
+The advance step:
+
+1. Compute `limit = parallelEnabled ? COORDINATOR_MAX_CONCURRENT_TASKS : 1`.
+2. Read `active = countActivePipelineTasksForProject(project)` — counts tasks
+   in `planning`, `plan_ready`, `implementing`, `review`, or `blocked_external`.
+   Backlog (source) and `done`/`verified` (terminal) do not count.
+3. While `active < limit`, pick the next backlog task by ascending `position`
+   (skipping paused tasks and tasks with future `scheduledAt`), fire it into
+   `planning`, append an `[auto-queue]` activity-log entry, and broadcast
+   `project:auto_queue_advanced` with the new task id.
+4. The fill loop runs in a single tick so a parallel project can start its
+   full pool without waiting for additional poll cycles.
+
+Auto-queue and scheduled execution compose in the same poll cycle:
+`processDueScheduledTasks()` runs first and fires every backlog task whose
+`scheduledAt` is due, then `processAutoQueueAdvance()` runs and **tops up the
+remaining pool slots**. Order matters because once the scheduler advances a
+task, it counts as in-flight and reduces how many slots auto-queue still
+needs to fill. Both passes use the same atomic `claimBacklogTaskForAdvance`
+write so a row is moved out of `backlog` exactly once even when both passes
+target the same task in the same cycle.
+
 ## Roadmap Import
 
 The system supports bulk task creation from a project's `.ai-factory/ROADMAP.md` file via `POST /projects/:id/roadmap/import`.

@@ -4,6 +4,8 @@ import { withStreamTimeouts } from "../../timeouts.js";
 import { classifyClaudeResultSubtype } from "./errors.js";
 import type { ClaudeOptionsLogger, ClaudeRuntimeExecutionOptions } from "./options.js";
 import { buildClaudeQueryOptions } from "./options.js";
+import { buildToolUseEvents } from "../../toolEvents.js";
+import { parseClaudeAskUserQuestion } from "./questions.js";
 
 const QUERY_START_TIMEOUT_CODE = "query_start_timeout";
 
@@ -109,6 +111,27 @@ function extractStreamingText(message: ClaudeStreamMessage): string {
   return typeof message.event.delta.text === "string" ? message.event.delta.text : "";
 }
 
+interface AssistantContentItem {
+  type?: string;
+  name?: string;
+  id?: string;
+  input?: unknown;
+}
+
+function extractAssistantToolUses(message: ClaudeStreamMessage): AssistantContentItem[] {
+  if (message.type !== "assistant") return [];
+  const rawMessage = (message as Record<string, unknown>).message;
+  if (!rawMessage || typeof rawMessage !== "object") return [];
+  const content = (rawMessage as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((item): item is AssistantContentItem => {
+      if (!item || typeof item !== "object") return false;
+      return (item as { type?: string }).type === "tool_use";
+    })
+    .filter((item) => typeof item.name === "string");
+}
+
 export function makeQueryStartTimeoutError(timeoutMs: number): QueryStartTimeoutError {
   const error = new Error(
     `query_start_timeout: runtime produced no output within ${timeoutMs}ms`,
@@ -179,6 +202,26 @@ export async function runClaudeQueryAttempt(
     if (message.type === "system" && message.subtype === "init" && message.session_id) {
       sessionId = message.session_id;
       return;
+    }
+
+    const toolUses = extractAssistantToolUses(message);
+    if (toolUses.length > 0) {
+      const nowIso = new Date().toISOString();
+      for (const item of toolUses) {
+        const toolName = item.name as string;
+        const toolUseId = typeof item.id === "string" ? item.id : null;
+        const toolUseEvents = buildToolUseEvents({
+          toolName,
+          toolUseId,
+          input: item.input,
+          timestamp: nowIso,
+          questionPayload: parseClaudeAskUserQuestion(toolName, toolUseId, item.input),
+        });
+        for (const event of toolUseEvents) {
+          events.push(event);
+          execution.onEvent?.(event);
+        }
+      }
     }
 
     const streamedText = extractStreamingText(message);

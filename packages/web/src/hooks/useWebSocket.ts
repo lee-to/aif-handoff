@@ -118,6 +118,18 @@ export function useWebSocket() {
         return;
       }
 
+      // Commit lifecycle (approve-done auto-commit): surface to any listener
+      // via custom DOM events; global toast + modal spinner subscribe to these.
+      if (
+        raw.type === "task:commit_started" ||
+        raw.type === "task:commit_done" ||
+        raw.type === "task:commit_failed"
+      ) {
+        console.debug("[ws] commit event:", raw.type, raw.payload);
+        window.dispatchEvent(new CustomEvent(raw.type, { detail: raw.payload }));
+        return;
+      }
+
       const data = raw as unknown as WsEvent;
 
       if (data.type === "task:moved" && isTaskPayload(data.payload)) {
@@ -150,6 +162,16 @@ export function useWebSocket() {
       // Activity-only update: refresh task detail without touching the board list
       if (data.type === "task:activity" && hasIdPayload(data.payload)) {
         queryClient.invalidateQueries({ queryKey: ["task", data.payload.id] });
+        return;
+      }
+
+      // Project auto-queue toggle changed somewhere — refresh the projects
+      // list so the Switch in the project settings dialog stays in sync.
+      if (data.type === "project:auto_queue_mode_changed") {
+        queryClient.invalidateQueries({ queryKey: ["projects"] });
+        if (hasIdPayload(data.payload)) {
+          queryClient.invalidateQueries({ queryKey: ["autoQueueMode", data.payload.id] });
+        }
         return;
       }
 

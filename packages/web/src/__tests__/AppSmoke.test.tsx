@@ -65,6 +65,6 @@ describe("App smoke test", () => {
 
   it("shows the empty-state message when no project is selected", () => {
     render(<App />);
-    expect(screen.getByText("// no project selected")).toBeInTheDocument();
+    expect(screen.getByText("No projects yet")).toBeInTheDocument();
   });
 });

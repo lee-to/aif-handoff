@@ -65,6 +65,7 @@ describe("runPlanner comment selection", () => {
         description: "Desc",
         status: "planning",
         plan: "Old plan",
+        useSubagents: true,
       })
       .run();
 

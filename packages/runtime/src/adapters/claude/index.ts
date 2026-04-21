@@ -105,6 +105,7 @@ const SDK_CAPABILITIES: RuntimeCapabilities = {
   supportsApprovals: true,
   supportsCustomEndpoint: true,
   usageReporting: UsageReporting.FULL,
+  supportsInteractiveQuestions: true,
 };
 
 /**
@@ -120,6 +121,7 @@ const CLI_CAPABILITIES: RuntimeCapabilities = {
   supportsApprovals: false,
   supportsCustomEndpoint: false,
   usageReporting: UsageReporting.FULL,
+  supportsInteractiveQuestions: true,
 };
 
 /** API transport — requires explicit key + baseUrl, no agent definitions. */

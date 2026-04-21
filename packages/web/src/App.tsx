@@ -1,22 +1,24 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Header } from "./components/layout/Header";
 import { Board } from "./components/kanban/Board";
 import { TaskDetail } from "./components/task/TaskDetail";
 import { CommandPalette } from "./components/layout/CommandPalette";
 import { useWebSocket } from "./hooks/useWebSocket";
+import { useCommitToasts } from "./hooks/useCommitToasts";
 import { useProjects } from "./hooks/useProjects";
 import { useTasks } from "./hooks/useTasks";
 import { useTheme } from "./hooks/useTheme";
 import { useKeyboardShortcut } from "./hooks/useKeyboardShortcut";
 import { ChatBubble } from "./components/chat/ChatBubble";
 import { ChatPanel } from "./components/chat/ChatPanel";
-import { Button } from "./components/ui/button";
 import { calculateTaskMetrics } from "./lib/taskMetrics";
 import { readStorage, writeStorage, removeStorage } from "./lib/storage";
 import { STORAGE_KEYS } from "./lib/storageKeys";
-import type { Project } from "@aif/shared/browser";
+import { api } from "./lib/api";
+import type { Project, Task } from "@aif/shared/browser";
 import { ProjectRuntimeSettings } from "./components/project/ProjectRuntimeSettings";
+import { ProjectsOverview } from "./components/project/ProjectsOverview";
 import { ToastProvider } from "./components/ui/toast";
 
 const queryClient = new QueryClient({
@@ -30,6 +32,7 @@ const queryClient = new QueryClient({
 
 function AppContent() {
   useWebSocket();
+  useCommitToasts();
   const { theme, toggleTheme } = useTheme();
   const { data: projects } = useProjects();
   const [project, setProject] = useState<Project | null>(null);
@@ -46,7 +49,27 @@ function AppContent() {
     return saved === "list" ? "list" : "kanban";
   });
   const { data: projectTasks } = useTasks(project?.id ?? null);
-  const taskMetrics = useMemo(() => calculateTaskMetrics(projectTasks ?? []), [projectTasks]);
+  const { data: allTasks } = useQuery<Task[]>({
+    queryKey: ["tasks", "all"],
+    queryFn: () => api.listTasks(),
+    enabled: !project,
+  });
+  const taskMetrics = useMemo(
+    () => calculateTaskMetrics((project ? projectTasks : allTasks) ?? []),
+    [project, projectTasks, allTasks],
+  );
+  const aggregateProjectTotals = useMemo(() => {
+    if (project || !projects?.length) return null;
+    return projects.reduce(
+      (acc, p) => ({
+        tokenInput: acc.tokenInput + (p.tokenInput ?? 0),
+        tokenOutput: acc.tokenOutput + (p.tokenOutput ?? 0),
+        tokenTotal: acc.tokenTotal + (p.tokenTotal ?? 0),
+        costUsd: acc.costUsd + (p.costUsd ?? 0),
+      }),
+      { tokenInput: 0, tokenOutput: 0, tokenTotal: 0, costUsd: 0 },
+    );
+  }, [project, projects]);
 
   useEffect(() => {
     writeStorage(STORAGE_KEYS.DENSITY, density);
@@ -154,6 +177,7 @@ function AppContent() {
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         taskMetrics={taskMetrics}
+        aggregateTotals={aggregateProjectTotals}
         runtimeProfilesOpen={runtimeSettingsOpen}
         onToggleRuntimeProfiles={() => setRuntimeSettingsOpen((value) => !value)}
       />
@@ -176,25 +200,7 @@ function AppContent() {
             viewMode={viewMode}
           />
         ) : (
-          <div className="flex h-[64vh] items-center justify-center">
-            <div className="w-full max-w-xl border border-border bg-card/80 p-8 text-center">
-              <p className="text-base font-semibold tracking-tight">// no project selected</p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Select or create a project to get started.
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Don&apos;t forget to configure runtime profiles in project settings.
-              </p>
-              <div className="mt-4 flex items-center justify-center gap-2">
-                <Button size="sm" onClick={() => setCommandOpen(true)}>
-                  Open command palette
-                </Button>
-                <Button size="sm" variant="outline" onClick={toggleDensity}>
-                  Toggle density
-                </Button>
-              </div>
-            </div>
-          </div>
+          <ProjectsOverview projects={projects ?? []} onSelectProject={handleSelectProject} />
         )}
       </main>
 

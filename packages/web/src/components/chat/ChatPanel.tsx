@@ -18,11 +18,13 @@ import {
   PanelLeftOpen,
   Paperclip,
   AlertTriangle,
+  Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { AttachmentChip } from "@/components/ui/attachment-chip";
 import { useChat } from "@/hooks/useChat";
@@ -56,6 +58,7 @@ export function ChatPanel({
 
   const {
     sessions,
+    isLoading: isLoadingSessions,
     activeSessionId,
     setActiveSessionId,
     pinActiveSession,
@@ -67,10 +70,12 @@ export function ChatPanel({
   const {
     messages,
     isStreaming,
+    isLoadingMessages,
     chatErrorCode,
     explore,
     setExplore,
     sendMessage,
+    abortStream,
     clearMessages,
     newSession,
   } = useChat(projectId, activeSessionId, taskId, setActiveSessionId);
@@ -318,6 +323,18 @@ export function ChatPanel({
               </div>
             </div>
           )}
+          {chatErrorCode === "aborted" && (
+            <div className="px-3 pb-2">
+              <div className="rounded border border-muted-foreground/30 bg-muted/40 p-2">
+                <Badge variant="outline" className="border-muted-foreground/50">
+                  Stopped
+                </Badge>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Chat run was stopped. Any partial reply above has been saved.
+                </p>
+              </div>
+            </div>
+          )}
           {chatErrorCode === "CHAT_USAGE_LIMIT" && (
             <div className="px-3 pb-2">
               <div className="rounded border border-amber-500/50 bg-amber-500/15 p-2">
@@ -333,7 +350,13 @@ export function ChatPanel({
               </div>
             </div>
           )}
-          {messages.length === 0 && (
+          {(isLoadingMessages || isLoadingSessions) && (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+              <Spinner size="lg" />
+              <p className="text-xs">Loading messages...</p>
+            </div>
+          )}
+          {!isLoadingMessages && !isLoadingSessions && messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
               <Bot className="h-8 w-8 opacity-30" />
               <p className="text-xs">
@@ -341,16 +364,18 @@ export function ChatPanel({
               </p>
             </div>
           )}
-          {messages.map((msg, i) => (
-            <MessageBubble
-              key={i}
-              message={msg}
-              projectId={projectId ?? ""}
-              sessionId={activeSessionId}
-              onTaskCreated={handleTaskCreated}
-              onOpenTask={onOpenTask}
-            />
-          ))}
+          {!isLoadingMessages &&
+            !isLoadingSessions &&
+            messages.map((msg, i) => (
+              <MessageBubble
+                key={i}
+                message={msg}
+                projectId={projectId ?? ""}
+                sessionId={activeSessionId}
+                onTaskCreated={handleTaskCreated}
+                onOpenTask={onOpenTask}
+              />
+            ))}
           {isStreaming && (
             <TypingIndicator
               hasAssistantMessage={messages[messages.length - 1]?.role === "assistant"}
@@ -413,14 +438,25 @@ export function ChatPanel({
             rows={1}
             className="max-h-32 min-h-[2.25rem] flex-1 resize-none bg-secondary/50"
           />
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim() || isStreaming}
-            aria-label="Send message"
-            className="h-auto self-stretch w-9 shrink-0 rounded px-0"
-          >
-            <Send className="h-4 w-4 shrink-0" />
-          </Button>
+          {isStreaming ? (
+            <Button
+              onClick={() => void abortStream()}
+              aria-label="Stop generation"
+              variant="destructive"
+              className="h-auto self-stretch w-9 shrink-0 rounded px-0"
+            >
+              <Square className="h-4 w-4 shrink-0" />
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              aria-label="Send message"
+              className="h-auto self-stretch w-9 shrink-0 rounded px-0"
+            >
+              <Send className="h-4 w-4 shrink-0" />
+            </Button>
+          )}
         </div>
       </div>
     </div>

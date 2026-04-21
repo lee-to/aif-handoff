@@ -9,6 +9,8 @@ import {
 } from "../../timeouts.js";
 import { classifyClaudeResultSubtype, classifyClaudeRuntimeError } from "./errors.js";
 import { normalizeClaudeEffort } from "./options.js";
+import { buildToolUseEvents } from "../../toolEvents.js";
+import { parseClaudeAskUserQuestion } from "./questions.js";
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -51,6 +53,12 @@ const ALLOWED_ENV_PREFIXES = [
   "VISUAL",
   "FORCE_COLOR",
   "NO_COLOR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
 ];
 
 function buildCuratedEnv(
@@ -217,6 +225,7 @@ interface StreamJsonContentItem {
   type?: string;
   text?: string;
   name?: string;
+  id?: string;
   input?: unknown;
   thinking?: string;
 }
@@ -380,13 +389,17 @@ function processStreamJsonLine(
         } else if (item.type === "tool_use" && typeof item.name === "string") {
           const summary = summarizeToolInput(item.input);
           const detailSuffix = summary ? ` ${summary}` : "";
-          emitEvent(state, execution, {
-            type: "tool:use",
+          const toolUseId = typeof item.id === "string" ? item.id : null;
+          for (const event of buildToolUseEvents({
+            toolName: item.name,
+            toolUseId,
+            input: item.input,
             timestamp: nowIso,
-            level: "info",
-            message: `${item.name}${detailSuffix}`,
-            data: { name: item.name, input: item.input },
-          });
+            detailSuffix,
+            questionPayload: parseClaudeAskUserQuestion(item.name, toolUseId, item.input),
+          })) {
+            emitEvent(state, execution, event);
+          }
           execution?.onToolUse?.(item.name, detailSuffix);
         }
       }

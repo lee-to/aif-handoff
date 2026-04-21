@@ -49,6 +49,15 @@ const {
   listTasksPaginated,
   searchTasksPaginated,
   toTaskSummary,
+  listDueScheduledTasks,
+  clearScheduledAt,
+  updateScheduledAt,
+  getAutoQueueMode,
+  setAutoQueueMode,
+  nextBacklogTaskByPosition,
+  listAutoQueueProjects,
+  countActivePipelineTasksForProject,
+  claimBacklogTaskForAdvance,
 } = await import("../index.js");
 
 function seedProject(id = "proj-1") {
@@ -979,6 +988,156 @@ describe("data layer", () => {
     it("caps limit at 50", () => {
       const result = searchTasksPaginated({ query: "x", limit: 999 });
       expect(result.limit).toBe(50);
+    });
+  });
+
+  // ── Scheduler queries ────────────────────────────────────
+
+  describe("scheduled tasks", () => {
+    it("listDueScheduledTasks returns only due backlog tasks", () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const due = createTask({ projectId: "proj-1", title: "Due", description: "", scheduledAt: past });
+      createTask({ projectId: "proj-1", title: "Not yet", description: "", scheduledAt: future });
+      createTask({ projectId: "proj-1", title: "Unscheduled", description: "" });
+
+      const rows = listDueScheduledTasks(new Date().toISOString());
+      const ids = rows.map((r) => r.id);
+      expect(ids).toContain(due!.id);
+      expect(rows).toHaveLength(1);
+    });
+
+    it("listDueScheduledTasks skips paused tasks", () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const t = createTask({ projectId: "proj-1", title: "Due paused", description: "", paused: true, scheduledAt: past });
+      expect(t).toBeDefined();
+      // createTask path does not force paused=true into insert defaults — verify via setTaskFields
+      setTaskFields(t!.id, { paused: true, scheduledAt: past });
+      const rows = listDueScheduledTasks(new Date().toISOString());
+      expect(rows.find((r) => r.id === t!.id)).toBeUndefined();
+    });
+
+    it("listDueScheduledTasks ignores non-backlog tasks", () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const t = createTask({ projectId: "proj-1", title: "Planning", description: "", scheduledAt: past });
+      updateTaskStatus(t!.id, "planning");
+      const rows = listDueScheduledTasks(new Date().toISOString());
+      expect(rows.find((r) => r.id === t!.id)).toBeUndefined();
+    });
+
+    it("clearScheduledAt nullifies the column", () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const t = createTask({ projectId: "proj-1", title: "Due", description: "", scheduledAt: past });
+      clearScheduledAt(t!.id);
+      expect(findTaskById(t!.id)!.scheduledAt).toBeNull();
+    });
+
+    it("updateScheduledAt persists a value and clears with null", () => {
+      const t = createTask({ projectId: "proj-1", title: "S", description: "" });
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      updateScheduledAt(t!.id, future);
+      expect(findTaskById(t!.id)!.scheduledAt).toBe(future);
+      updateScheduledAt(t!.id, null);
+      expect(findTaskById(t!.id)!.scheduledAt).toBeNull();
+    });
+  });
+
+  describe("auto-queue mode", () => {
+    it("getAutoQueueMode defaults to false; setAutoQueueMode persists", () => {
+      expect(getAutoQueueMode("proj-1")).toBe(false);
+      setAutoQueueMode("proj-1", true);
+      expect(getAutoQueueMode("proj-1")).toBe(true);
+      setAutoQueueMode("proj-1", false);
+      expect(getAutoQueueMode("proj-1")).toBe(false);
+    });
+
+    it("listAutoQueueProjects returns only enabled projects", () => {
+      testDb.current
+        .insert(projects)
+        .values({ id: "proj-2", name: "P2", rootPath: "/tmp/p2" })
+        .run();
+      setAutoQueueMode("proj-2", true);
+      const all = listAutoQueueProjects();
+      expect(all.map((p) => p.id)).toEqual(["proj-2"]);
+    });
+
+    it("nextBacklogTaskByPosition picks the lowest-position backlog task", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      const b = createTask({ projectId: "proj-1", title: "B", description: "" });
+      // createTask assigns decreasing positions; b should be lower than a
+      const next = nextBacklogTaskByPosition("proj-1");
+      expect(next).toBeDefined();
+      expect(next!.position).toBeLessThanOrEqual(a!.position);
+      expect([a!.id, b!.id]).toContain(next!.id);
+    });
+
+    it("nextBacklogTaskByPosition ignores tasks scheduled in the future", () => {
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      createTask({ projectId: "proj-1", title: "Future", description: "", scheduledAt: future });
+      const ready = createTask({ projectId: "proj-1", title: "Ready", description: "" });
+      const next = nextBacklogTaskByPosition("proj-1");
+      expect(next!.id).toBe(ready!.id);
+    });
+
+    it("countActivePipelineTasksForProject counts non-terminal pipeline statuses", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      const b = createTask({ projectId: "proj-1", title: "B", description: "" });
+      const c = createTask({ projectId: "proj-1", title: "C", description: "" });
+      const d = createTask({ projectId: "proj-1", title: "D", description: "" });
+      // a stays in backlog (source — doesn't count)
+      updateTaskStatus(b!.id, "planning");
+      updateTaskStatus(c!.id, "implementing");
+      updateTaskStatus(d!.id, "done");
+      expect(countActivePipelineTasksForProject("proj-1")).toBe(2);
+      expect(a).toBeDefined();
+    });
+
+    it("claimBacklogTaskForAdvance returns true exactly once and is idempotent on retries", () => {
+      const t = createTask({ projectId: "proj-1", title: "Race", description: "" });
+      const first = claimBacklogTaskForAdvance(t!.id);
+      const second = claimBacklogTaskForAdvance(t!.id);
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      expect(findTaskById(t!.id)?.status).toBe("planning");
+    });
+
+    it("claimBacklogTaskForAdvance refuses paused tasks", () => {
+      const t = createTask({ projectId: "proj-1", title: "P", description: "" });
+      setTaskFields(t!.id, { paused: true });
+      expect(claimBacklogTaskForAdvance(t!.id)).toBe(false);
+      expect(findTaskById(t!.id)?.status).toBe("backlog");
+    });
+
+    it("claimBacklogTaskForAdvance refuses non-backlog tasks", () => {
+      const t = createTask({ projectId: "proj-1", title: "P", description: "" });
+      updateTaskStatus(t!.id, "planning");
+      expect(claimBacklogTaskForAdvance(t!.id)).toBe(false);
+    });
+
+    it("claimBacklogTaskForAdvance clears scheduledAt in the same write", () => {
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const t = createTask({
+        projectId: "proj-1",
+        title: "S",
+        description: "",
+        scheduledAt: future,
+      });
+      expect(claimBacklogTaskForAdvance(t!.id)).toBe(true);
+      expect(findTaskById(t!.id)?.scheduledAt).toBeNull();
+    });
+
+    it("countActivePipelineTasksForProject includes blocked_external", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      updateTaskStatus(a!.id, "blocked_external");
+      expect(countActivePipelineTasksForProject("proj-1")).toBe(1);
+    });
+
+    it("nextBacklogTaskByPosition skips paused tasks", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      setTaskFields(a!.id, { paused: true });
+      const b = createTask({ projectId: "proj-1", title: "B", description: "" });
+      const next = nextBacklogTaskByPosition("proj-1");
+      expect(next!.id).toBe(b!.id);
     });
   });
 

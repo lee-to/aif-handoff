@@ -14,6 +14,7 @@ export {
   type RuntimeEvent,
   type RuntimeExecutionIntent,
   type RuntimeSubagentStartCallback,
+  type RuntimeToolQuestionPayload,
   type RuntimeToolUseCallback,
   type RuntimeModel,
   type RuntimeModelListInput,
@@ -33,6 +34,12 @@ export {
 } from "./types.js";
 
 export { createNoopUsageSink, type RuntimeUsageEvent, type RuntimeUsageSink } from "./usageSink.js";
+
+export {
+  buildToolUseEvents,
+  toolQuestionEvent,
+  type BuildToolUseEventsInput,
+} from "./toolEvents.js";
 
 export {
   type RegisterRuntimeModule,
@@ -114,6 +121,8 @@ export {
 } from "./workflowSpec.js";
 
 export { bootstrapRuntimeRegistry, type BootstrapRuntimeRegistryOptions } from "./bootstrap.js";
+
+export { buildLanguageDirective, type LanguageDirectiveInput } from "./languagePolicy.js";
 
 export { initProject, type InitProjectOptions, type InitProjectResult } from "./projectInit.js";
 

@@ -259,6 +259,40 @@ export function useTaskDetailActions(task: Task | undefined, onClose: () => void
   const [showApproveDoneConfirm, setShowApproveDoneConfirm] = useState(false);
   const [deletePlanOnApprove, setDeletePlanOnApprove] = useState(false);
   const [commitOnApprove, setCommitOnApprove] = useState(true);
+  // When the user asks for a commit on approve, the server runs `/aif-commit`
+  // as a fire-and-forget background task and broadcasts the result over WS.
+  // We keep the modal open with a spinner until the WS ack arrives, so the
+  // user sees whether the commit actually happened (issue #75).
+  const [commitPending, setCommitPending] = useState(false);
+
+  useEffect(() => {
+    if (!commitPending || !task) return;
+    const matchesTask = (e: Event): boolean => {
+      const detail = (e as CustomEvent<{ taskId?: string }>).detail;
+      return detail?.taskId === task.id;
+    };
+    const onDone = (e: Event) => {
+      if (!matchesTask(e)) return;
+      console.debug("[approve-done] commit done for", task.id);
+      setCommitPending(false);
+      setShowApproveDoneConfirm(false);
+      setDeletePlanOnApprove(false);
+      setCommitOnApprove(true);
+      onClose();
+    };
+    const onFailed = (e: Event) => {
+      if (!matchesTask(e)) return;
+      console.debug("[approve-done] commit failed for", task.id);
+      // Keep modal open so the user sees the error toast and can retry.
+      setCommitPending(false);
+    };
+    window.addEventListener("task:commit_done", onDone);
+    window.addEventListener("task:commit_failed", onFailed);
+    return () => {
+      window.removeEventListener("task:commit_done", onDone);
+      window.removeEventListener("task:commit_failed", onFailed);
+    };
+  }, [commitPending, task, onClose]);
 
   const handleApproveDone = () => {
     if (!task) return;
@@ -268,6 +302,12 @@ export function useTaskDetailActions(task: Task | undefined, onClose: () => void
       deletePlanFile: deletePlanOnApprove,
       commitOnApprove,
     });
+    if (commitOnApprove) {
+      // Wait for WS ack — do NOT close the modal yet.
+      console.debug("[approve-done] awaiting commit WS ack for", task.id);
+      setCommitPending(true);
+      return;
+    }
     setShowApproveDoneConfirm(false);
     setDeletePlanOnApprove(false);
     setCommitOnApprove(true);
@@ -347,6 +387,7 @@ export function useTaskDetailActions(task: Task | undefined, onClose: () => void
     setDeletePlanOnApprove,
     commitOnApprove,
     setCommitOnApprove,
+    commitPending,
     handleApproveDone,
     // action buttons
     handleActionClick,

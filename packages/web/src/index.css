@@ -68,6 +68,24 @@
   --tracking-label: 0.18em;
 }
 
+/*
+ * Status color tokens — emitted to :root explicitly so they are available
+ * to runtime `var(--color-status-*)` lookups (e.g. <StatusDot/>).
+ * Tailwind v4 only emits `@theme` vars used by generated utilities,
+ * so this block guarantees presence in the default (dark) theme.
+ * Names mirror the TaskStatus enum in @aif/shared.
+ */
+:root {
+  --color-status-backlog: #6b7280;
+  --color-status-planning: #8b5cf6;
+  --color-status-plan_ready: #3b82f6;
+  --color-status-implementing: #f59e0b;
+  --color-status-review: #ec4899;
+  --color-status-blocked_external: #ef4444;
+  --color-status-done: #10b981;
+  --color-status-verified: #14b8a6;
+}
+
 :root.light {
   --color-background: #f7faf8;
   --color-foreground: #0b1220;
@@ -92,9 +110,12 @@
   --color-status-backlog: #6b7280;
   --color-status-planning: #7c3aed;
   --color-status-ready: #0891b2;
+  --color-status-plan_ready: #2563eb;
   --color-status-implementing: #d97706;
-  --color-status-review: #2563eb;
+  --color-status-review: #db2777;
+  --color-status-blocked_external: #dc2626;
   --color-status-done: #059669;
+  --color-status-verified: #0d9488;
   --color-status-failed: #dc2626;
   /* Priority colors */
   --color-priority-low: #0891b2;

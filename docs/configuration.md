@@ -51,9 +51,13 @@ Node packages (`@aif/api`, `@aif/agent`, `@aif/data`, `@aif/shared`) auto-load e
 | `AGENT_WAKE_ENABLED`               | boolean | `true`                         | Enable event-driven coordinator wake via API WebSocket; set to `false` for polling-only mode                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `COORDINATOR_MAX_CONCURRENT_TASKS` | number  | `3`                            | Max concurrent tasks per stage for parallel-enabled projects. Non-parallel projects always process 1 task at a time regardless of this value. Range 1–10                                                                                                                                                                                                                                                                                                                                                        |
 | `AGENT_BYPASS_PERMISSIONS`         | boolean | `true`                         | Provider-neutral bypass flag. When `true`, subagents run without approval prompts and without any OS-level sandbox. Each adapter translates per its native mechanism — Claude: `--dangerously-skip-permissions`; Codex: `approval_policy=never` + `sandbox_mode=danger-full-access`. When `false`, each adapter falls back to its safer default (Claude: `.claude/settings.json` allow rules; Codex: `approval_policy=on-request` + `sandbox_mode=workspace-write`). See `docs/providers.md` § Bypass semantics |
-| `AGENT_USE_SUBAGENTS`              | boolean | `true`                         | Default for the per-task "Use subagents" setting. Each task can override this in Planner settings. `true`: custom agents (`plan-coordinator`, `implement-coordinator`, sidecars). `false`: `aif-plan`, `aif-implement`, `aif-review`, `aif-security-checklist` directly                                                                                                                                                                                                                                         |
+| `AGENT_USE_SUBAGENTS`              | boolean | `false`                        | Default for the per-task "Use subagents" setting. Each task can override this in Planner settings. `true`: custom agents (`plan-coordinator`, `implement-coordinator`, sidecars). `false`: `aif-plan`, `aif-implement`, `aif-review`, `aif-security-checklist` directly                                                                                                                                                                                                                                         |
 | `AGENT_AUTO_REVIEW_STRATEGY`       | string  | `full_re_review`               | Global auto-review convergence strategy. `full_re_review`: every review cycle may trigger another automatic rework when blockers remain. `closure_first`: automatic rework is limited to unresolved previous blockers; newly discovered blockers after closure force explicit manual review handoff                                                                                                                                                                                                             |
 | `AGENT_CHAT_MAX_TURNS`             | number  | `50`                           | Maximum turns (tool calls) per chat session before the runtime terminates. Increase for complex multi-file tasks                                                                                                                                                                                                                                                                                                                                                                                                |
+| `AIF_ENABLE_CODEX_LOGIN_PROXY`     | boolean | `false`                        | Enable the in-container Codex OAuth login broker and the api-side `/auth/codex/*` proxy. Dev-only. In production prefer `OPENAI_API_KEY`. See [Providers](providers.md#codex-oauth-login-in-docker-broker)                                                                                                                                                                                                                                                                                                      |
+| `AIF_CODEX_LOGIN_BROKER_PORT`      | number  | `3010`                         | Port the Codex login broker binds inside the agent container (not mapped to the host by the dev compose)                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `AIF_CODEX_LOGIN_LOOPBACK_PORT`    | number  | `1455`                         | Expected port on the codex CLI's OAuth callback listener; both the api zod schema and the broker validator reject callback URLs with any other port                                                                                                                                                                                                                                                                                                                                                             |
+| `AGENT_INTERNAL_URL`               | string  | `http://agent:3010`            | Base URL the api uses to reach the agent-side Codex login broker over the docker network                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `TELEGRAM_BOT_API_URL`             | string  | `https://api.telegram.org`     | Optional Telegram Bot API base URL or proxy endpoint                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `TELEGRAM_BOT_TOKEN`               | string  | _(optional)_                   | Telegram bot token for task status notifications (see [Telegram Notifications](#telegram-notifications))                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `TELEGRAM_USER_ID`                 | string  | _(optional)_                   | Telegram user ID to receive notifications                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -113,6 +117,61 @@ Runtime profiles are persisted in SQLite (`runtime_profiles`) and can be selecte
 Only non-secret fields are persisted (`baseUrl`, `apiKeyEnvVar`, headers/options metadata, default model). Secret values remain in environment variables or temporary validation payloads.
 
 For concrete profile payloads and adapter capability differences, see [Providers](providers.md).
+
+## Project Language
+
+`.ai-factory/config.yaml` carries a `language` block that controls the language AI produces for
+generated artifacts (task descriptions, plans, review notes, commit messages, roadmap items,
+chat replies). The setting is wired through a single injection point in the runtime registry
+(`packages/runtime/src/registry.ts` — `wrapAdapter`), so every call path — subagents, roadmap
+generation, fast-fix, commit generation, reviewGate, chat — picks it up automatically across
+all transports (SDK/CLI/API).
+
+```yaml
+# .ai-factory/config.yaml
+language:
+  ui: en # reserved for future UI localisation (currently informational)
+  artifacts: ru # language for AI-produced artifacts; "en" (default) disables injection
+  technical_terms: keep # "keep" or "translate"
+```
+
+Keys:
+
+- `artifacts` — BCP-47-ish language code. Values are validated against a conservative
+  `^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$` pattern after trim+lowercase (both `-` and `_` are
+  accepted as subtag separators, so `en-US` and `en_US` parse identically); tags that fail the
+  pattern (typos, non-ASCII strings) silently fall back to the default `en` rather than being
+  embedded raw in the system directive. Any regional tag whose primary subtag is `en` (`en-US`,
+  `en_GB`, …) is also treated as a no-op. Any other valid tag appends a short system directive
+  asking the model to write artifacts in that language.
+- `technical_terms` — `keep` (default) instructs the model to leave identifiers, API/function
+  names, file paths, CLI flags, environment variables, code snippets, and log/error strings in
+  English even when the rest of the text is translated. `translate` allows natural translation
+  of those tokens where a good equivalent exists.
+- `ui` — reserved for future UI-side localisation; currently informational only.
+
+Injection is uniform at the registry layer: the directive is written to
+`execution.systemPromptAppend` (never to `input.prompt`), so resume sessions, slash commands,
+and agent definitions continue to work unchanged. Existing appends (project-scope,
+review-diff-scope) are preserved verbatim and placed BEFORE the language directive so scope
+rules keep their emphasis.
+
+How each adapter then delivers that append block to the model depends on the transport:
+
+| Adapter    | SDK                          | CLI                      | API            |
+| ---------- | ---------------------------- | ------------------------ | -------------- |
+| Claude     | `options.systemPromptAppend` | `--append-system-prompt` | n/a            |
+| Codex      | prepended to user prompt     | prepended to CLI stdin   | system message |
+| OpenRouter | n/a                          | n/a                      | system message |
+| OpenCode   | n/a                          | n/a                      | system message |
+
+The Codex SDK/CLI paths do not expose a dedicated system-prompt slot, so the adapter prepends
+the append block to the user prompt separated by a blank line. That happens inside the
+adapter, after the registry has set `systemPromptAppend` — the caller and the registry never
+mutate `input.prompt` themselves. This keeps the registry-level injection guaranteed to reach
+the model on every Codex transport, matching the API path.
+
+To disable: leave `artifacts: en` (the default).
 
 ## Database
 
@@ -249,6 +308,12 @@ Set `AGENT_BYPASS_PERMISSIONS=false`. Each adapter then falls back to its safer 
 
 - **Codex:** `approval_policy=on-request` + `sandbox_mode=workspace-write` — the agent runs inside the workspace with network access disabled and escalates unknown actions for approval. Per-profile overrides (`options.approvalPolicy`, `options.sandboxMode`) always take precedence.
 
+### Chat mode specifics (issue #74)
+
+The chat route honours the same `AGENT_BYPASS_PERMISSIONS` flag. When it is off, Claude may request permission on sensitive files (e.g. creating `mcp.json` during `/aif` bootstrap). The permission prompt is issued inside the Claude process and cannot be rendered in the chat UI — the conversation appears to pause. Set `AGENT_BYPASS_PERMISSIONS=true` if you run `/aif`-style bootstrap flows from chat.
+
+Slash commands invoked from chat (e.g. `/aif`, `/aif-improve`) may call Claude's `AskUserQuestion` tool. The chat route renders the question and its options as a markdown message; the user's next chat message is treated as the answer and the session resumes with that answer in history. No interactive buttons yet — this is a follow-up (see phase 2 in the related plan).
+
 ## Parallel Execution (Experimental)
 
 By default, the coordinator processes one task at a time per project. Parallel execution allows multiple tasks to run concurrently for projects that opt in.
@@ -326,13 +391,13 @@ The config is editable via the **Global Settings** dialog in the web UI (gear ic
 
 ### Sections
 
-**`language`** — controls AI-generated content language:
+**`language`** — controls AI-generated content language. See [Project Language](#project-language) for the full directive contract, validation rules, and per-transport delivery matrix:
 
-| Key               | Default | Options                                                    |
-| ----------------- | ------- | ---------------------------------------------------------- |
-| `ui`              | `en`    | `en`, `ru`, `de`, `fr`, `es`, `zh`, `ja`, `ko`, `pt`, `it` |
-| `artifacts`       | `en`    | Same as `ui`                                               |
-| `technical_terms` | `keep`  | `keep`, `translate`                                        |
+| Key               | Default | Options                                                                                                                                                                                                                       |
+| ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ui`              | `en`    | Reserved for future UI localisation (currently informational).                                                                                                                                                                |
+| `artifacts`       | `en`    | BCP-47-ish tag, validated against `^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$` after trim+lowercase. `-` and `_` are interchangeable separators (`en-US` == `en_US`). Any `en*` primary subtag and invalid tags are treated as no-op. |
+| `technical_terms` | `keep`  | `keep`, `translate`                                                                                                                                                                                                           |
 
 **`paths`** — custom paths for AI Factory artifacts (relative to project root):
 
@@ -360,13 +425,27 @@ The config is editable via the **Global Settings** dialog in the web UI (gear ic
 
 **`git`** — git-aware workflow settings:
 
-| Key                      | Default    | Description                        |
-| ------------------------ | ---------- | ---------------------------------- |
-| `enabled`                | `true`     | Use git-aware workflows            |
-| `base_branch`            | `main`     | Default branch for diff/review     |
-| `create_branches`        | `true`     | Auto-create feature branches       |
-| `branch_prefix`          | `feature/` | Prefix for branch names            |
-| `skip_push_after_commit` | `false`    | Skip push prompt after /aif-commit |
+| Key                      | Default    | Description                    |
+| ------------------------ | ---------- | ------------------------------ |
+| `enabled`                | `true`     | Use git-aware workflows        |
+| `base_branch`            | `main`     | Default branch for diff/review |
+| `create_branches`        | `true`     | Auto-create feature branches   |
+| `branch_prefix`          | `feature/` | Prefix for branch names        |
+| `skip_push_after_commit` | `false`    | Skip push after /aif-commit    |
+
+#### `skip_push_after_commit` semantics
+
+Controls whether the approve-done auto-commit flow (and any other `/aif-commit` run originating from the API) performs `git push` after creating the commit:
+
+- **`false` (default):** the runtime is instructed to stage everything with `git add -A`, create one conventional commit, and then run `git push` on the current branch.
+- **`true`:** the runtime creates the commit but MUST NOT push — useful when you want to review the commit locally or rely on an external push step.
+
+The setting is editable from the web UI (`Global Settings → Project config`). Because it's written into `.ai-factory/config.yaml`, it is read on every commit run — no restart required.
+
+The commit lifecycle is surfaced over WebSocket as `task:commit_started`, `task:commit_done`, and `task:commit_failed` events. The web UI subscribes to these and:
+
+- shows a toast for each event (`Creating commit…`, `Commit created`, `Commit failed: <error>`);
+- keeps the "Approve done" modal open with an inline spinner until the commit is acknowledged, so the user knows whether the commit actually ran.
 
 ### API Endpoints
 

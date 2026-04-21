@@ -49,6 +49,7 @@ function ensureTables(sqlite: Database.Database): void {
       implementer_max_budget_usd REAL,
       review_sidecar_max_budget_usd REAL,
       parallel_enabled INTEGER NOT NULL DEFAULT 0,
+      auto_queue_mode INTEGER NOT NULL DEFAULT 0,
       default_task_runtime_profile_id TEXT,
       default_plan_runtime_profile_id TEXT,
       default_review_runtime_profile_id TEXT,
@@ -71,7 +72,7 @@ function ensureTables(sqlite: Database.Database): void {
       plan_docs INTEGER NOT NULL DEFAULT 0,
       plan_tests INTEGER NOT NULL DEFAULT 0,
       skip_review INTEGER NOT NULL DEFAULT 0,
-      use_subagents INTEGER NOT NULL DEFAULT 1,
+      use_subagents INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'backlog',
       priority INTEGER NOT NULL DEFAULT 0,
       position REAL NOT NULL DEFAULT 1000.0,
@@ -103,6 +104,7 @@ function ensureTables(sqlite: Database.Database): void {
       session_id TEXT,
       locked_by TEXT,
       locked_until TEXT,
+      scheduled_at TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
@@ -390,6 +392,15 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN auto_review_state_json TEXT;
     `,
   },
+  {
+    version: 12,
+    description:
+      "Add scheduled_at (tasks) and auto_queue_mode (projects) for scheduled execution and auto-queue",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN scheduled_at TEXT;
+      ALTER TABLE projects ADD COLUMN auto_queue_mode INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 function splitSqlStatements(sqlText: string): string[] {
@@ -582,6 +593,8 @@ function ensureIndexes(sqlite: Database.Database): void {
     "CREATE INDEX IF NOT EXISTS idx_task_comments_task_id ON task_comments(task_id)",
     // Task locking: find unlocked or stale-locked tasks
     "CREATE INDEX IF NOT EXISTS idx_tasks_locked ON tasks(locked_by, locked_until)",
+    // Coordinator scheduled-task scan: backlog tasks with due scheduled_at
+    "CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_at ON tasks(scheduled_at, status)",
     // Runtime profile selection by project scope
     "CREATE INDEX IF NOT EXISTS idx_runtime_profiles_project_id ON runtime_profiles(project_id)",
     // Runtime profile selection by runtime/provider

@@ -111,6 +111,98 @@ describe("tasks API", () => {
     });
   });
 
+  describe("POST /tasks scheduledAt", () => {
+    it("accepts a future ISO-8601 scheduledAt", async () => {
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Scheduled",
+          projectId: "test-project",
+          scheduledAt: future,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.scheduledAt).toBe(future);
+    });
+
+    it("rejects a past scheduledAt with 400", async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Past",
+          projectId: "test-project",
+          scheduledAt: past,
+        }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects a non-ISO-8601 scheduledAt", async () => {
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Garbage",
+          projectId: "test-project",
+          scheduledAt: "tomorrow",
+        }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("normalizes non-UTC scheduledAt to UTC Z form", async () => {
+      // +03:00 offset, 2 hours in the future as UTC instant
+      const future = new Date(Date.now() + 2 * 60 * 60_000);
+      const yyyy = future.getUTCFullYear();
+      const mm = String(future.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(future.getUTCDate()).padStart(2, "0");
+      // Express the same instant with +03:00 offset (UTC+3)
+      const utcHour = future.getUTCHours();
+      const localHour = (utcHour + 3) % 24;
+      const offsetIso = `${yyyy}-${mm}-${dd}T${String(localHour).padStart(2, "0")}:${String(future.getUTCMinutes()).padStart(2, "0")}:00+03:00`;
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "TZ",
+          projectId: "test-project",
+          scheduledAt: offsetIso,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      // Must be normalized to UTC Z so DB lexical compare matches instant compare
+      expect(body.scheduledAt).toMatch(/Z$/);
+      expect(new Date(body.scheduledAt).getTime()).toBe(new Date(offsetIso).getTime());
+    });
+
+    it("PUT allows null to clear scheduledAt", async () => {
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      const created = await (
+        await app.request("/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "S", projectId: "test-project", scheduledAt: future }),
+        })
+      ).json();
+
+      const res = await app.request(`/tasks/${created.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduledAt: null }),
+      });
+      expect(res.status).toBe(200);
+      const updated = await res.json();
+      expect(updated.scheduledAt).toBeNull();
+    });
+  });
+
   describe("POST /tasks", () => {
     it("should create a task", async () => {
       const res = await app.request("/tasks", {
@@ -172,19 +264,62 @@ describe("tasks API", () => {
       expect(body.skipReview).toBe(true);
     });
 
-    it("should default skipReview to false", async () => {
+    it("should apply fast-mode flag defaults when flags are omitted (default plannerMode=fast)", async () => {
       const res = await app.request("/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: "Task without skip review",
+          title: "Task without flags",
           projectId: "test-project",
         }),
       });
 
       expect(res.status).toBe(201);
       const body = await res.json();
+      expect(body.plannerMode).toBe("fast");
+      expect(body.skipReview).toBe(true);
+      expect(body.planDocs).toBe(false);
+      expect(body.planTests).toBe(false);
+    });
+
+    it("should apply full-mode flag defaults when plannerMode=full and flags omitted", async () => {
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Full mode task",
+          projectId: "test-project",
+          plannerMode: "full",
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.plannerMode).toBe("full");
       expect(body.skipReview).toBe(false);
+      expect(body.planDocs).toBe(true);
+      expect(body.planTests).toBe(true);
+    });
+
+    it("should respect explicit false flag values over mode defaults", async () => {
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Explicit flags",
+          projectId: "test-project",
+          plannerMode: "full",
+          skipReview: false,
+          planDocs: false,
+          planTests: false,
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.skipReview).toBe(false);
+      expect(body.planDocs).toBe(false);
+      expect(body.planTests).toBe(false);
     });
 
     it("should persist useSubagents from create payload", async () => {
@@ -514,6 +649,87 @@ describe("tasks API", () => {
       expect(body.planPath).toBe(".ai-factory/custom.md");
       expect(body.planDocs).toBe(true);
       expect(body.planTests).toBe(true);
+    });
+
+    it("should apply full-mode flag defaults when PUT sends only plannerMode=full", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "upd-mode-full",
+          projectId: "test-project",
+          title: "Mode switch",
+          plannerMode: "fast",
+          skipReview: true,
+          planDocs: false,
+          planTests: false,
+        })
+        .run();
+
+      const res = await app.request("/tasks/upd-mode-full", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plannerMode: "full" }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plannerMode).toBe("full");
+      expect(body.skipReview).toBe(false);
+      expect(body.planDocs).toBe(true);
+      expect(body.planTests).toBe(true);
+    });
+
+    it("should respect explicit flag values over mode defaults on PUT", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({ id: "upd-mode-explicit", projectId: "test-project", title: "Explicit" })
+        .run();
+
+      const res = await app.request("/tasks/upd-mode-explicit", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plannerMode: "full",
+          skipReview: true,
+          planDocs: false,
+          planTests: false,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plannerMode).toBe("full");
+      expect(body.skipReview).toBe(true);
+      expect(body.planDocs).toBe(false);
+      expect(body.planTests).toBe(false);
+    });
+
+    it("should not touch flags when PUT omits plannerMode", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "upd-mode-absent",
+          projectId: "test-project",
+          title: "No mode",
+          plannerMode: "fast",
+          skipReview: true,
+          planDocs: false,
+          planTests: false,
+        })
+        .run();
+
+      const res = await app.request("/tasks/upd-mode-absent", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "renamed" }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.plannerMode).toBe("fast");
+      expect(body.skipReview).toBe(true);
+      expect(body.planDocs).toBe(false);
+      expect(body.planTests).toBe(false);
     });
 
     it("should handle attachments update via PUT", async () => {
@@ -1199,7 +1415,49 @@ describe("tasks API", () => {
       expect(mockRunApiRuntimeOneShot).toHaveBeenCalled();
       const callArgs =
         mockRunApiRuntimeOneShot.mock.calls[mockRunApiRuntimeOneShot.mock.calls.length - 1][0];
-      expect(callArgs.prompt).toBe("/aif-commit");
+      expect(callArgs.workflowKind).toBe("commit");
+      expect(callArgs.fallbackSlashCommand).toBe("/aif-commit");
+      expect(callArgs.prompt).toContain("git add -A");
+
+      const { broadcast } = await import("../ws.js");
+      const types = (
+        broadcast as unknown as { mock: { calls: Array<[{ type: string }]> } }
+      ).mock.calls.map((c) => c[0].type);
+      expect(types).toContain("task:commit_started");
+      expect(types).toContain("task:commit_done");
+    });
+
+    it("should broadcast task:commit_failed when runtime throws", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.insert(tasks)
+        .values({
+          id: "ev-commit-fail",
+          projectId: "test-project",
+          title: "Done commit fail",
+          status: "done",
+        })
+        .run();
+
+      mockRunApiRuntimeOneShot.mockClear();
+      mockRunApiRuntimeOneShot.mockRejectedValueOnce(new Error("runtime boom"));
+      const { broadcast } = await import("../ws.js");
+      (broadcast as unknown as { mockClear: () => void }).mockClear();
+
+      const res = await app.request("/tasks/ev-commit-fail/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "approve_done", commitOnApprove: true }),
+      });
+      expect(res.status).toBe(200);
+      await new Promise((r) => setTimeout(r, 200));
+
+      const calls = (
+        broadcast as unknown as { mock: { calls: Array<[{ type: string; payload: unknown }]> } }
+      ).mock.calls;
+      const failed = calls.find((c) => c[0].type === "task:commit_failed");
+      expect(failed).toBeDefined();
+      expect((failed![0].payload as { error?: string }).error).toBe("runtime boom");
     });
 
     it("should not fire /aif-commit query when commitOnApprove is not set", async () => {
@@ -1503,6 +1761,33 @@ describe("tasks API", () => {
       });
 
       expect(res.status).toBe(404);
+    });
+
+    it("does not bump updatedAt — reorder is metadata, not content", async () => {
+      const db = testDb.current;
+      const frozen = "2026-01-01T00:00:00.000Z";
+      db.insert(tasks)
+        .values({
+          id: "pos-keep-ts",
+          projectId: "test-project",
+          title: "Keep updatedAt",
+          position: 2000,
+          createdAt: frozen,
+          updatedAt: frozen,
+        })
+        .run();
+
+      const res = await app.request("/tasks/pos-keep-ts/position", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ position: 1500 }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.position).toBe(1500);
+      // updatedAt must remain unchanged — list views sorted by "updated" stay stable
+      expect(body.updatedAt).toBe(frozen);
     });
   });
 

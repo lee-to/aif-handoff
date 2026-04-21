@@ -247,6 +247,13 @@ export async function runApiRuntimeOneShot(input: {
   includePartialMessages?: boolean;
   maxTurns?: number;
   /**
+   * Hint for adapters that support slash-command / skill resolution (e.g.
+   * Claude Code CLI). Passed through to the workflow spec so compatible
+   * adapters can invoke the named skill instead of relying on the prompt
+   * text alone. Adapters that do not support it ignore this field.
+   */
+  fallbackSlashCommand?: string;
+  /**
    * Scope metadata for usage tracking. Callers must pick one `UsageSource`
    * value identifying the logical flow (fast-fix, commit, roadmap-*, ...).
    * `projectId` is always included automatically; `taskId` is added when the
@@ -264,6 +271,7 @@ export async function runApiRuntimeOneShot(input: {
     requiredCapabilities: input.requiredCapabilities ?? [],
     sessionReusePolicy: "never",
     systemPromptAppend: input.systemPromptAppend,
+    fallbackSlashCommand: input.fallbackSlashCommand,
   });
 
   const context = await resolveApiRuntimeContext({

@@ -10,6 +10,7 @@ type TransitionPatch = Pick<
   | "reviewIterationCount"
   | "manualReviewRequired"
   | "autoReviewState"
+  | "scheduledAt"
 > & { status: TaskStatus };
 
 type TransitionResult = { ok: true; patch: TransitionPatch } | { ok: false; error: string };
@@ -24,6 +25,7 @@ export const CLEAN_STATE_RESET = {
   reviewIterationCount: 0,
   manualReviewRequired: false,
   autoReviewState: null,
+  scheduledAt: null,
 } as const satisfies Omit<TransitionPatch, "status">;
 
 export function applyHumanTaskEvent(

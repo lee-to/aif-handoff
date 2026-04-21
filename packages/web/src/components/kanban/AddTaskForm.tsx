@@ -4,13 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useCreateTask } from "@/hooks/useTasks";
 import { useKeyboardShortcut } from "@/hooks/useKeyboardShortcut";
 import { useProjects } from "@/hooks/useProjects";
 import { useSettings, useProjectDefaults } from "@/hooks/useSettings";
 import { useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
-import { generatePlanPath } from "@aif/shared/browser";
+import { generatePlanPath, defaultsForMode } from "@aif/shared/browser";
 import { PlannerSettings } from "./PlannerSettings";
 
 interface Props {
@@ -28,14 +29,16 @@ export function AddTaskForm({ projectId }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [plannerMode, setPlannerMode] = useState<"full" | "fast">("fast");
   const [planPath, setPlanPath] = useState(DEFAULT_PLAN_PATH);
-  const [planDocs, setPlanDocs] = useState(false);
-  const [planTests, setPlanTests] = useState(false);
-  const [skipReview, setSkipReview] = useState(false);
-  const [useSubagents, setUseSubagents] = useState(true);
+  const initialFlagDefaults = defaultsForMode("fast");
+  const [planDocs, setPlanDocs] = useState(initialFlagDefaults.planDocs);
+  const [planTests, setPlanTests] = useState(initialFlagDefaults.planTests);
+  const [skipReview, setSkipReview] = useState(initialFlagDefaults.skipReview);
+  const [useSubagents, setUseSubagents] = useState(false);
   const [maxReviewIterations, setMaxReviewIterations] = useState(3);
   const [runtimeProfileId, setRuntimeProfileId] = useState("");
   const [modelOverride, setModelOverride] = useState("");
   const [runtimeOverrideOpen, setRuntimeOverrideOpen] = useState(false);
+  const [priority, setPriority] = useState(0);
   const createTask = useCreateTask();
 
   // Track whether the user has manually edited the plan path field.
@@ -57,7 +60,7 @@ export function AddTaskForm({ projectId }: Props) {
     : null;
 
   // Derive defaults from server data (no setState in effects)
-  const useSubagentsDefault = settings?.useSubagents ?? true;
+  const useSubagentsDefault = settings?.useSubagents ?? false;
   const maxReviewIterationsDefault = settings?.maxReviewIterations ?? 3;
   const defaultPlanPath = defaults?.paths?.plan ?? DEFAULT_PLAN_PATH;
   const plansDir = defaults?.paths?.plans ?? ".ai-factory/plans/";
@@ -84,6 +87,13 @@ export function AddTaskForm({ projectId }: Props) {
     setPlanPath(defaultPlanPath);
     setRuntimeProfileId("");
     setModelOverride("");
+    setPriority(0);
+    // Apply mode-driven flag defaults; isParallel forces full mode defaults.
+    const seededMode = isParallel ? "full" : plannerMode;
+    const flags = defaultsForMode(seededMode);
+    setSkipReview(flags.skipReview);
+    setPlanDocs(flags.planDocs);
+    setPlanTests(flags.planTests);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncGen]);
 
@@ -113,6 +123,10 @@ export function AddTaskForm({ projectId }: Props) {
   const handleModeChange = (mode: "full" | "fast") => {
     setPlannerMode(mode);
     syncPlanPath(title, mode);
+    const flags = defaultsForMode(mode);
+    setSkipReview(flags.skipReview);
+    setPlanDocs(flags.planDocs);
+    setPlanTests(flags.planTests);
   };
 
   // Effective values: parallel projects force full mode
@@ -142,6 +156,7 @@ export function AddTaskForm({ projectId }: Props) {
         maxReviewIterations,
         runtimeProfileId: runtimeProfileId || null,
         modelOverride: modelOverride.trim() || null,
+        priority,
       },
       {
         onSuccess: () => {
@@ -150,15 +165,19 @@ export function AddTaskForm({ projectId }: Props) {
           setAutoMode(true);
           setIsFix(false);
           setShowAdvanced(false);
-          setPlannerMode("full");
+          setPlannerMode("fast");
           setPlanPath(defaultPlanPath);
-          setPlanDocs(false);
-          setPlanTests(false);
-          setSkipReview(false);
+          {
+            const resetFlags = defaultsForMode("fast");
+            setPlanDocs(resetFlags.planDocs);
+            setPlanTests(resetFlags.planTests);
+            setSkipReview(resetFlags.skipReview);
+          }
           setUseSubagents(useSubagentsDefault);
           setMaxReviewIterations(maxReviewIterationsDefault);
           setRuntimeProfileId("");
           setModelOverride("");
+          setPriority(0);
           userOverride.current = false;
           setIsOpen(false);
         },
@@ -250,6 +269,23 @@ export function AddTaskForm({ projectId }: Props) {
             }
           </span>
         </label>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">Priority</span>
+          <Select
+            selectSize="sm"
+            value={String(priority)}
+            onChange={(e) => setPriority(Number(e.target.value))}
+            options={[
+              { value: "0", label: "None" },
+              { value: "1", label: "Low" },
+              { value: "2", label: "Medium" },
+              { value: "3", label: "High" },
+              { value: "4", label: "Urgent" },
+              { value: "5", label: "Critical" },
+            ]}
+            className="w-32"
+          />
+        </div>
       </div>
       {!isFix && (
         <div className="space-y-2">
@@ -378,15 +414,19 @@ export function AddTaskForm({ projectId }: Props) {
             setAutoMode(true);
             setIsFix(false);
             setShowAdvanced(false);
-            setPlannerMode("full");
+            setPlannerMode("fast");
             setPlanPath(defaultPlanPath);
-            setPlanDocs(false);
-            setPlanTests(false);
-            setSkipReview(false);
+            {
+              const resetFlags = defaultsForMode("fast");
+              setPlanDocs(resetFlags.planDocs);
+              setPlanTests(resetFlags.planTests);
+              setSkipReview(resetFlags.skipReview);
+            }
             setUseSubagents(useSubagentsDefault);
             setMaxReviewIterations(maxReviewIterationsDefault);
             setRuntimeProfileId("");
             setModelOverride("");
+            setPriority(0);
             userOverride.current = false;
           }}
         >

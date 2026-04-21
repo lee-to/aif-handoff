@@ -6,6 +6,7 @@ import { flushAllActivityQueues } from "./hooks.js";
 import { connectWakeChannel, closeWakeChannel, waitForApiReady } from "./wakeChannel.js";
 import { abortAllActiveStages } from "./stageAbort.js";
 import { startPollScheduler } from "./pollScheduler.js";
+import { startLoginBroker, type BrokerServer } from "./codex/loginBroker.js";
 
 const log = logger("agent");
 
@@ -68,6 +69,34 @@ if (env.AGENT_WAKE_ENABLED) {
   log.info("Wake transport disabled (AGENT_WAKE_ENABLED=false) — using polling only");
 }
 
+// ---------------------------------------------------------------------------
+// Codex login broker (feature-flagged)
+// ---------------------------------------------------------------------------
+let codexLoginBroker: BrokerServer | null = null;
+if (env.AIF_ENABLE_CODEX_LOGIN_PROXY) {
+  log.info(
+    { port: env.AIF_CODEX_LOGIN_BROKER_PORT },
+    "AIF_ENABLE_CODEX_LOGIN_PROXY=true — starting codex login broker",
+  );
+  startLoginBroker({
+    port: env.AIF_CODEX_LOGIN_BROKER_PORT,
+    loopbackPort: env.AIF_CODEX_LOGIN_LOOPBACK_PORT,
+    codexCliPath: env.CODEX_CLI_PATH ?? "codex",
+  })
+    .then((broker) => {
+      codexLoginBroker = broker;
+      log.info(
+        { host: broker.host, port: broker.port },
+        "[CodexLoginBroker] listening on 0.0.0.0:${port}",
+      );
+    })
+    .catch((err) => {
+      log.error({ err }, "[CodexLoginBroker] failed to start");
+    });
+} else {
+  log.debug("AIF_ENABLE_CODEX_LOGIN_PROXY=false — codex login broker disabled");
+}
+
 log.info("Agent coordinator is running. Press Ctrl+C to stop.");
 
 // ---------------------------------------------------------------------------
@@ -83,6 +112,18 @@ function onShutdown(signal: string): void {
     abortAllActiveStages();
     closeWakeChannel();
     flushAllActivityQueues();
+    if (codexLoginBroker) {
+      const active = codexLoginBroker.runtime.getCurrentSession();
+      if (active && !active.child.killed) {
+        log.info({ sessionId: active.id }, "[CodexLoginBroker] killing active login session");
+        try {
+          active.child.kill("SIGTERM");
+        } catch (err) {
+          log.warn({ err }, "[CodexLoginBroker] failed to kill child on shutdown");
+        }
+      }
+      void codexLoginBroker.close();
+    }
     log.info("Shutdown flush complete");
   } catch (err) {
     log.error({ err }, "Error during shutdown flush");

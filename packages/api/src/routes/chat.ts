@@ -12,6 +12,7 @@ import {
   type RuntimeAdapter,
   type RuntimeEvent,
   type RuntimeRunInput,
+  type RuntimeToolQuestionPayload,
 } from "@aif/runtime";
 import {
   logger,
@@ -60,6 +61,83 @@ const PROJECT_SCOPE_SYSTEM_APPEND =
   "Do not inspect or modify files in the orchestrator monorepo or in parent/sibling directories " +
   "unless the user explicitly asks for that path. Avoid broad discovery outside the current project root.";
 
+const CHAT_ASKUSERQUESTION_HINT =
+  "Chat interaction rule: the AIF chat UI renders AskUserQuestion tool calls as a markdown block " +
+  "with the question, header, and numbered options — use the tool normally when you need structured " +
+  "input. The user's next chat message is their answer and the session resumes with that answer in " +
+  "history; never wait silently.";
+
+const NOISY_TOOL_NAMES = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead"]);
+
+type NormalizedQuestion = {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: Array<{ label: string; description?: string }>;
+};
+
+function renderQuestionBlock(entry: NormalizedQuestion, showSelectionHint: boolean): string[] {
+  const lines: string[] = [];
+  if (entry.header) lines.push(`**${entry.header}**`);
+  if (entry.question) lines.push(`**❓ ${entry.question}**`);
+  if (showSelectionHint && entry.options.length > 0) {
+    lines.push(
+      entry.multiSelect
+        ? `_Select one or more (${entry.options.length} options)._`
+        : `_Select one._`,
+    );
+  }
+  if (entry.options.length > 0) {
+    lines.push("");
+    entry.options.forEach((option, index) => {
+      const description =
+        option.description && option.description.trim().length > 0
+          ? ` — ${option.description.trim()}`
+          : "";
+      lines.push(`${index + 1}. ${option.label}${description}`);
+    });
+  }
+  return lines;
+}
+
+function formatToolQuestion(payload: RuntimeToolQuestionPayload): string | null {
+  const multipleQuestions = payload.questions.length > 1;
+  const anyMultiSelect = payload.questions.some((q) => q.multiSelect === true);
+  const blocks = payload.questions
+    .map((entry) =>
+      renderQuestionBlock(
+        {
+          question: entry.question,
+          header: entry.header,
+          multiSelect: entry.multiSelect,
+          options: entry.options ?? [],
+        },
+        multipleQuestions || anyMultiSelect,
+      ),
+    )
+    .filter((block) => block.length > 0);
+  if (blocks.length === 0) return null;
+  const lines: string[] = ["", ""];
+  blocks.forEach((block, index) => {
+    if (index > 0) lines.push("", "---", "");
+    lines.push(...block);
+  });
+  lines.push("");
+  if (multipleQuestions) {
+    lines.push(
+      "_Answer each question in order — you can use numbers, comma-separated lists for multi-select, or free text._",
+    );
+  } else if (anyMultiSelect) {
+    lines.push(
+      "_You can select multiple options — list the numbers separated by commas, or answer in free text._",
+    );
+  } else {
+    lines.push("_Answer by number or free text in the next message._");
+  }
+  lines.push("", "");
+  return lines.join("\n");
+}
+
 const CHAT_ACTIONS_PROMPT = `
 Identity: You are AIFer.
 
@@ -87,8 +165,13 @@ interface VirtualRuntimeSessionRef {
   sessionId: string;
 }
 
-function buildContextAppend(projectName: string, task: Task | null): string {
+function buildContextAppend(
+  projectName: string,
+  task: Task | null,
+  options: { interactiveQuestions?: boolean } = {},
+): string {
   const parts = [PROJECT_SCOPE_SYSTEM_APPEND];
+  if (options.interactiveQuestions) parts.push(CHAT_ASKUSERQUESTION_HINT);
 
   parts.push(`\nCurrent project: "${projectName}"`);
 
@@ -154,6 +237,15 @@ function parseVirtualRuntimeSessionId(
 
 function runtimeSourceFromTransport(transport: string): "cli" | "agent" {
   return transport === RuntimeTransport.CLI ? "cli" : "agent";
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const asError = err as { name?: string; code?: string; cause?: unknown };
+  if (asError.name === "AbortError") return true;
+  if (asError.code === "ABORT_ERR") return true;
+  if (asError.cause) return isAbortError(asError.cause);
+  return false;
 }
 
 function classifyChatError(err: unknown): {
@@ -230,11 +322,88 @@ function eventRole(event: RuntimeEvent): "user" | "assistant" | null {
 }
 
 function eventId(event: RuntimeEvent): string {
-  const raw =
-    event.data && typeof event.data === "object" && typeof event.data.id === "string"
-      ? event.data.id
-      : null;
-  return raw ?? crypto.randomUUID();
+  const data = event.data;
+  if (data && typeof data === "object") {
+    if (typeof data.id === "string" && data.id) {
+      return data.id;
+    }
+    // `tool:question` payloads don't carry a generic `id` field — fall back to
+    // the provider's `toolUseId` so the same question keeps a stable client id
+    // across fetches/reloads instead of churning on every refresh.
+    if (event.type === "tool:question" && typeof data.toolUseId === "string" && data.toolUseId) {
+      return `tool:question:${data.toolUseId}`;
+    }
+  }
+  return crypto.randomUUID();
+}
+
+type AssistantSegment = {
+  type: "text" | "question";
+  content: string;
+};
+
+function mergeAdjacentTextSegment(segments: AssistantSegment[], text: string): void {
+  if (!text) return;
+  const last = segments.at(-1);
+  if (last?.type === "text") {
+    last.content += text;
+    return;
+  }
+  segments.push({ type: "text", content: text });
+}
+
+function longestOverlapSuffixPrefix(left: string, right: string): number {
+  const max = Math.min(left.length, right.length);
+  for (let len = max; len > 0; len -= 1) {
+    if (left.endsWith(right.slice(0, len))) {
+      return len;
+    }
+  }
+  return 0;
+}
+
+function recoverMissingTextParts(
+  streamed: string,
+  outputText: string,
+): { prefix: string; suffix: string } {
+  if (!outputText) {
+    return { prefix: "", suffix: "" };
+  }
+
+  if (!streamed) {
+    return { prefix: outputText, suffix: "" };
+  }
+
+  if (outputText === streamed) {
+    return { prefix: "", suffix: "" };
+  }
+
+  const exactIndex = outputText.indexOf(streamed);
+  if (exactIndex !== -1) {
+    return {
+      prefix: outputText.slice(0, exactIndex),
+      suffix: outputText.slice(exactIndex + streamed.length),
+    };
+  }
+
+  if (outputText.startsWith(streamed)) {
+    return { prefix: "", suffix: outputText.slice(streamed.length) };
+  }
+
+  if (outputText.endsWith(streamed)) {
+    return { prefix: outputText.slice(0, outputText.length - streamed.length), suffix: "" };
+  }
+
+  const suffixOverlap = longestOverlapSuffixPrefix(streamed, outputText);
+  const appendCandidate = outputText.slice(suffixOverlap);
+  const prefixOverlap = longestOverlapSuffixPrefix(outputText, streamed);
+  const prependCandidate = outputText.slice(0, outputText.length - prefixOverlap);
+
+  if (appendCandidate.length <= prependCandidate.length) {
+    return { prefix: "", suffix: appendCandidate };
+  }
+
+  return { prefix: prependCandidate, suffix: "" };
 }
 
 /**
@@ -321,6 +490,16 @@ async function getAdapterForRuntimeId(runtimeId: string): Promise<RuntimeAdapter
 }
 
 export const chatRouter = new Hono();
+
+/**
+ * Per-conversation AbortController registry. Populated before dispatching the
+ * runtime `run`/`resume` call and cleared in the route's finally block.
+ * The `/:conversationId/abort` endpoint looks up the controller and calls
+ * `.abort()`, which propagates through the Claude adapter (AbortController on
+ * SDK query options, `kill()` on the CLI spawn) and surfaces to the client as
+ * `chat:error` with code `"aborted"`.
+ */
+const activeChatRuns = new Map<string, AbortController>();
 
 // ── Session CRUD ───────────────────────────────────────────
 
@@ -518,6 +697,19 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 
       const messages: ChatSessionMessage[] = runtimeEvents
         .map((event) => {
+          if (event.type === "tool:question") {
+            const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
+            if (!payload) return null;
+            const rendered = formatToolQuestion(payload);
+            if (!rendered || !rendered.trim()) return null;
+            return {
+              id: eventId(event),
+              sessionId: id,
+              role: "assistant" as const,
+              content: rendered,
+              createdAt: event.timestamp,
+            } as ChatSessionMessage;
+          }
           const role = eventRole(event);
           const content = event.message ?? "";
           if (!role || !content.trim()) return null;
@@ -589,6 +781,19 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 
         const runtimeMessages: ChatSessionMessage[] = runtimeEvents
           .map((event) => {
+            if (event.type === "tool:question") {
+              const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
+              if (!payload) return null;
+              const rendered = formatToolQuestion(payload);
+              if (!rendered || !rendered.trim()) return null;
+              return {
+                id: eventId(event),
+                sessionId: id,
+                role: "assistant" as const,
+                content: rendered,
+                createdAt: event.timestamp,
+              } as ChatSessionMessage;
+            }
             const role = eventRole(event);
             const rawContent = event.message ?? "";
             const content = extractMessageContent(rawContent, adapter);
@@ -687,108 +892,156 @@ chatRouter.get("/sessions/:sessionId/attachments/:filename", async (c) => {
 });
 
 // POST /chat
+// POST /chat/:conversationId/abort — interrupt an in-flight chat run.
+chatRouter.post("/:conversationId/abort", async (c) => {
+  const conversationId = c.req.param("conversationId");
+  const controller = activeChatRuns.get(conversationId);
+  if (!controller) {
+    log.debug(
+      { conversationId },
+      "DEBUG [chat-route] abort requested for unknown or completed conversation",
+    );
+    return c.json({ error: "Conversation not found or already completed" }, 404);
+  }
+  controller.abort();
+  activeChatRuns.delete(conversationId);
+  log.info({ conversationId }, "INFO [chat-route] Chat run aborted by user");
+  return c.body(null, 204);
+});
+
 chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
   const body = c.req.valid("json") as ChatRequestPayload;
   const { projectId, message, clientId, conversationId, explore, taskId, attachments } = body;
   let { sessionId: inputSessionId } = body;
   const env = getEnv();
 
-  const project = findProjectById(projectId);
-  if (!project) {
-    return c.json({ error: "Project not found" }, 404);
-  }
+  // Register the AbortController BEFORE any slow work (project lookup, runtime
+  // resolution, session auto-create). This closes the window where an early
+  // Stop click from the client would hit `/abort` with a 404 because the
+  // controller wasn't registered yet, letting the `/chat` request continue
+  // running. If `.abort()` fires before `adapter.run()` is reached, the
+  // already-aborted signal propagates into the run and trips the catch below.
+  const chatConversationId = conversationId ?? crypto.randomUUID();
+  const abortController = new AbortController();
+  activeChatRuns.set(chatConversationId, abortController);
 
-  // Resolve currently open task for context injection
-  let currentTask: Task | null = null;
-  if (taskId) {
-    const row = findTaskById(taskId);
-    if (row) currentTask = toTaskResponse(row);
-  }
+  let chatSessionId: string | null = null;
+  let runtimeId: string | undefined;
+  let runtimeProfileId: string | null | undefined;
+  let runtimeProviderId: string | undefined;
+  // Hoisted so the abort branch can persist any partial streamed output.
+  let fullAssistantResponse = "";
+  // Captured from the runtime `system:init` event so the abort branch can
+  // link the DB chat session to the runtime session even when the run never
+  // completed. Without this, aborting the first turn of a fresh chat would
+  // break runtime continuity — the next turn would have no resume context.
+  let runtimeSessionIdFromEvents: string | null = null;
+  // Hoisted so the abort branch can surface server-resolved attachment paths
+  // to the client — without this, an aborted run with uploads would leave the
+  // user bubble with a path-less chip until the session is reopened.
+  let savedAttachments: ChatMessageAttachment[] | undefined;
 
-  const systemAppend = buildContextAppend(project.name, currentTask);
-  const runtimeResolution = await resolveChatRuntimeAdapter(projectId, message, systemAppend);
-  const runtimeContext = runtimeResolution.context;
-  const adapter = runtimeContext.adapter;
-  const runtimeId = runtimeContext.resolvedProfile.runtimeId;
-  const runtimeProfileId = runtimeContext.resolvedProfile.profileId;
-  const runtimeProviderId = runtimeContext.resolvedProfile.providerId;
+  try {
+    const project = findProjectById(projectId);
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
 
-  // Resolve or auto-create a chat session
-  let chatSessionId = inputSessionId ?? null;
-  const incomingVirtual = chatSessionId ? parseVirtualRuntimeSessionId(chatSessionId) : null;
+    // Resolve currently open task for context injection
+    let currentTask: Task | null = null;
+    if (taskId) {
+      const row = findTaskById(taskId);
+      if (row) currentTask = toTaskResponse(row);
+    }
 
-  // External runtime sessions are virtual — create a DB session linked to the runtime session
-  if (incomingVirtual) {
-    const autoTitle = message.slice(0, 80);
-    const session = createChatSession({
-      projectId,
-      title: autoTitle,
-      runtimeProfileId,
-      runtimeSessionId: incomingVirtual.sessionId,
+    const baseSystemAppend = buildContextAppend(project.name, currentTask);
+    const runtimeResolution = await resolveChatRuntimeAdapter(projectId, message, baseSystemAppend);
+    const runtimeContext = runtimeResolution.context;
+    const adapter = runtimeContext.adapter;
+    runtimeId = runtimeContext.resolvedProfile.runtimeId;
+    runtimeProfileId = runtimeContext.resolvedProfile.profileId;
+    runtimeProviderId = runtimeContext.resolvedProfile.providerId;
+    const chatRuntimeCaps = resolveAdapterCapabilities(
+      adapter,
+      runtimeContext.resolvedProfile.transport,
+    );
+    const systemAppend = buildContextAppend(project.name, currentTask, {
+      interactiveQuestions: chatRuntimeCaps.supportsInteractiveQuestions === true,
     });
-    if (session) {
-      chatSessionId = session.id;
-      updateChatSession(session.id, {
+
+    // Resolve or auto-create a chat session
+    chatSessionId = inputSessionId ?? null;
+    const incomingVirtual = chatSessionId ? parseVirtualRuntimeSessionId(chatSessionId) : null;
+
+    // External runtime sessions are virtual — create a DB session linked to the runtime session
+    if (incomingVirtual) {
+      const autoTitle = message.slice(0, 80);
+      const session = createChatSession({
+        projectId,
+        title: autoTitle,
         runtimeProfileId,
         runtimeSessionId: incomingVirtual.sessionId,
       });
-      broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
-    } else {
-      chatSessionId = null;
+      if (session) {
+        chatSessionId = session.id;
+        updateChatSession(session.id, {
+          runtimeProfileId,
+          runtimeSessionId: incomingVirtual.sessionId,
+        });
+        broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
+      } else {
+        chatSessionId = null;
+      }
+    } else if (chatSessionId) {
+      const existing = findChatSessionById(chatSessionId);
+      if (!existing) {
+        log.debug("Provided sessionId=%s not found, will auto-create", chatSessionId);
+        chatSessionId = null;
+      }
     }
-  } else if (chatSessionId) {
-    const existing = findChatSessionById(chatSessionId);
-    if (!existing) {
-      log.debug("Provided sessionId=%s not found, will auto-create", chatSessionId);
-      chatSessionId = null;
+
+    if (!chatSessionId) {
+      const autoTitle = message.slice(0, 80);
+      const session = createChatSession({
+        projectId,
+        title: autoTitle,
+        runtimeProfileId,
+      });
+      chatSessionId = session?.id ?? null;
+      if (session) {
+        broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
+      }
     }
-  }
 
-  if (!chatSessionId) {
-    const autoTitle = message.slice(0, 80);
-    const session = createChatSession({
-      projectId,
-      title: autoTitle,
-      runtimeProfileId,
-    });
-    chatSessionId = session?.id ?? null;
-    if (session) {
-      broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
+    log.info(
+      {
+        projectId,
+        clientId: clientId ?? null,
+        conversationId: chatConversationId,
+        sessionId: chatSessionId,
+        runtimeId,
+        runtimeProfileId,
+        runtimeProviderId,
+        logNamespace: API_RUNTIME_LOG,
+        explore,
+        taskId,
+      },
+      "INFO [api-runtime] Chat request started",
+    );
+
+    const dbSession = chatSessionId ? findChatSessionById(chatSessionId) : null;
+    const resumeRuntimeSessionId =
+      dbSession?.runtimeSessionId ?? dbSession?.agentSessionId ?? undefined;
+
+    if (chatSessionId && !attachments?.length) {
+      createChatMessage({ sessionId: chatSessionId, role: "user", content: message });
     }
-  }
+    if (chatSessionId) {
+      updateChatSessionTimestamp(chatSessionId);
+    }
 
-  const chatConversationId = conversationId ?? crypto.randomUUID();
-  log.info(
-    {
-      projectId,
-      clientId: clientId ?? null,
-      conversationId: chatConversationId,
-      sessionId: chatSessionId,
-      runtimeId,
-      runtimeProfileId,
-      runtimeProviderId,
-      logNamespace: API_RUNTIME_LOG,
-      explore,
-      taskId,
-    },
-    "INFO [api-runtime] Chat request started",
-  );
-
-  const dbSession = chatSessionId ? findChatSessionById(chatSessionId) : null;
-  const resumeRuntimeSessionId =
-    dbSession?.runtimeSessionId ?? dbSession?.agentSessionId ?? undefined;
-
-  if (chatSessionId && !attachments?.length) {
-    createChatMessage({ sessionId: chatSessionId, role: "user", content: message });
-  }
-  if (chatSessionId) {
-    updateChatSessionTimestamp(chatSessionId);
-  }
-
-  try {
     // Persist file attachments to disk and build prompt with paths
     let prompt = explore ? `/aif-explore ${message}` : message;
-    let savedAttachments: ChatMessageAttachment[] | undefined;
     if (attachments?.length && chatSessionId) {
       const persisted = await persistAttachments(attachments, {
         projectRoot: project.rootPath,
@@ -816,8 +1069,19 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     }
 
     const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
-    let fullAssistantResponse = "";
-    let hasStreamedTokens = false;
+    // Preserve assistant-turn event order as text/question segments:
+    //   * question blocks are buffered and flushed before the next text delta
+    //     (or at turn end), so a stream like text→question→text stays ordered.
+    //   * recovery-path merges missing text from `result.outputText` with
+    //     streamed deltas via suffix/prefix overlap and flushes buffered
+    //     questions after recovered text, keeping intro-before-question.
+    //   * DB persistence writes each ordered segment as a separate assistant
+    //     row so replay shape matches runtime history (`session-message` +
+    //     per-question `tool:question`) and dedupe remains stable on reload.
+    let streamedText = "";
+    let streamedTextLength = 0;
+    const assistantSegments: AssistantSegment[] = [];
+    const pendingQuestionBlocks: string[] = [];
 
     const sendToken = (text: string) => {
       if (!clientId) return;
@@ -828,16 +1092,88 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       sendToClient(clientId, tokenEvent);
     };
 
+    const seenToolPromptIds = new Set<string>();
+
+    const flushPendingQuestionBlocks = () => {
+      for (const block of pendingQuestionBlocks) {
+        sendToken(block);
+        assistantSegments.push({ type: "question", content: block });
+        fullAssistantResponse = assistantSegments.map((segment) => segment.content).join("");
+      }
+      pendingQuestionBlocks.length = 0;
+    };
+
     const onRuntimeEvent = (event: RuntimeEvent) => {
       if (event.type === "stream:text" && event.message) {
-        hasStreamedTokens = true;
-        fullAssistantResponse += event.message;
+        flushPendingQuestionBlocks();
+        streamedTextLength += event.message.length;
+        streamedText += event.message;
+        mergeAdjacentTextSegment(assistantSegments, event.message);
+        fullAssistantResponse = assistantSegments.map((segment) => segment.content).join("");
         sendToken(event.message);
         return;
       }
 
       if (event.type === "tool:summary" && event.message) {
         sendToken(`\n\n> ${event.message}\n\n`);
+        return;
+      }
+
+      if (event.type === "tool:question") {
+        const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
+        if (!payload) return;
+        if (payload.toolUseId && seenToolPromptIds.has(payload.toolUseId)) return;
+        const rendered = formatToolQuestion(payload);
+        if (rendered) {
+          log.debug(
+            {
+              tool: payload.toolName,
+              conversationId: chatConversationId,
+              questionCount: payload.questions.length,
+            },
+            "DEBUG [chat] tool:question rendered",
+          );
+          pendingQuestionBlocks.push(rendered);
+          if (payload.toolUseId) seenToolPromptIds.add(payload.toolUseId);
+        }
+        return;
+      }
+
+      if (event.type === "tool:use") {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        const toolName = typeof data.name === "string" ? data.name : null;
+        if (!toolName) return;
+        if (data.interactive === true) {
+          // Adapter will emit a correlated `tool:question` event for interactive
+          // tools — skip the raw tool:use so we don't render both a `> Tool` line
+          // and the question block. Runtime-neutral: branches on an event flag,
+          // not a provider-specific tool name.
+          return;
+        }
+        if (NOISY_TOOL_NAMES.has(toolName) || toolName.startsWith("mcp__handoff__")) {
+          log.debug(
+            { tool: toolName, conversationId: chatConversationId },
+            "DEBUG [chat] tool:use suppressed (noisy)",
+          );
+          return;
+        }
+        log.debug(
+          { tool: toolName, conversationId: chatConversationId, hasQuestion: false },
+          "DEBUG [chat] tool:use forwarded",
+        );
+        sendToken(`\n\n> 🔧 ${toolName}\n\n`);
+      }
+
+      // Capture the runtime session id as soon as the adapter emits it, so
+      // the abort branch can persist a DB→runtime session link even when
+      // adapter.run() never resolves. Without this, aborting the first turn
+      // of a fresh chat would leave the DB session without runtimeSessionId
+      // and the next turn would dispatch with no resume context.
+      if (event.type === "system:init" && event.data) {
+        const sid = event.data.sessionId;
+        if (typeof sid === "string" && sid) {
+          runtimeSessionIdFromEvents = sid;
+        }
       }
     };
 
@@ -880,6 +1216,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         onEvent: onRuntimeEvent,
         systemPromptAppend: systemAppend,
         bypassPermissions,
+        abortController,
         environment: {
           HANDOFF_MODE: "1",
           ...(taskId ? { HANDOFF_TASK_ID: taskId } : {}),
@@ -930,22 +1267,39 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       );
     }
 
-    if (!hasStreamedTokens && result.outputText) {
-      fullAssistantResponse += result.outputText;
-      sendToken(result.outputText);
+    // Recover assistant text that never arrived as `stream:text` deltas.
+    // Claude CLI partial-messages can emit a mix where only part of assistant
+    // text arrives as deltas and the rest remains in `result.outputText`.
+    // Merge missing prefix/suffix fragments and emit them before any pending
+    // question blocks to keep intro-before-question ordering.
+    const recovered = recoverMissingTextParts(streamedText, result.outputText ?? "");
+    if (recovered.prefix) {
+      mergeAdjacentTextSegment(assistantSegments, recovered.prefix);
+      sendToken(recovered.prefix);
     }
+    if (recovered.suffix) {
+      mergeAdjacentTextSegment(assistantSegments, recovered.suffix);
+      sendToken(recovered.suffix);
+    }
+    if (streamedTextLength === 0 && !streamedText && result.outputText) {
+      streamedText = result.outputText;
+    }
+    flushPendingQuestionBlocks();
 
-    // Persist assistant response in local chat history for both fresh and resumed runtime sessions.
-    // Trim leading/trailing whitespace so the stored content matches what
-    // Claude's session-file parser returns (which does `.trim()`), keeping
-    // mergeRuntimeAndDbMessages dedupe consistent on page reload.
-    const persistedAssistantResponse = fullAssistantResponse.trim();
-    if (chatSessionId && persistedAssistantResponse) {
-      createChatMessage({
-        sessionId: chatSessionId,
-        role: "assistant",
-        content: persistedAssistantResponse,
-      });
+    fullAssistantResponse = assistantSegments.map((segment) => segment.content).join("");
+
+    // Persist each ordered assistant segment separately. Keeping the same
+    // split shape as runtime replay makes mergeRuntimeAndDbMessages stable.
+    if (chatSessionId) {
+      for (const segment of assistantSegments) {
+        const trimmed = segment.content.trim();
+        if (!trimmed) continue;
+        createChatMessage({
+          sessionId: chatSessionId,
+          role: "assistant",
+          content: trimmed,
+        });
+      }
     }
     if (chatSessionId) {
       updateChatSessionTimestamp(chatSessionId);
@@ -979,6 +1333,69 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       ...(savedAttachments?.length ? { attachments: savedAttachments } : {}),
     });
   } catch (err) {
+    const aborted = abortController.signal.aborted || isAbortError(err);
+    if (aborted) {
+      // Persist any tokens streamed before the abort so the partial assistant
+      // reply survives reload. Without this, a fresh session stopped mid-stream
+      // would lose visible output.
+      const partial = fullAssistantResponse.trim();
+      if (chatSessionId && partial) {
+        createChatMessage({ sessionId: chatSessionId, role: "assistant", content: partial });
+        updateChatSessionTimestamp(chatSessionId);
+      }
+      // Link the DB chat session to the runtime session the adapter started
+      // before we aborted, so the next turn can resume instead of starting
+      // a brand-new runtime thread and losing continuity.
+      if (chatSessionId && runtimeSessionIdFromEvents) {
+        updateChatSession(chatSessionId, {
+          runtimeProfileId: runtimeProfileId ?? null,
+          runtimeSessionId: runtimeSessionIdFromEvents,
+        });
+      }
+      log.info(
+        {
+          runtimeId,
+          runtimeProfileId,
+          conversationId: chatConversationId,
+          partial: partial.length,
+          runtimeSessionId: runtimeSessionIdFromEvents,
+        },
+        "INFO [chat-route] Chat run aborted",
+      );
+      const abortedEvent: WsEvent = {
+        type: "chat:error",
+        payload: {
+          conversationId: chatConversationId,
+          message: "Chat run aborted by user",
+          code: "aborted",
+        },
+      };
+      const doneEvent: WsEvent = {
+        type: "chat:done",
+        payload: { conversationId: chatConversationId },
+      };
+      if (clientId) {
+        sendToClient(clientId, abortedEvent);
+        sendToClient(clientId, doneEvent);
+      }
+      return c.json(
+        {
+          error: "Chat run aborted by user",
+          code: "aborted",
+          conversationId: chatConversationId,
+          sessionId: chatSessionId,
+          // Expose the partial assistant reply so clients without an active
+          // WebSocket can render what was saved server-side. Mirrors the
+          // success path's `assistantMessage`.
+          assistantMessage: partial.length > 0 ? partial : null,
+          // Echo server-resolved attachments so the optimistic user bubble
+          // can upgrade its chips with download paths even on abort.
+          ...(savedAttachments?.length ? { attachments: savedAttachments } : {}),
+        },
+        409,
+      );
+    }
+
     log.error(
       { err, runtimeId, runtimeProfileId, runtimeProviderId, conversationId: chatConversationId },
       "Chat request failed",
@@ -1006,5 +1423,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     }
 
     return c.json({ error: classified.message, code: classified.code }, classified.status);
+  } finally {
+    activeChatRuns.delete(chatConversationId);
   }
 });

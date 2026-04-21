@@ -70,6 +70,10 @@ Every adapter must declare a `usageReporting` value in its `RuntimeCapabilities`
 
 All successful runs that produce non-null usage flow through the registry's `usageSink`, which persists them to the `usage_events` table and rolls them up into per-task / per-project / per-chat-session aggregates. Sink wiring lives in `packages/api/src/services/runtime.ts` (API) and `packages/agent/src/index.ts` / `subagentQuery.ts` (agent) — both use `createDbUsageSink()` from `@aif/data`.
 
+### Interactive questions capability
+
+Optional `supportsInteractiveQuestions` flag in `RuntimeCapabilities` declares that the adapter emits runtime-neutral `tool:question` events (e.g. Claude's `AskUserQuestion`). Consumers — notably the chat route — use this flag to gate provider-specific prompt scaffolding (`CHAT_ASKUSERQUESTION_HINT` is only injected into `systemPromptAppend` when the resolved adapter declares the capability). Claude (SDK + CLI) sets the flag; Claude API, Codex, OpenCode, and OpenRouter leave it unset (defaults to `false`). Adapters that add interactive tool parsing must also call `buildToolUseEvents()` with a `questionPayload` so the rendered shape stays identical across runtimes.
+
 ### Transport Types
 
 | Transport | Description                           | Example                                  |
@@ -199,6 +203,69 @@ Invalid `options.approvalPolicy` / `options.sandboxMode` values are ignored with
   "apiKeyEnvVar": "OPENAI_API_KEY",
   "enabled": true
 }
+```
+
+### Codex OAuth login in Docker (broker)
+
+Running `codex login` directly inside the `agent` container starts an HTTP
+listener on `127.0.0.1:1455` waiting for the OAuth callback. Because container
+loopback is not reachable from the host browser, the flow stalls. As of
+codex `0.118`, the CLI does not expose a flag to bind the listener to another
+interface (verified against `codex login --help`).
+
+To bridge this, the agent ships a small HTTP broker (`packages/agent/src/codex/loginBroker.ts`)
+that runs alongside the coordinator when `AIF_ENABLE_CODEX_LOGIN_PROXY=true`:
+
+```
+[Browser]
+  ├─ GET auth URL → ChatGPT OAuth
+  └─ redirect: http://localhost:1455/?code=…&state=…  (fails on host)
+  ▼ user copies URL into the UI
+[API /auth/codex/login/*]  (zod + SSRF guard)
+  ▼ proxies over docker network
+[Agent :3010 broker]
+  ├─ start    → spawn `codex login`, parse auth URL
+  ├─ callback → fetch 127.0.0.1:1455/?code=…&state=…  (own loopback)
+  └─ cancel   → SIGTERM child
+```
+
+**Endpoints** (api-side, all behind the feature flag):
+
+| Method | Path                         | Purpose                                             |
+| ------ | ---------------------------- | --------------------------------------------------- |
+| GET    | `/auth/codex/capabilities`   | Always mounted. Returns `{loginProxyEnabled}`.      |
+| POST   | `/auth/codex/login/start`    | Spawn `codex login`, return the auth URL.           |
+| POST   | `/auth/codex/login/callback` | Forward the user-pasted redirect URL to the broker. |
+| POST   | `/auth/codex/login/cancel`   | SIGTERM the active child process.                   |
+| GET    | `/auth/codex/login/status`   | Poll while a session is active.                     |
+
+**Security guards** (defence in depth — enforced in **both** api and broker):
+
+- `scheme = http`, `host ∈ {127.0.0.1, localhost}`, `port = AIF_CODEX_LOGIN_LOOPBACK_PORT` (default `1455`).
+- Query must include both `code` and `state`; `state` must match what the broker captured from the spawned CLI.
+- One-shot session: repeat `start` without `cancel`/success → `409 session_already_active`.
+- Broker binds `0.0.0.0:3010` but is **not** port-mapped to the host in compose; only services on the same docker network can reach it.
+- Logs redact `code` / `state` before write (`***redacted***`).
+
+**Environment variables:**
+
+| Variable                        | Default             | Purpose                                          |
+| ------------------------------- | ------------------- | ------------------------------------------------ |
+| `AIF_ENABLE_CODEX_LOGIN_PROXY`  | `false`             | Enable broker + `/auth/codex/*` routes.          |
+| `AIF_CODEX_LOGIN_BROKER_PORT`   | `3010`              | Port the broker listens on inside the container. |
+| `AIF_CODEX_LOGIN_LOOPBACK_PORT` | `1455`              | Port the codex CLI binds for its callback.       |
+| `AGENT_INTERNAL_URL`            | `http://agent:3010` | Base URL the api uses to reach the broker.       |
+
+**Production guidance:** the broker is a dev-only convenience. In production,
+set `AIF_ENABLE_CODEX_LOGIN_PROXY=false` (the default in `docker-compose.production.yml`)
+and provision `OPENAI_API_KEY` via `.env` instead.
+
+**Fallback CLI:** the agent image ships a helper at `/usr/local/bin/aif-codex-callback`
+that validates the callback URL (same allowlist) and forwards it to the codex
+loopback. Use it when the broker or UI is unavailable:
+
+```bash
+docker compose exec agent aif-codex-callback "http://localhost:1455/?code=…&state=…"
 ```
 
 ### Bypass semantics (AGENT_BYPASS_PERMISSIONS)

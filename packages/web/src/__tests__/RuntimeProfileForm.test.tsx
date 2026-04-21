@@ -11,6 +11,12 @@ vi.mock("@/hooks/useRuntimeProfiles", () => ({
   useRuntimeModels: () => mockRuntimeModels,
 }));
 
+// CodexLoginCard depends on React Query; the form tests don't provide a
+// QueryClient, so we stub the card to an empty render.
+vi.mock("@/components/settings/CodexLoginCard", () => ({
+  CodexLoginCard: () => null,
+}));
+
 const { RuntimeProfileForm } = await import("@/components/settings/RuntimeProfileForm");
 
 function createRuntimeDescriptor(overrides: Partial<RuntimeDescriptor>): RuntimeDescriptor {

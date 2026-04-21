@@ -3,13 +3,27 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 
 const mockSendChatMessage = vi.fn();
 const mockGetChatSessionMessages = vi.fn();
+const mockAbortChat = vi.fn();
 const mockGetWsClientId = vi.fn();
 const WS_CLIENT_ID_WAIT_TIMEOUT_MS = 500;
 
+class ApiError extends Error {
+  status: number;
+  data?: unknown;
+  constructor(message: string, status: number, data?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
 vi.mock("@/lib/api", () => ({
+  ApiError,
   api: {
     sendChatMessage: (...args: unknown[]) => mockSendChatMessage(...args),
     getChatSessionMessages: (...args: unknown[]) => mockGetChatSessionMessages(...args),
+    abortChat: (...args: unknown[]) => mockAbortChat(...args),
   },
 }));
 
@@ -23,6 +37,8 @@ describe("useChat", () => {
   beforeEach(() => {
     mockSendChatMessage.mockReset();
     mockGetChatSessionMessages.mockReset();
+    mockAbortChat.mockReset();
+    mockAbortChat.mockResolvedValue(undefined);
     mockGetWsClientId.mockReset();
     mockGetWsClientId.mockReturnValue("test-client-id");
     mockSendChatMessage.mockResolvedValue({ conversationId: "conv-1", sessionId: "sess-1" });
@@ -376,6 +392,344 @@ describe("useChat", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("abort targets the currently viewed session when multiple streams are in flight", async () => {
+    // Stream A: pending on session "sess-A"
+    let resolveA: ((v: { conversationId: string; sessionId: string }) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveA = resolve;
+        }),
+    );
+    // Stream B: pending on session "sess-B"
+    let resolveB: ((v: { conversationId: string; sessionId: string }) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveB = resolve;
+        }),
+    );
+
+    // Hook A bound to session A; Hook B to session B — they share the abort registry
+    // via activeStreamsRef only within one hook instance, so simulate the real scenario
+    // with a single hook switching its viewed session.
+    const { result, rerender } = renderHook(
+      ({ sid }: { sid: string | null }) => useChat("p-1", sid),
+      { initialProps: { sid: "sess-A" as string | null } },
+    );
+
+    // Start stream for session A
+    let sendAPromise: Promise<void>;
+    act(() => {
+      sendAPromise = result.current.sendMessage("A");
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(1));
+    const convA = mockSendChatMessage.mock.calls[0][0].conversationId as string;
+
+    // Switch to session B — wait for the effect to clear isStreaming — then send
+    await act(async () => {
+      rerender({ sid: "sess-B" });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    let sendBPromise: Promise<void>;
+    act(() => {
+      sendBPromise = result.current.sendMessage("B");
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(2));
+    const convB = mockSendChatMessage.mock.calls[1][0].conversationId as string;
+
+    // Switch back to A and hit Stop — must abort A's conversation, not B's
+    rerender({ sid: "sess-A" });
+    await act(async () => {
+      await result.current.abortStream();
+    });
+
+    expect(mockAbortChat).toHaveBeenCalledTimes(1);
+    expect(mockAbortChat).toHaveBeenCalledWith(convA);
+    expect(convA).not.toBe(convB);
+
+    // Clean up pending promises
+    await act(async () => {
+      resolveA?.({ conversationId: convA, sessionId: "sess-A" });
+      resolveB?.({ conversationId: convB, sessionId: "sess-B" });
+      await sendAPromise;
+      await sendBPromise;
+    });
+  });
+
+  it("resolves the active session when aborting the first message in a new chat", async () => {
+    const handleSessionResolved = vi.fn();
+    mockSendChatMessage.mockRejectedValueOnce(
+      new ApiError("Chat run aborted by user", 409, {
+        code: "aborted",
+        sessionId: "sess-new-1",
+        conversationId: "conv-new-1",
+      }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1", null, null, handleSessionResolved));
+
+    await act(async () => {
+      await result.current.sendMessage("Hello");
+    });
+
+    expect(handleSessionResolved).toHaveBeenCalledWith("sess-new-1");
+  });
+
+  it("rolls back the optimistic first message when abort returns without sessionId", async () => {
+    mockSendChatMessage.mockRejectedValueOnce(
+      new ApiError("Chat run aborted by user", 409, {
+        code: "aborted",
+        sessionId: null,
+        conversationId: "conv-new-orphan-1",
+      }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1"));
+
+    await act(async () => {
+      await result.current.sendMessage("Hello");
+    });
+
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.chatErrorCode).toBe("aborted");
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("does not clear Stop or show Stopped on session B when session A's run aborts in the background", async () => {
+    // Stream A: resolvable by us, simulates A's HTTP settling after user switches away
+    let rejectA: ((reason?: unknown) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectA = reject;
+        }),
+    );
+    // Stream B: pending forever for this test
+    let resolveB: ((v: { conversationId: string; sessionId: string }) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveB = resolve;
+        }),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ sid }: { sid: string | null }) => useChat("p-1", sid),
+      { initialProps: { sid: "sess-A" as string | null } },
+    );
+
+    // Kick off stream for A
+    let sendAPromise: Promise<void>;
+    act(() => {
+      sendAPromise = result.current.sendMessage("A");
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(1));
+    const convA = mockSendChatMessage.mock.calls[0][0].conversationId as string;
+
+    // Switch to B and kick off its stream
+    await act(async () => {
+      rerender({ sid: "sess-B" });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    let sendBPromise: Promise<void>;
+    act(() => {
+      sendBPromise = result.current.sendMessage("B");
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(2));
+
+    // While the user is still viewing B, A's HTTP request aborts with 409.
+    await act(async () => {
+      rejectA!(
+        new ApiError("Chat run aborted by user", 409, {
+          code: "aborted",
+          sessionId: "sess-A",
+          conversationId: convA,
+          assistantMessage: null,
+        }),
+      );
+      await sendAPromise;
+    });
+
+    // B is still streaming — Stop must stay, no "Stopped" banner must appear.
+    expect(result.current.isStreaming).toBe(true);
+    expect(result.current.chatErrorCode).toBeNull();
+
+    // Clean up
+    await act(async () => {
+      resolveB?.({ conversationId: "conv-B", sessionId: "sess-B" });
+      await sendBPromise;
+    });
+  });
+
+  it("appends the partial assistant reply from the 409 abort body when no WS tokens arrived", async () => {
+    mockGetWsClientId.mockReturnValue(null);
+    mockSendChatMessage.mockRejectedValueOnce(
+      new ApiError("Chat run aborted by user", 409, {
+        code: "aborted",
+        sessionId: "sess-partial-1",
+        conversationId: "conv-partial-1",
+        assistantMessage: "half-written answer",
+      }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1"));
+
+    await act(async () => {
+      await result.current.sendMessage("question");
+    });
+
+    expect(result.current.messages).toEqual([
+      { role: "user", content: "question" },
+      { role: "assistant", content: "half-written answer" },
+    ]);
+    expect(result.current.chatErrorCode).toBe("aborted");
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("upgrades user message attachments from the 409 abort body", async () => {
+    mockSendChatMessage.mockRejectedValueOnce(
+      new ApiError("Chat run aborted by user", 409, {
+        code: "aborted",
+        sessionId: "sess-att-1",
+        conversationId: "conv-att-1",
+        attachments: [
+          {
+            name: "plan.md",
+            mimeType: "text/markdown",
+            size: 12,
+            path: "storage/chat/s1/plan.md",
+          },
+        ],
+      }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1"));
+
+    await act(async () => {
+      await result.current.sendMessage("take a look", [
+        { name: "plan.md", mimeType: "text/markdown", size: 12, content: "hello" },
+      ]);
+    });
+
+    const userMessage = result.current.messages.find((m) => m.role === "user");
+    expect(userMessage?.attachments?.[0]).toEqual(
+      expect.objectContaining({
+        name: "plan.md",
+        path: "storage/chat/s1/plan.md",
+      }),
+    );
+  });
+
+  it("upgrades user message attachments when chat:error races ahead of the 409 abort body", async () => {
+    let rejectSend: ((reason?: unknown) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSend = reject;
+        }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1"));
+
+    let sendPromise: Promise<void>;
+    act(() => {
+      sendPromise = result.current.sendMessage("take a look", [
+        { name: "plan.md", mimeType: "text/markdown", size: 12, content: "hello" },
+      ]);
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(1));
+
+    const conversationId = mockSendChatMessage.mock.calls[0][0].conversationId as string;
+
+    // WS `chat:error` with code=aborted arrives first — this clears the
+    // in-flight stream state before the HTTP 409 lands.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("chat:error", {
+          detail: { conversationId, message: "Chat run aborted by user", code: "aborted" },
+        }),
+      );
+    });
+
+    // Then the HTTP request rejects with a 409 carrying server-resolved
+    // attachment paths. The bubble must still pick them up.
+    await act(async () => {
+      rejectSend!(
+        new ApiError("Chat run aborted by user", 409, {
+          code: "aborted",
+          sessionId: "sess-race-1",
+          conversationId,
+          attachments: [
+            {
+              name: "plan.md",
+              mimeType: "text/markdown",
+              size: 12,
+              path: "storage/chat/s1/plan.md",
+            },
+          ],
+        }),
+      );
+      await sendPromise;
+    });
+
+    const userMessage = result.current.messages.find((m) => m.role === "user");
+    expect(userMessage?.attachments?.[0]).toEqual(
+      expect.objectContaining({
+        name: "plan.md",
+        path: "storage/chat/s1/plan.md",
+      }),
+    );
+    expect(result.current.chatErrorCode).toBe("aborted");
+  });
+
+  it("appends assistantMessage when chat:error races ahead of the 409 abort body", async () => {
+    let rejectSend: ((reason?: unknown) => void) | null = null;
+    mockSendChatMessage.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSend = reject;
+        }),
+    );
+
+    const { result } = renderHook(() => useChat("p-1"));
+
+    let sendPromise: Promise<void>;
+    act(() => {
+      sendPromise = result.current.sendMessage("question");
+    });
+    await waitFor(() => expect(mockSendChatMessage).toHaveBeenCalledTimes(1));
+
+    const conversationId = mockSendChatMessage.mock.calls[0][0].conversationId as string;
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("chat:error", {
+          detail: { conversationId, message: "Chat run aborted by user", code: "aborted" },
+        }),
+      );
+    });
+
+    await act(async () => {
+      rejectSend!(
+        new ApiError("Chat run aborted by user", 409, {
+          code: "aborted",
+          sessionId: "sess-race-assistant-1",
+          conversationId,
+          assistantMessage: "half-written answer",
+        }),
+      );
+      await sendPromise;
+    });
+
+    expect(result.current.messages).toEqual([
+      { role: "user", content: "question" },
+      { role: "assistant", content: "half-written answer" },
+    ]);
+    expect(result.current.chatErrorCode).toBe("aborted");
+    expect(result.current.isStreaming).toBe(false);
   });
 
   it("toggles explore mode", () => {

@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 const mutateCreateTask = vi.fn();
 
 const mockSettingsData = {
-  data: { useSubagents: true, maxReviewIterations: 3 } as
+  data: { useSubagents: false, maxReviewIterations: 3 } as
     | { useSubagents: boolean; maxReviewIterations: number }
     | undefined,
 };
@@ -50,7 +50,7 @@ const { AddTaskForm } = await import("@/components/kanban/AddTaskForm");
 describe("AddTaskForm", () => {
   beforeEach(() => {
     mutateCreateTask.mockClear();
-    mockSettingsData.data = { useSubagents: true, maxReviewIterations: 3 };
+    mockSettingsData.data = { useSubagents: false, maxReviewIterations: 3 };
     mockDefaultsData.data = undefined;
     mockProjectsData.data = [{ id: "p-1", parallelEnabled: false }];
     mockRuntimeProfilesData.data = [];
@@ -360,12 +360,13 @@ describe("AddTaskForm", () => {
     // Toggle through both planner modes to cover both onChange branches
     fireEvent.click(screen.getByLabelText("Full"));
     fireEvent.click(screen.getByLabelText("Fast"));
+    // Re-enable docs/tests after fast-mode reset flipped them off
     fireEvent.click(screen.getByLabelText("Docs"));
     fireEvent.click(screen.getByLabelText("Tests"));
     fireEvent.change(screen.getByPlaceholderText(".ai-factory/PLAN.md"), {
       target: { value: ".ai-factory/custom-plan.md" },
     });
-    // Toggle skip review and use subagents
+    // Fast mode seeded skipReview=true; toggling once disables it (explicit user intent).
     const checkboxes = screen.getAllByRole("checkbox");
     const skipReviewCheckbox = checkboxes.find((cb) =>
       cb.closest("label")?.textContent?.includes("Skip review"),
@@ -388,10 +389,117 @@ describe("AddTaskForm", () => {
         planPath: ".ai-factory/custom-plan.md",
         planDocs: true,
         planTests: true,
-        skipReview: true,
-        useSubagents: false,
+        skipReview: false,
+        useSubagents: true,
       }),
       expect.any(Object),
     );
+  });
+
+  it("uses fast-mode flag defaults by default (skipReview=true, planDocs=false, planTests=false)", () => {
+    render(<AddTaskForm projectId="p-1" />);
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.change(screen.getByPlaceholderText("Task title"), {
+      target: { value: "Default flags" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(mutateCreateTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plannerMode: "fast",
+        skipReview: true,
+        planDocs: false,
+        planTests: false,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("flips flags to full-mode defaults when switching to Full, and back to fast defaults on Fast", () => {
+    render(<AddTaskForm projectId="p-1" />);
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.click(screen.getByRole("button", { name: "Planner settings" }));
+    fireEvent.click(screen.getByLabelText("Full"));
+    fireEvent.change(screen.getByPlaceholderText("Task title"), {
+      target: { value: "Full mode defaults" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(mutateCreateTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plannerMode: "full",
+        skipReview: false,
+        planDocs: true,
+        planTests: true,
+      }),
+      expect.any(Object),
+    );
+
+    // Simulate onSuccess: form resets to fast-mode defaults.
+    const options = mutateCreateTask.mock.calls[0][1] as { onSuccess?: () => void };
+    act(() => {
+      options.onSuccess?.();
+    });
+    // Reopen the form and submit — should now send fast-mode defaults.
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.change(screen.getByPlaceholderText("Task title"), {
+      target: { value: "After reset" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(mutateCreateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        plannerMode: "fast",
+        skipReview: true,
+        planDocs: false,
+        planTests: false,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  describe("priority picker", () => {
+    it("defaults to None and creates with priority 0", () => {
+      render(<AddTaskForm projectId="p-1" />);
+      fireEvent.click(screen.getByText("Add task"));
+      fireEvent.change(screen.getByPlaceholderText("Task title"), {
+        target: { value: "Default priority" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(mutateCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({ priority: 0 }),
+        expect.any(Object),
+      );
+    });
+
+    it("creates with the chosen priority value", () => {
+      render(<AddTaskForm projectId="p-1" />);
+      fireEvent.click(screen.getByText("Add task"));
+      // Open the priority Select trigger (label "None") and pick "High"
+      fireEvent.click(screen.getByText("None"));
+      fireEvent.click(screen.getByText("High"));
+      fireEvent.change(screen.getByPlaceholderText("Task title"), {
+        target: { value: "High priority task" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(mutateCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "High priority task", priority: 3 }),
+        expect.any(Object),
+      );
+    });
+
+    it("resets priority back to None when dismissed via X and reopened", () => {
+      render(<AddTaskForm projectId="p-1" />);
+      fireEvent.click(screen.getByText("Add task"));
+      fireEvent.click(screen.getByText("None"));
+      fireEvent.click(screen.getByText("Critical"));
+      // Dismiss with the X button
+      const xButtons = screen.getAllByRole("button");
+      const xClose = xButtons.find((b) => b.querySelector("svg.lucide-x"));
+      expect(xClose).toBeDefined();
+      fireEvent.click(xClose!);
+      // Reopen — priority must be back to None
+      fireEvent.click(screen.getByText("Add task"));
+      expect(screen.getByText("None")).toBeDefined();
+      expect(screen.queryByText("Critical")).toBeNull();
+    });
   });
 });

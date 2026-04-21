@@ -133,6 +133,8 @@ export {
   type AifProjectConfig,
   type AifProjectPaths,
   type AifProjectWorkflow,
+  type AifProjectGit,
+  type AifProjectLanguage,
 } from "./projectConfig.js";
 
 // Telegram notifications
@@ -141,6 +143,10 @@ export {
   sendTelegramNotification,
   type TelegramNotificationOptions,
 } from "./telegram.js";
+
+// Planner mode defaults
+export { defaultsForMode } from "./plannerDefaults.js";
+export type { PlannerMode, PlannerFlagDefaults } from "./plannerDefaults.js";
 
 // Utilities
 export { withTimeout } from "./withTimeout.js";

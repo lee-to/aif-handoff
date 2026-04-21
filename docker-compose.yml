@@ -4,12 +4,18 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: api
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "${PORT:-3009}:3009"
     env_file: .env
     environment:
       - DATABASE_URL=/data/aif.sqlite
       - PORT=3009
+      - AIF_ENABLE_CODEX_LOGIN_PROXY=true
+      - AGENT_INTERNAL_URL=http://agent:3010
     volumes:
       - db-data:/data
       - ${PROJECTS_DIR:-./projects}:${PROJECTS_MOUNT:-/home/www}
@@ -22,6 +28,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: web
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "${WEB_PORT:-5180}:80"
     depends_on:
@@ -33,11 +43,20 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: agent
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     env_file: .env
     environment:
       - DATABASE_URL=/data/aif.sqlite
       - API_BASE_URL=http://api:3009
       - AGENT_BYPASS_PERMISSIONS=true
+      - AIF_ENABLE_CODEX_LOGIN_PROXY=true
+      - AIF_CODEX_LOGIN_BROKER_PORT=3010
+      - AGENT_INTERNAL_URL=http://agent:3010
+    expose:
+      - "3010"
     volumes:
       - db-data:/data
       - ${PROJECTS_DIR:-./projects}:${PROJECTS_MOUNT:-/home/www}
@@ -52,6 +71,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: mcp
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "${MCP_PORT:-3100}:3100"
     env_file: .env

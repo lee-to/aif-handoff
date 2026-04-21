@@ -4,6 +4,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: api
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "127.0.0.1:3009:3009"
     env_file: .env
@@ -11,6 +15,8 @@ services:
       - DATABASE_URL=/data/aif.sqlite
       - PORT=3009
       - LOG_LEVEL=info
+      # Codex OAuth login proxy is dev-only. Production should rely on OPENAI_API_KEY.
+      - AIF_ENABLE_CODEX_LOGIN_PROXY=false
     volumes:
       - db-data:/data
       - projects:${PROJECTS_MOUNT:-/home/www}
@@ -47,6 +53,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: web
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
@@ -91,12 +101,18 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: agent
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     env_file: .env
     environment:
       - DATABASE_URL=/data/aif.sqlite
       - API_BASE_URL=http://api:3009
       - AGENT_BYPASS_PERMISSIONS=true
       - LOG_LEVEL=info
+      # Codex OAuth login proxy is dev-only. Production should rely on OPENAI_API_KEY.
+      - AIF_ENABLE_CODEX_LOGIN_PROXY=false
     volumes:
       - db-data:/data
       - projects:${PROJECTS_MOUNT:-/home/www}
@@ -124,6 +140,10 @@ services:
       context: .
       dockerfile: .docker/Dockerfile
       target: mcp
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "127.0.0.1:3100:3100"
     env_file: .env

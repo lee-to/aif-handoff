@@ -44,6 +44,28 @@ describe("parseEntry", () => {
     expect(entry.kind).toBe("tool");
     expect(entry.toolName).toBe("Write");
   });
+
+  it("extracts runtime metadata including effort", () => {
+    const entry = parseEntry(
+      "[2026-01-01T10:00:00.000Z] Agent: planner started (runtime=codex, transport=sdk, model=gpt-5, effort=high)",
+    );
+    expect(entry.kind).toBe("agent");
+    expect(entry.runtimeMeta).toEqual({
+      runtimeId: "codex",
+      transport: "sdk",
+      profileId: undefined,
+      model: "gpt-5",
+      effort: "high",
+    });
+    expect(entry.message).toBe("Agent: planner started");
+  });
+
+  it("leaves effort undefined when omitted from runtime metadata", () => {
+    const entry = parseEntry(
+      "[2026-01-01T10:00:00.000Z] Agent: planner started (runtime=claude, transport=sdk, model=default)",
+    );
+    expect(entry.runtimeMeta?.effort).toBeUndefined();
+  });
 });
 
 describe("useActivityLogParsing", () => {

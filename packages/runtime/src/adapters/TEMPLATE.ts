@@ -107,6 +107,31 @@
  * }
  * ```
  *
+ * ## Emitting tool events (MANDATORY for adapters with tool calls)
+ *
+ * Use the runtime-neutral helpers from `../../toolEvents.js` so every adapter
+ * produces the same `tool:use` and `tool:question` event shape:
+ *
+ * ```ts
+ * import { buildToolUseEvents } from "../../toolEvents.js";
+ * import { parseMyProviderQuestion } from "./questions.js"; // your parser
+ *
+ * for (const event of buildToolUseEvents({
+ *   toolName: item.name,
+ *   toolUseId: item.id ?? null,
+ *   input: item.input,
+ *   timestamp: new Date().toISOString(),
+ *   questionPayload: parseMyProviderQuestion(item.name, item.id ?? null, item.input),
+ * })) {
+ *   exec?.onEvent?.(event);
+ * }
+ * ```
+ *
+ * If your provider has an interactive "ask the user" tool, write a parser
+ * that returns `RuntimeToolQuestionPayload` (normalized shape with question,
+ * optional header, and options[]); otherwise pass `questionPayload: null`
+ * and only the `tool:use` event is emitted.
+ *
  * ## Timeout handling (MANDATORY)
  *
  * All adapters MUST support timeout parameters from `RuntimeExecutionIntent`.
@@ -254,6 +279,13 @@ export function createExampleRuntimeAdapter(
         // Contract tests in bootstrap.test.ts will fail the build if this field is
         // missing. See docs/providers.md → "Usage reporting contract" for details.
         // usageReporting: UsageReporting.FULL,
+        //
+        // Optional: set `supportsInteractiveQuestions: true` if your adapter
+        // parses a provider-native interactive question tool into
+        // runtime-neutral `tool:question` events via `buildToolUseEvents()`.
+        // Consumers (e.g. chat route) gate provider-specific prompt hints on
+        // this flag so other runtimes don't inherit Claude-specific scaffolding.
+        // supportsInteractiveQuestions: true,
       },
     },
 

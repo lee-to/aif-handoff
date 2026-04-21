@@ -44,6 +44,7 @@ export interface Project {
   implementerMaxBudgetUsd: number | null;
   reviewSidecarMaxBudgetUsd: number | null;
   parallelEnabled: boolean;
+  autoQueueMode: boolean;
   defaultTaskRuntimeProfileId?: string | null;
   defaultPlanRuntimeProfileId?: string | null;
   defaultReviewRuntimeProfileId?: string | null;
@@ -65,6 +66,7 @@ export interface CreateProjectInput {
   implementerMaxBudgetUsd?: number;
   reviewSidecarMaxBudgetUsd?: number;
   parallelEnabled?: boolean;
+  autoQueueMode?: boolean;
   defaultTaskRuntimeProfileId?: string | null;
   defaultPlanRuntimeProfileId?: string | null;
   defaultReviewRuntimeProfileId?: string | null;
@@ -124,6 +126,7 @@ export interface Task {
   modelOverride?: string | null;
   runtimeOptions?: Record<string, unknown> | null;
   sessionId: string | null;
+  scheduledAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -164,6 +167,7 @@ export interface CreateTaskInput {
   runtimeOptions?: Record<string, unknown> | null;
   roadmapAlias?: string;
   tags?: string[];
+  scheduledAt?: string | null;
 }
 
 /** PUT /tasks/:id body */
@@ -204,6 +208,7 @@ export interface UpdateTaskInput {
   runtimeProfileId?: string | null;
   modelOverride?: string | null;
   runtimeOptions?: Record<string, unknown> | null;
+  scheduledAt?: string | null;
 }
 
 export const TASK_EVENTS = [
@@ -250,7 +255,13 @@ export type WsEventType =
   | "sync:task_updated"
   | "sync:status_changed"
   | "sync:plan_pushed"
-  | "task:activity";
+  | "task:activity"
+  | "task:scheduled_fired"
+  | "project:auto_queue_mode_changed"
+  | "project:auto_queue_advanced"
+  | "task:commit_started"
+  | "task:commit_done"
+  | "task:commit_failed";
 
 export interface RoadmapCompletePayload {
   projectId: string;
@@ -268,6 +279,18 @@ export interface RoadmapErrorPayload {
   code: string;
 }
 
+/**
+ * Emitted when the "create commit" checkbox is used on approve-done, to
+ * surface the lifecycle of the fire-and-forget `/aif-commit` run to the UI.
+ * `status` is redundant with `type` but makes the payload self-describing.
+ */
+export interface TaskCommitPayload {
+  taskId: string;
+  projectId: string;
+  status: "started" | "done" | "failed";
+  error?: string;
+}
+
 export interface WsEvent {
   type: WsEventType;
   payload:
@@ -279,7 +302,8 @@ export interface WsEvent {
     | ChatStreamTokenPayload
     | ChatDonePayload
     | ChatErrorPayload
-    | ChatSession;
+    | ChatSession
+    | TaskCommitPayload;
 }
 
 export const RuntimeTransport = {

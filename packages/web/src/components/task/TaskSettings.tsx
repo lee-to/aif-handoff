@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
+import { Select } from "@/components/ui/select";
 import { useProjects } from "@/hooks/useProjects";
 import { useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
-import type { Task, UpdateTaskInput } from "@aif/shared/browser";
+import { defaultsForMode, type Task, type UpdateTaskInput } from "@aif/shared/browser";
 
 interface Props {
   task: Task;
@@ -31,6 +32,8 @@ export function TaskSettings({ task, onSave }: Props) {
   const [maxReviewIterations, setMaxReviewIterations] = useState(task.maxReviewIterations);
   const [runtimeProfileId, setRuntimeProfileId] = useState(task.runtimeProfileId ?? "");
   const [modelOverride, setModelOverride] = useState(task.modelOverride ?? "");
+  const [scheduledAtLocal, setScheduledAtLocal] = useState(isoToLocalInput(task.scheduledAt));
+  const [priority, setPriority] = useState(task.priority ?? 0);
   const [runtimeOverrideOpen, setRuntimeOverrideOpen] = useState(
     Boolean(task.runtimeProfileId || task.modelOverride),
   );
@@ -42,6 +45,7 @@ export function TaskSettings({ task, onSave }: Props) {
     : null;
 
   const showPlanner = !task.isFix && task.status !== "done";
+  const currentScheduledIso = localInputToIso(scheduledAtLocal);
   const hasChanges =
     autoMode !== task.autoMode ||
     skipReview !== task.skipReview ||
@@ -49,6 +53,8 @@ export function TaskSettings({ task, onSave }: Props) {
     maxReviewIterations !== task.maxReviewIterations ||
     (runtimeProfileId || null) !== (task.runtimeProfileId ?? null) ||
     (modelOverride.trim() || null) !== (task.modelOverride ?? null) ||
+    currentScheduledIso !== (task.scheduledAt ?? null) ||
+    priority !== (task.priority ?? 0) ||
     (showPlanner &&
       (plannerMode !== task.plannerMode ||
         planPath !== task.planPath ||
@@ -67,6 +73,12 @@ export function TaskSettings({ task, onSave }: Props) {
     }
     if ((modelOverride.trim() || null) !== (task.modelOverride ?? null)) {
       input.modelOverride = modelOverride.trim() || null;
+    }
+    if (currentScheduledIso !== (task.scheduledAt ?? null)) {
+      input.scheduledAt = currentScheduledIso;
+    }
+    if (priority !== (task.priority ?? 0)) {
+      input.priority = priority;
     }
     if (showPlanner) {
       if (plannerMode !== task.plannerMode) input.plannerMode = plannerMode;
@@ -113,6 +125,8 @@ export function TaskSettings({ task, onSave }: Props) {
               setPlanTests(task.planTests);
               setRuntimeProfileId(task.runtimeProfileId ?? "");
               setModelOverride(task.modelOverride ?? "");
+              setScheduledAtLocal(isoToLocalInput(task.scheduledAt));
+              setPriority(task.priority ?? 0);
               setOpen(false);
             }}
           >
@@ -169,7 +183,13 @@ export function TaskSettings({ task, onSave }: Props) {
                 <Radio
                   name="plannerModeDetail"
                   checked={plannerMode === "full"}
-                  onChange={() => setPlannerMode("full")}
+                  onChange={() => {
+                    setPlannerMode("full");
+                    const flags = defaultsForMode("full");
+                    setSkipReview(flags.skipReview);
+                    setPlanDocs(flags.planDocs);
+                    setPlanTests(flags.planTests);
+                  }}
                   className="h-3.5 w-3.5"
                 />
                 <span className="font-medium text-foreground">Full</span>
@@ -178,7 +198,13 @@ export function TaskSettings({ task, onSave }: Props) {
                 <Radio
                   name="plannerModeDetail"
                   checked={plannerMode === "fast"}
-                  onChange={() => setPlannerMode("fast")}
+                  onChange={() => {
+                    setPlannerMode("fast");
+                    const flags = defaultsForMode("fast");
+                    setSkipReview(flags.skipReview);
+                    setPlanDocs(flags.planDocs);
+                    setPlanTests(flags.planTests);
+                  }}
                   className="h-3.5 w-3.5"
                 />
                 <span className="font-medium text-foreground">Fast</span>
@@ -207,6 +233,55 @@ export function TaskSettings({ task, onSave }: Props) {
             <CheckboxField label="Docs" checked={planDocs} onChange={setPlanDocs} />
             <CheckboxField label="Tests" checked={planTests} onChange={setPlanTests} />
           </div>
+        </div>
+      )}
+
+      <div className="space-y-1 border-t border-border/60 pt-2">
+        <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Priority
+        </p>
+        <Select
+          selectSize="sm"
+          value={String(priority)}
+          onChange={(e) => setPriority(Number(e.target.value))}
+          options={[
+            { value: "0", label: "None" },
+            { value: "1", label: "Low" },
+            { value: "2", label: "Medium" },
+            { value: "3", label: "High" },
+            { value: "4", label: "Urgent" },
+            { value: "5", label: "Critical" },
+          ]}
+          className="w-40"
+        />
+        <p className="text-3xs text-muted-foreground">
+          Affects ordering in the list view (Priority sort) and the colored badge on the card. Does
+          not change agent processing order.
+        </p>
+      </div>
+
+      {task.status === "backlog" && (
+        <div className="space-y-1 border-t border-border/60 pt-2">
+          <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Scheduled start
+          </p>
+          <div className="flex items-center gap-2">
+            <Input
+              type="datetime-local"
+              value={scheduledAtLocal}
+              onChange={(e) => setScheduledAtLocal(e.target.value)}
+              inputSize="sm"
+              className="w-56"
+            />
+            {scheduledAtLocal && (
+              <Button variant="ghost" size="xs" onClick={() => setScheduledAtLocal("")}>
+                Clear
+              </Button>
+            )}
+          </div>
+          <p className="text-3xs text-muted-foreground">
+            Task fires into planning automatically at the chosen time. Must be in the future.
+          </p>
         </div>
       )}
 
@@ -261,6 +336,24 @@ export function TaskSettings({ task, onSave }: Props) {
       </div>
     </div>
   );
+}
+
+function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+function localInputToIso(local: string): string | null {
+  if (!local) return null;
+  const d = new Date(local);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
 }
 
 function CheckboxField({

@@ -107,7 +107,7 @@ cp .env.example .env
 | `AGENT_FIRST_ACTIVITY_TIMEOUT_MS` | `60000`             | First-activity watchdog: kill + restart agent if no tool call within this window after start             |
 | `API_RUNTIME_START_TIMEOUT_MS`    | `60000`             | Timeout waiting for first output from API one-shot runtime calls                                         |
 | `API_RUNTIME_RUN_TIMEOUT_MS`      | `120000`            | Hard timeout for API one-shot runtime calls                                                              |
-| `AGENT_USE_SUBAGENTS`             | `true`              | Default for per-task "Use subagents" toggle. `true`: custom subagents, `false`: aif-\* skills            |
+| `AGENT_USE_SUBAGENTS`             | `false`             | Default for per-task "Use subagents" toggle. `true`: custom subagents, `false`: aif-\* skills            |
 | `DATABASE_URL`                    | `./data/aif.sqlite` | SQLite database path                                                                                     |
 | `AGENT_QUERY_AUDIT_ENABLED`       | `true`              | Enable/disable query audit logs in `logs/*.log`                                                          |
 | `LOG_LEVEL`                       | `debug`             | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`                                            |

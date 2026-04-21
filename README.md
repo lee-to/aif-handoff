@@ -80,6 +80,34 @@ The agent coordinator reacts to task events via WebSocket in near real-time and 
 
 For Codex/OpenAI-compatible profiles, configure `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` (or set profile-level `apiKeyEnvVar` / `baseUrl`). See [Providers](docs/providers.md).
 
+#### Codex OAuth in Docker (without `OPENAI_API_KEY`)
+
+The `codex login` CLI binds its OAuth callback to `127.0.0.1:1455` inside the
+container, which is unreachable from the host browser. The dev compose wires up
+a small in-container broker that bridges this gap and exposes a guided UI in
+**Settings → Runtime profile → Codex**:
+
+1. Click **Start Codex login**. The broker spawns `codex login` and returns the
+   authorization URL.
+2. Open the URL in your browser and authorize the app.
+3. The browser redirects to `http://localhost:1455/?code=…&state=…` and shows a
+   connection-refused page — this is expected. Copy the entire URL from the
+   address bar.
+4. Paste it back into the wizard. The broker completes the callback from inside
+   the container, and `codex login` writes `~/.codex/auth.json` to the
+   persistent `codex-auth` volume.
+5. Run `docker compose restart agent` to pick up the credentials.
+
+**Fallback CLI helper** — if the UI is unavailable, run the callback directly:
+
+```bash
+docker compose exec agent aif-codex-callback "http://localhost:1455/?code=…&state=…"
+```
+
+**Production note:** the broker is **dev-only**. `docker-compose.production.yml`
+sets `AIF_ENABLE_CODEX_LOGIN_PROXY=false`. For production, configure
+`OPENAI_API_KEY` in `.env` instead.
+
 ### OpenCode Quick Setup
 
 1. Start OpenCode server (example with password):
@@ -144,8 +172,8 @@ AIF Handoff supports two execution modes, configurable globally via `AGENT_USE_S
 
 | Mode          | `AGENT_USE_SUBAGENTS` | How it works                                                                                                                                                                                                  | Trade-off                                                                                                                                                            |
 | ------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Subagents** | `true` (default)      | Each stage runs through specialized coordinator agents (`plan-coordinator`, `implement-coordinator`, `review-sidecar` + `security-sidecar`) that iteratively refine the result until quality criteria are met | Higher quality — plans are polished in multiple rounds, implementation gets parallel workers with quality sidecars, reviews are thorough. Takes more time and tokens |
-| **Skills**    | `false`               | Each stage runs as a single-pass AIF skill (`/aif-plan`, `/aif-implement`, `/aif-review`, `/aif-security-checklist`)                                                                                          | Faster execution with lower token usage, but no iterative refinement — good enough for simpler tasks or quick prototyping                                            |
+| **Subagents** | `true`                | Each stage runs through specialized coordinator agents (`plan-coordinator`, `implement-coordinator`, `review-sidecar` + `security-sidecar`) that iteratively refine the result until quality criteria are met | Higher quality — plans are polished in multiple rounds, implementation gets parallel workers with quality sidecars, reviews are thorough. Takes more time and tokens |
+| **Skills**    | `false` (default)     | Each stage runs as a single-pass AIF skill (`/aif-plan`, `/aif-implement`, `/aif-review`, `/aif-security-checklist`)                                                                                          | Faster execution with lower token usage, but no iterative refinement — good enough for simpler tasks or quick prototyping                                            |
 
 ## Tech Stack
 
@@ -212,7 +240,7 @@ A `.devcontainer/` config is also included for JetBrains / VS Code.
 
 ## Troubleshooting
 
-If your workflow runs for too long and frequently times out, try disabling subagents in your environment:
+If you enabled subagents and the workflow runs for too long or frequently times out, disable them in your environment (this is the default):
 
 ```env
 AGENT_USE_SUBAGENTS=false

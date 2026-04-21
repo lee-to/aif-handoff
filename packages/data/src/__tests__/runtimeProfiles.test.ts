@@ -509,15 +509,38 @@ describe("runtime profiles data layer", () => {
 
     const resolved = toTaskResponse(findTaskById(task!.id)!);
 
-    expect(resolved.runtimeLimitSnapshot?.providerMeta).toEqual({
-      accountLabel: "shared-account",
-    });
+    expect(resolved.runtimeLimitSnapshot?.providerMeta).toBeNull();
     expect(JSON.stringify(resolved)).not.toContain("SECRET");
+  });
+
+  it("redacts legacy agent activity log secrets on read", () => {
+    const task = createTask({ projectId: "proj-1", title: "Legacy log", description: "D" });
+
+    testDb.current
+      .update(tasks)
+      .set({
+        agentActivityLog:
+          "[2026-04-17] Agent: Bearer SECRET\n[2026-04-17] Agent: sk-SECRET\n[2026-04-17] Agent: https://internal.local",
+      })
+      .where(eq(tasks.id, task!.id))
+      .run();
+
+    const resolved = toTaskResponse(findTaskById(task!.id)!);
+
+    expect(resolved.agentActivityLog).toContain("[REDACTED]");
+    expect(resolved.agentActivityLog).not.toContain("SECRET");
+    expect(resolved.agentActivityLog).not.toContain("internal.local");
   });
 
   it("applies proactive runtime gate block only when the CAS guard matches", () => {
     const task = createTask({ projectId: "proj-1", title: "CAS", description: "D" });
     const snapshot = makeLimitSnapshot();
+
+    testDb.current
+      .update(tasks)
+      .set({ lastHeartbeatAt: null })
+      .where(eq(tasks.id, task!.id))
+      .run();
 
     const applied = blockTaskForRuntimeGateIfEligible({
       taskId: task!.id,
@@ -534,6 +557,7 @@ describe("runtime profiles data layer", () => {
     const blocked = findTaskById(task!.id)!;
     expect(blocked.status).toBe("blocked_external");
     expect(blocked.blockedReason).toBe("Coordinator pre-start runtime gate");
+    expect(blocked.lastHeartbeatAt).toBeNull();
 
     const secondApply = blockTaskForRuntimeGateIfEligible({
       taskId: task!.id,
@@ -547,6 +571,38 @@ describe("runtime profiles data layer", () => {
     });
 
     expect(secondApply).toBe(false);
+  });
+
+  it("rejects proactive runtime gate block when autoMode no longer matches the candidate", () => {
+    const task = createTask({
+      projectId: "proj-1",
+      title: "CAS auto",
+      description: "D",
+      autoMode: true,
+    });
+    const snapshot = makeLimitSnapshot();
+
+    testDb.current
+      .update(tasks)
+      .set({ status: "plan_ready", autoMode: false })
+      .where(eq(tasks.id, task!.id))
+      .run();
+
+    const applied = blockTaskForRuntimeGateIfEligible({
+      taskId: task!.id,
+      expectedProjectId: "proj-1",
+      expectedStatus: "plan_ready",
+      expectedAutoMode: true,
+      blockedFromStatus: "plan_ready",
+      blockedReason: "Coordinator pre-start runtime gate",
+      retryAfter: "2026-04-17T12:00:00.000Z",
+      retryCount: 1,
+      snapshot,
+      persistedAt: "2026-04-17T10:10:00.000Z",
+    });
+
+    expect(applied).toBe(false);
+    expect(findTaskById(task!.id)?.status).toBe("plan_ready");
   });
 
   it("resolves task override first", () => {

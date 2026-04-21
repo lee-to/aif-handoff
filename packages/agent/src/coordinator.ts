@@ -263,7 +263,9 @@ function proactivelyBlockTaskForRuntimeGate(
   const persistedAt = new Date().toISOString();
   const applied = blockTaskForRuntimeGateIfEligible({
     taskId: task.id,
+    expectedProjectId: task.projectId,
     expectedStatus: task.status,
+    expectedAutoMode: task.status === "plan_ready" ? task.autoMode === true : undefined,
     blockedFromStatus: task.status,
     blockedReason,
     retryAfter,

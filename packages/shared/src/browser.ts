@@ -68,10 +68,12 @@ export {
   normalizeRuntimeLimitSnapshot,
   redactProviderText,
   resolveRuntimeLimitFutureHint,
+  sanitizeRuntimeLimitSnapshotForExposure,
   sanitizeProviderMeta,
   selectViolatedWindowForExactThreshold,
   type RuntimeLimitFutureHint,
   type RuntimeLimitFutureHintSource,
+  type RuntimeLimitSnapshotExposure,
   type SafeRuntimeErrorCategory,
   type SafeRuntimeErrorReason,
 } from "./runtimeLimitUtils.js";

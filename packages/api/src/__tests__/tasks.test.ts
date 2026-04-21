@@ -59,6 +59,7 @@ vi.mock("../services/runtime.js", () => ({
 
 // Import after mocks
 const { tasksRouter } = await import("../routes/tasks.js");
+const { broadcast: mockBroadcast } = await import("../ws.js");
 
 function createApp() {
   const app = new Hono();
@@ -530,6 +531,55 @@ describe("tasks API", () => {
       const res = await app.request("/tasks/non-existent");
       expect(res.status).toBe(404);
     });
+
+    it("redacts legacy agent activity and strips task runtime account identifiers", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.insert(tasks)
+        .values({
+          id: "legacy-task",
+          projectId: "test-project",
+          title: "Legacy",
+          agentActivityLog: "Bearer SECRET\nhttps://internal.local",
+          runtimeLimitSnapshotJson: JSON.stringify({
+            source: "sdk_event",
+            status: "warning",
+            precision: "exact",
+            checkedAt: "2026-04-19T10:00:00.000Z",
+            providerId: "anthropic",
+            runtimeId: "claude",
+            profileId: "profile-1",
+            primaryScope: "time",
+            resetAt: "2026-04-19T11:00:00.000Z",
+            retryAfterSeconds: null,
+            warningThreshold: 10,
+            windows: [
+              {
+                scope: "time",
+                percentRemaining: 4,
+                warningThreshold: 10,
+                resetAt: "2026-04-19T11:00:00.000Z",
+              },
+            ],
+            providerMeta: {
+              providerLabel: "Anthropic",
+              accountLabel: "Shared Account",
+            },
+          }),
+        })
+        .run();
+
+      const res = await app.request("/tasks/legacy-task");
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.agentActivityLog).toContain("[REDACTED]");
+      expect(body.agentActivityLog).not.toContain("SECRET");
+      expect(body.agentActivityLog).not.toContain("internal.local");
+      expect(body.runtimeLimitSnapshot.providerMeta).toEqual({
+        providerLabel: "Anthropic",
+      });
+    });
   });
 
   describe("POST /tasks/:id/broadcast", () => {
@@ -586,6 +636,14 @@ describe("tasks API", () => {
 
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ success: true });
+      expect(vi.mocked(mockBroadcast)).toHaveBeenCalledWith({
+        type: "task:updated",
+        payload: {
+          id: "broadcast-valid-token",
+          title: "Broadcast me",
+          status: "backlog",
+        },
+      });
     });
 
     it("rejects event types outside the task broadcast allowlist", async () => {

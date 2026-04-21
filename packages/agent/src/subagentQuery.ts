@@ -293,22 +293,39 @@ function refreshRuntimeProfileLimitState(input: {
     }
 
     if (shouldBroadcast && projectId && broadcastCacheKey) {
+      runtimeLimitBroadcastCache.set(broadcastCacheKey, signature);
       void notifyProjectRuntimeLimitBroadcast(projectId, runtimeProfileId, {
         taskId: input.taskId,
-      }).then((sent) => {
-        if (!sent) {
+      })
+        .then((sent) => {
+          if (!sent) {
+            runtimeLimitBroadcastCache.delete(broadcastCacheKey);
+            log.warn(
+              {
+                taskId: input.taskId,
+                projectId,
+                runtimeProfileId,
+              },
+              "Runtime limit broadcast was not delivered",
+            );
+          }
+        })
+        .catch((error) => {
+          runtimeLimitBroadcastCache.delete(broadcastCacheKey);
           log.warn(
             {
               taskId: input.taskId,
               projectId,
               runtimeProfileId,
+              errorName: error instanceof Error ? error.name : typeof error,
+              errorMessage:
+                error instanceof Error
+                  ? redactProviderText(error.message)
+                  : redactProviderText(String(error)),
             },
-            "Runtime limit broadcast was not delivered",
+            "Runtime limit broadcast failed",
           );
-          return;
-        }
-        runtimeLimitBroadcastCache.set(broadcastCacheKey, signature);
-      });
+        });
     }
   } catch (error) {
     log.warn(
@@ -1010,7 +1027,7 @@ export async function executeSubagentQuery(
       runtimeProfileId: runtimeProfileIdForError,
       runtimeId: runtimeIdForError,
       providerId: providerIdForError,
-      snapshot: extractRuntimeLimitSnapshotFromError(error) ?? latestLimitSnapshot,
+      snapshot: extractRuntimeLimitSnapshotFromError(error),
       clearOnMissing: false,
       taskId,
       workflowKind: workflowKindForError,

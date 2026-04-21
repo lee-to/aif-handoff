@@ -594,6 +594,62 @@ describe("executeSubagentQuery runtime limit state refresh", () => {
       { taskId: "task-project-b" },
     );
   });
+
+  it("coalesces concurrent identical runtime limit broadcasts while the first notify is in flight", async () => {
+    let hasPendingBroadcast = false;
+    let resolveBroadcast: (value: boolean) => void = () => {
+      throw new Error("Expected runtime limit broadcast promise to be pending");
+    };
+    notifyProjectRuntimeLimitBroadcastMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          hasPendingBroadcast = true;
+          resolveBroadcast = resolve;
+        }),
+    );
+
+    queryMock.mockImplementation(async function* () {
+      yield {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed_warning",
+          rateLimitType: "five_hour",
+          utilization: 0.96,
+          resetsAt: 1_776_389_600,
+        },
+      };
+      yield {
+        type: "result",
+        subtype: "success",
+        result: "done",
+        usage: {},
+        total_cost_usd: 0,
+      };
+    });
+
+    const first = executeSubagentQuery({
+      taskId: "task-1",
+      projectRoot: "/tmp/project",
+      agentName: "implement-coordinator",
+      prompt: "run",
+      workflowKind: "implementer",
+    });
+    const second = executeSubagentQuery({
+      taskId: "task-1",
+      projectRoot: "/tmp/project",
+      agentName: "implement-coordinator",
+      prompt: "run",
+      workflowKind: "implementer",
+    });
+
+    await vi.waitFor(() => {
+      expect(notifyProjectRuntimeLimitBroadcastMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(hasPendingBroadcast).toBe(true);
+    resolveBroadcast(true);
+    await Promise.all([first, second]);
+  });
 });
 
 describe("executeSubagentQuery error redaction", () => {
@@ -697,6 +753,34 @@ describe("executeSubagentQuery error redaction", () => {
     expect(captured.category).toBe("rate_limit");
     expect((captured as Error & { cause?: unknown }).cause).toBeUndefined();
     expect(JSON.stringify(captured)).not.toContain("SECRET");
+  });
+
+  it("does not persist incidental runtime limit state when a non-limit runtime error follows", async () => {
+    queryMock.mockImplementation(async function* () {
+      yield {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed_warning",
+          rateLimitType: "five_hour",
+          utilization: 0.96,
+          resetsAt: 1_776_389_600,
+        },
+      };
+      throw new RuntimeExecutionError("Model missing", undefined, "model_not_found");
+    });
+
+    await expect(
+      executeSubagentQuery({
+        taskId: "task-redaction",
+        projectRoot: "/tmp/project",
+        agentName: "implement-coordinator",
+        prompt: "run",
+        workflowKind: "implementer",
+      }),
+    ).rejects.toThrow("Configured model was not found for the selected runtime.");
+
+    expect(persistRuntimeProfileLimitSnapshotMock).not.toHaveBeenCalled();
+    expect(notifyProjectRuntimeLimitBroadcastMock).not.toHaveBeenCalled();
   });
 });
 

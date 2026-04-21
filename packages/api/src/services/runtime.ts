@@ -663,7 +663,7 @@ export async function runApiRuntimeOneShot(input: {
       runtimeProfileId: context.resolvedProfile.profileId,
       runtimeId: context.resolvedProfile.runtimeId,
       providerId: context.resolvedProfile.providerId,
-      snapshot: extractRuntimeLimitSnapshotFromError(error) ?? latestLimitSnapshot,
+      snapshot: extractRuntimeLimitSnapshotFromError(error),
       clearOnMissing: false,
       taskId: input.taskId ?? null,
       projectId: input.projectId,

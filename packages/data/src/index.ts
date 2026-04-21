@@ -23,6 +23,7 @@ import {
   getProjectConfig,
   logger as createLogger,
   normalizeRuntimeLimitSnapshot,
+  redactProviderText,
   parseAttachments,
   parseTaskTokenUsage,
   persistTaskPlan,
@@ -44,6 +45,7 @@ import {
   type Task,
   type TaskStatus,
   resolveRuntimeLimitFutureHint,
+  sanitizeRuntimeLimitSnapshotForExposure,
   selectViolatedWindowForExactThreshold,
   type AutoReviewState,
   type ChatSession,
@@ -115,6 +117,23 @@ export type TaskFieldsUpdate = {
   scheduledAt?: string | null;
 };
 
+function redactTaskTextForExternalUse(text: string | null | undefined): string | null {
+  if (typeof text !== "string") {
+    return text ?? null;
+  }
+  return text
+    .split(/\r?\n/)
+    .map((line) => redactProviderText(line))
+    .join("\n");
+}
+
+function parseTaskRuntimeLimitSnapshot(
+  raw: string | null | undefined,
+  taskId: string,
+): RuntimeLimitSnapshot | null {
+  const snapshot = parseRuntimeLimitSnapshot(raw, "task", taskId);
+  return snapshot ? sanitizeRuntimeLimitSnapshotForExposure(snapshot, "task") : null;
+}
 
 export function toTaskResponse(task: TaskRow): Task {
   const {
@@ -131,7 +150,8 @@ export function toTaskResponse(task: TaskRow): Task {
     tags: parseTags(tags),
     autoReviewState: parseAutoReviewState(autoReviewStateJson),
     runtimeOptions: parseRuntimeObject(runtimeOptionsJson),
-    runtimeLimitSnapshot: parseRuntimeLimitSnapshot(runtimeLimitSnapshotJson, "task", task.id),
+    agentActivityLog: redactTaskTextForExternalUse(task.agentActivityLog),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(runtimeLimitSnapshotJson, task.id),
   };
 }
 
@@ -209,11 +229,11 @@ function parseRuntimeLimitWindow(
   entity: "task" | "runtime_profile",
   entityId: string,
   index: number,
-  rawPreview: string,
+  rawLength: number,
 ): RuntimeLimitWindow | null {
   if (!isObjectRecord(value) || typeof value.scope !== "string") {
     log.warn(
-      { entity, entityId, index, raw: rawPreview },
+      { entity, entityId, index, rawLength },
       "Malformed persisted runtime-limit window",
     );
     return null;
@@ -252,9 +272,11 @@ function parseRuntimeLimitSnapshot(
 ): RuntimeLimitSnapshot | null {
   if (!raw) return null;
 
-  const preview = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
   const warnMalformed = (reason: string, extra: Record<string, unknown> = {}) => {
-    log.warn({ entity, entityId, reason, raw: preview, ...extra }, "Malformed persisted runtime-limit snapshot");
+    log.warn(
+      { entity, entityId, reason, rawLength: raw.length, ...extra },
+      "Malformed persisted runtime-limit snapshot",
+    );
   };
 
   try {
@@ -285,7 +307,7 @@ function parseRuntimeLimitSnapshot(
 
     const windows: RuntimeLimitWindow[] = [];
     for (const [index, window] of parsed.windows.entries()) {
-      const normalized = parseRuntimeLimitWindow(window, entity, entityId, index, preview);
+      const normalized = parseRuntimeLimitWindow(window, entity, entityId, index, raw.length);
       if (!normalized) {
         return null;
       }
@@ -340,9 +362,8 @@ function serializeRuntimeLimitSnapshot(
 function parseAutoReviewState(raw: string | null | undefined): AutoReviewState | null {
   if (!raw) return null;
 
-  const preview = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
   const warnMalformed = (reason: string, extra: Record<string, unknown> = {}) => {
-    log.warn({ reason, raw: preview, ...extra }, "Malformed persisted auto-review payload");
+    log.warn({ reason, rawLength: raw.length, ...extra }, "Malformed persisted auto-review payload");
   };
 
   try {
@@ -464,7 +485,7 @@ export function findTaskById(id: string): HydratedTaskRow | undefined {
   return {
     ...row,
     autoReviewState: parseAutoReviewState(row.autoReviewStateJson),
-    runtimeLimitSnapshot: parseRuntimeLimitSnapshot(row.runtimeLimitSnapshotJson, "task", row.id),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(row.runtimeLimitSnapshotJson, row.id),
   };
 }
 
@@ -613,11 +634,7 @@ export function toTaskSummary(row: TaskSummaryRow) {
   return {
     ...rest,
     tags: parseTags(tags),
-    runtimeLimitSnapshot: parseRuntimeLimitSnapshot(
-      runtimeLimitSnapshotJson,
-      "task",
-      row.id,
-    ),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(runtimeLimitSnapshotJson, row.id),
   };
 }
 
@@ -1052,7 +1069,9 @@ export function claimTask(taskId: string, coordinatorId: string, lockDurationMs:
  */
 export function blockTaskForRuntimeGateIfEligible(input: {
   taskId: string;
+  expectedProjectId?: string | null;
   expectedStatus: TaskStatus;
+  expectedAutoMode?: boolean;
   blockedFromStatus: TaskStatus;
   blockedReason: string;
   retryAfter: string | null;
@@ -1062,6 +1081,18 @@ export function blockTaskForRuntimeGateIfEligible(input: {
 }): boolean {
   const nowIso = input.persistedAt ?? new Date().toISOString();
   const normalizedSnapshot = input.snapshot ? normalizeRuntimeLimitSnapshot(input.snapshot) : null;
+  const conditions = [
+    eq(tasks.id, input.taskId),
+    eq(tasks.status, input.expectedStatus),
+    eq(tasks.paused, false),
+    or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
+  ];
+  if (input.expectedProjectId != null) {
+    conditions.push(eq(tasks.projectId, input.expectedProjectId));
+  }
+  if (input.expectedAutoMode != null) {
+    conditions.push(eq(tasks.autoMode, input.expectedAutoMode));
+  }
 
   const result = getDb()
     .update(tasks)
@@ -1073,17 +1104,9 @@ export function blockTaskForRuntimeGateIfEligible(input: {
       retryCount: input.retryCount,
       runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
       runtimeLimitUpdatedAt: nowIso,
-      lastHeartbeatAt: nowIso,
       updatedAt: nowIso,
     })
-    .where(
-      and(
-        eq(tasks.id, input.taskId),
-        eq(tasks.status, input.expectedStatus),
-        eq(tasks.paused, false),
-        or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
-      ),
-    )
+    .where(and(...conditions))
     .run();
 
   return result.changes > 0;

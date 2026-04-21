@@ -18,8 +18,8 @@ import {
 import {
   logger,
   getEnv,
-  normalizeRuntimeLimitSnapshot,
   redactProviderText,
+  sanitizeRuntimeLimitSnapshotForExposure,
   type ChatMessageAttachment,
   type ChatSession,
   type ChatSessionMessage,
@@ -192,13 +192,21 @@ function buildContextAppend(
   if (task) {
     const lines = [
       `\nCurrently open task [${task.id}]:`,
-      `  Title: ${task.title}`,
+      `  Title: ${redactTaskContextForRuntimePrompt(task.title)}`,
       `  Status: ${task.status}`,
     ];
-    if (task.description) lines.push(`  Description: ${task.description}`);
-    if (task.plan) lines.push(`  Plan:\n${task.plan}`);
-    if (task.implementationLog) lines.push(`  Implementation log:\n${task.implementationLog}`);
-    if (task.reviewComments) lines.push(`  Review comments:\n${task.reviewComments}`);
+    if (task.description) {
+      lines.push(`  Description: ${redactTaskContextForRuntimePrompt(task.description)}`);
+    }
+    if (task.plan) lines.push(`  Plan:\n${redactTaskContextForRuntimePrompt(task.plan)}`);
+    if (task.implementationLog) {
+      lines.push(
+        `  Implementation log:\n${redactTaskContextForRuntimePrompt(task.implementationLog)}`,
+      );
+    }
+    if (task.reviewComments) {
+      lines.push(`  Review comments:\n${redactTaskContextForRuntimePrompt(task.reviewComments)}`);
+    }
     if (task.agentActivityLog) {
       lines.push(
         `  Agent activity log:\n${redactTaskContextForRuntimePrompt(task.agentActivityLog)}`,
@@ -315,7 +323,7 @@ function sanitizeRuntimeInput(text: string, adapter?: RuntimeAdapter): string {
 function normalizeOptionalRuntimeLimitSnapshot(
   snapshot: RuntimeLimitSnapshot | null | undefined,
 ): RuntimeLimitSnapshot | null {
-  return snapshot ? normalizeRuntimeLimitSnapshot(snapshot) : null;
+  return snapshot ? sanitizeRuntimeLimitSnapshotForExposure(snapshot, "chat") : null;
 }
 
 /**
@@ -1539,7 +1547,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       ...(savedAttachments?.length ? { attachments: savedAttachments } : {}),
     });
   } catch (err) {
-    const errorLimitSnapshot = extractRuntimeLimitSnapshotFromError(err) ?? latestLimitSnapshot;
+    const errorLimitSnapshot = extractRuntimeLimitSnapshotFromError(err);
     const normalizedErrorLimitSnapshot = normalizeOptionalRuntimeLimitSnapshot(errorLimitSnapshot);
     const aborted = abortController.signal.aborted || isAbortError(err);
     if (aborted) {

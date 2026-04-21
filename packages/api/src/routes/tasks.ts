@@ -28,6 +28,7 @@ import {
   createComment,
   updateComment,
   toTaskResponse,
+  toTaskBroadcastPayload,
   toCommentResponse,
   getTaskPlanFileStatus,
   updateTaskPlan,
@@ -76,7 +77,7 @@ tasksRouter.post(
     const task = findTaskById(id);
     if (!task) return c.json({ error: "Task not found" }, 404);
 
-    broadcast({ type, payload: toTaskResponse(task) });
+    broadcast({ type, payload: toTaskBroadcastPayload(task) });
     log.debug({ taskId: id, type }, "Task WS broadcast triggered");
     return c.json({ success: true });
   },
@@ -181,7 +182,7 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     "Task created",
   );
 
-  broadcast({ type: "task:created", payload: toTaskResponse(final) });
+  broadcast({ type: "task:created", payload: toTaskBroadcastPayload(final) });
   // Wake coordinator when a new task is created (may need immediate processing)
   broadcast({ type: "agent:wake", payload: { id: final.id } });
   return c.json(toTaskRouteResponse(final), 201);
@@ -373,7 +374,7 @@ tasksRouter.put("/:id", jsonValidator(updateTaskSchema), async (c) => {
   if (!updated) return c.json({ error: "Task not found after update" }, 500);
   log.debug({ taskId: id, fields: Object.keys(body) }, "Task updated");
 
-  broadcast({ type: "task:updated", payload: toTaskResponse(updated) });
+  broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(updated) });
   return c.json(toTaskRouteResponse(updated));
 });
 
@@ -392,7 +393,7 @@ tasksRouter.post("/:id/sync-plan", (c) => {
   if (!updated) return c.json({ error: "Task not found after sync" }, 500);
   log.debug({ taskId: id }, "Task plan synced from physical file");
 
-  broadcast({ type: "task:updated", payload: toTaskResponse(updated) });
+  broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(updated) });
   return c.json(toTaskRouteResponse(updated));
 });
 
@@ -435,7 +436,7 @@ tasksRouter.post("/:id/events", jsonValidator(taskEventSchema), async (c) => {
     );
     broadcast({
       type: handled.broadcastType,
-      payload: toTaskResponse(handled.task),
+      payload: toTaskBroadcastPayload(handled.task),
     });
     // Wake coordinator when task transitions may require agent processing
     if (handled.broadcastType === "task:moved") {
@@ -493,6 +494,6 @@ tasksRouter.patch("/:id/position", jsonValidator(reorderTaskSchema), async (c) =
   if (!updated) return c.json({ error: "Task not found after reorder" }, 500);
   log.debug({ taskId: id, position }, "Task reordered");
 
-  broadcast({ type: "task:updated", payload: toTaskResponse(updated) });
+  broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(updated) });
   return c.json(toTaskRouteResponse(updated));
 });

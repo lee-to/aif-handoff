@@ -134,13 +134,45 @@ const FORBIDDEN_PROVIDER_META_KEYS = toNormalizedKeySet([
   "credentials",
 ]);
 
-const TOKEN_PATTERNS: ReadonlyArray<RegExp> = [
+const EXTERNAL_PROVIDER_META_KEYS = toNormalizedKeySet([
+  "accountId",
+  "accountName",
+  "accountLabel",
+  "accountFingerprint",
+]);
+
+const VALUE_TOKEN_PATTERNS: ReadonlyArray<RegExp> = [
   /\bsk-[A-Za-z0-9_\-]{6,}\b/gi,
-  /\b(?:api[_-]?key|token|secret[_-]?token|authorization|password)\s*[:=]\s*["']?[^\s,"']+["']?/gi,
+  /\bgh(?:p|o|u|s|r)_[A-Za-z0-9_]{20,}\b/gi,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gi,
+  /\bAIza[0-9A-Za-z\-_]{20,}\b/g,
+  /\bya29\.[0-9A-Za-z._\-]+\b/g,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+  /\bxox(?:a|b|p|o|r|s)-[A-Za-z0-9-]{10,}\b/g,
+  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
   /\bbearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
   /\bhttps?:\/\/[^\s"']+/gi,
 ];
+
+const SENSITIVE_VALUE_KEYS = [
+  "access[_-]?token",
+  "refresh[_-]?token",
+  "client[_-]?secret",
+  "id[_-]?token",
+  "secret(?:[_-]?token)?",
+  "api[_-]?key",
+  "authorization",
+  "password",
+  "token",
+] as const;
+
+const SENSITIVE_VALUE_KEY_PATTERN = new RegExp(
+  `((?:"|')?(?:${SENSITIVE_VALUE_KEYS.join("|")})(?:"|')?\\s*[:=]\\s*)(?:"([^"]*)"|'([^']*)'|([^\\s,"'{}\\]]+))`,
+  "gi",
+);
+
+const TOKEN_PATTERNS: ReadonlyArray<RegExp> = [...VALUE_TOKEN_PATTERNS];
 
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -166,6 +198,21 @@ function isFiniteNonNegative(value: unknown): value is number {
 
 export function redactProviderText(raw: string): string {
   let redacted = raw;
+  redacted = redacted.replace(
+    SENSITIVE_VALUE_KEY_PATTERN,
+    (_match, prefix: string, doubleQuoted: string, singleQuoted: string, bare: string) => {
+      if (typeof doubleQuoted === "string") {
+        return `${prefix}"${REDACTED_VALUE}"`;
+      }
+      if (typeof singleQuoted === "string") {
+        return `${prefix}'${REDACTED_VALUE}'`;
+      }
+      if (typeof bare === "string") {
+        return `${prefix}${REDACTED_VALUE}`;
+      }
+      return `${prefix}${REDACTED_VALUE}`;
+    },
+  );
   for (const pattern of TOKEN_PATTERNS) {
     redacted = redacted.replace(pattern, REDACTED_VALUE);
   }
@@ -500,8 +547,46 @@ export function normalizeRuntimeLimitSnapshot(
   };
 }
 
-export function buildRuntimeLimitSignature(snapshot: RuntimeLimitSnapshot): string {
+export type RuntimeLimitSnapshotExposure = "internal" | "task" | "chat" | "runtime_profile";
+
+function sanitizeProviderMetaForExposure(
+  providerMeta: Record<string, unknown> | null | undefined,
+  exposure: RuntimeLimitSnapshotExposure,
+): Record<string, unknown> | null {
+  if (!providerMeta) {
+    return null;
+  }
+  if (exposure === "internal" || exposure === "runtime_profile") {
+    return providerMeta;
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(providerMeta)) {
+    if (EXTERNAL_PROVIDER_META_KEYS.has(normalizeMetaKey(key))) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
+}
+
+export function sanitizeRuntimeLimitSnapshotForExposure(
+  snapshot: RuntimeLimitSnapshot,
+  exposure: RuntimeLimitSnapshotExposure = "internal",
+): RuntimeLimitSnapshot {
   const normalizedSnapshot = normalizeRuntimeLimitSnapshot(snapshot);
+  return {
+    ...normalizedSnapshot,
+    providerMeta: sanitizeProviderMetaForExposure(
+      normalizedSnapshot.providerMeta ?? null,
+      exposure,
+    ),
+  };
+}
+
+export function buildRuntimeLimitSignature(snapshot: RuntimeLimitSnapshot): string {
+  const normalizedSnapshot = sanitizeRuntimeLimitSnapshotForExposure(snapshot, "internal");
   const normalizedWindows = normalizedSnapshot.windows
     .map((window) => normalizeWindowForSignature(window))
     .sort((left, right) => windowSortKey(left).localeCompare(windowSortKey(right)));

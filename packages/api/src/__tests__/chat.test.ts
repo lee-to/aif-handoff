@@ -355,7 +355,6 @@ describe("chat API", () => {
         providerMeta: {
           providerLabel: "Z.AI GLM Coding Plan",
           quotaSource: "zai_monitor",
-          accountLabel: "Anton Ageev Pro",
         },
       }),
     );
@@ -510,7 +509,6 @@ describe("chat API", () => {
         providerMeta: {
           providerLabel: "Z.AI GLM Coding Plan",
           quotaSource: "zai_monitor",
-          accountLabel: "Anton Ageev Pro",
         },
       }),
     );
@@ -645,6 +643,94 @@ describe("chat API", () => {
     expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("[REDACTED]");
     expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("SECRET");
     expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("sk-SECRET");
+  });
+
+  it("redacts implementation and review text before injecting task-aware chat context", async () => {
+    mockFindTaskById.mockReturnValue({ id: "task-1", title: "Fix bug", status: "implementing" });
+    mockToTaskResponse.mockReturnValue({
+      id: "task-1",
+      title: "Fix bug",
+      status: "implementing",
+      description: "Internal URL https://internal.local",
+      plan: 'oauth access_token="abc123"',
+      implementationLog: "Bearer SECRET",
+      reviewComments: "client_secret=secret-value",
+      agentActivityLog: null,
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "what leaked before?",
+        clientId: "client-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const resolveCall = mockResolveApiRuntimeContext.mock.calls[0][0] as {
+      workflow: { promptInput: { systemPromptAppend?: string } };
+    };
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("[REDACTED]");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("SECRET");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("internal.local");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("abc123");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("secret-value");
+  });
+
+  it("does not persist incidental runtime limit events when a non-limit runtime error follows", async () => {
+    const incidentalSnapshot = {
+      source: "sdk_event",
+      status: "warning",
+      precision: "exact",
+      checkedAt: "2026-04-19T10:00:00.000Z",
+      providerId: "anthropic",
+      runtimeId: "claude",
+      profileId: "profile-1",
+      primaryScope: "time",
+      resetAt: "2026-04-19T11:00:00.000Z",
+      retryAfterSeconds: null,
+      warningThreshold: 10,
+      windows: [
+        {
+          scope: "time",
+          percentRemaining: 4,
+          warningThreshold: 10,
+          resetAt: "2026-04-19T11:00:00.000Z",
+        },
+      ],
+      providerMeta: null,
+    };
+
+    mockAdapterRun.mockImplementationOnce(async (input: RuntimeRunInput) => {
+      input.execution?.onEvent?.({
+        type: "runtime:limit",
+        timestamp: "2026-04-19T10:00:01.000Z",
+        data: { snapshot: incidentalSnapshot },
+      });
+      throw new RuntimeExecutionError("Model missing", undefined, "model_not_found");
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "hello",
+        clientId: "client-1",
+        conversationId: "conv-incidental-limit",
+      }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(mockRefreshRuntimeProfileLimitState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "chat:error",
+        snapshot: null,
+      }),
+    );
   });
 
   it("returns persisted DB messages when linked runtime history is empty", async () => {

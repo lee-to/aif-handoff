@@ -7,6 +7,7 @@ import {
   redactProviderText,
   resolveRuntimeLimitFutureHint,
   sanitizeProviderMeta,
+  sanitizeRuntimeLimitSnapshotForExposure,
   selectViolatedWindowForExactThreshold,
 } from "../runtimeLimitUtils.js";
 
@@ -200,7 +201,7 @@ describe("runtimeLimitUtils", () => {
       quotaSource: "zai_monitor",
       AccountFingerprint: "acct_123",
       status: "ok",
-      modelUsageSummary: '[REDACTED] [REDACTED] "more"',
+      modelUsageSummary: 'token=[REDACTED] [REDACTED] "more"',
     });
   });
 
@@ -247,16 +248,42 @@ describe("runtimeLimitUtils", () => {
 
     expect(normalized.providerMeta).toEqual({
       status: "warning",
-      reason: "[REDACTED]",
+      reason: "token=[REDACTED]",
+    });
+  });
+
+  it("strips account identifiers from task/chat-facing runtime snapshots", () => {
+    const sanitized = sanitizeRuntimeLimitSnapshotForExposure(
+      makeSnapshot({
+        providerId: "anthropic",
+        providerMeta: {
+          providerLabel: "Anthropic",
+          quotaSource: "sdk_event",
+          accountId: "acct-1",
+          accountName: "Shared Account",
+          accountLabel: "Team Plan",
+          accountFingerprint: "fingerprint-1",
+          planType: "pro",
+        },
+      }),
+      "task",
+    );
+
+    expect(sanitized.providerMeta).toEqual({
+      providerLabel: "Anthropic",
+      quotaSource: "sdk_event",
+      planType: "pro",
     });
   });
 
   it("redacts provider text for logs without dropping the whole message", () => {
     expect(
       redactProviderText(
-        '429 {"error":"secret_token=abc sk-SECRET bearer abc.def ghi@example.com https://internal.local"}',
+        '429 {"error":"secret_token=abc sk-SECRET bearer abc.def ghi@example.com https://internal.local jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature ghp_123456789012345678901234567890123456 AIzaSyA123456789012345678901234567890 ya29.a0AfH6SMBEXAMPLE AKIAABCDEFGHIJKLMNOP xoxb-123456789012-123456789012-abcdefghijk access_token=oauth-token"}',
       ),
-    ).toBe('429 {"error":"[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]"}');
+    ).toBe(
+      '429 {"error":"secret_token=[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] jwt=[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] access_token=[REDACTED]"}',
+    );
   });
 
   it("builds deterministic signatures without checkedAt and window-order noise", () => {

@@ -22,7 +22,7 @@ import {
   deleteProject,
   getProjectMcpServers,
 } from "../repositories/projects.js";
-import { toTaskResponse } from "@aif/data";
+import { toTaskBroadcastPayload } from "../repositories/tasks.js";
 import {
   generateRoadmapFile,
   generateRoadmapTasks,
@@ -159,7 +159,7 @@ projectsRouter.post("/:id/roadmap/import", jsonValidator(roadmapImportSchema), a
     for (const taskId of result.taskIds) {
       const task = findTaskById(taskId);
       if (task) {
-        broadcast({ type: "task:created", payload: toTaskResponse(task) });
+        broadcast({ type: "task:created", payload: toTaskBroadcastPayload(task) });
       }
     }
 
@@ -314,7 +314,7 @@ async function runRoadmapGenerationJob(
     for (const taskId of result.taskIds) {
       const task = findTaskById(taskId);
       if (task) {
-        broadcast({ type: "task:created", payload: toTaskResponse(task) });
+        broadcast({ type: "task:created", payload: toTaskBroadcastPayload(task) });
       }
     }
 

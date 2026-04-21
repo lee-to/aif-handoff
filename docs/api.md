@@ -569,14 +569,15 @@ GET /runtime-profiles
 
 **Query params:**
 
-| Param           | Type                | Required | Description                                                   |
-| --------------- | ------------------- | -------- | ------------------------------------------------------------- |
-| `projectId`     | string              | no       | Project id for project-scoped queries and mixed listings      |
-| `includeGlobal` | boolean             | no       | Include global profiles alongside project profiles            |
-| `enabledOnly`   | boolean             | no       | Return only enabled profiles                                  |
-| `scope`         | `global`\|`project` | no       | Restrict results to only global or only same-project profiles |
+| Param           | Type                           | Required | Description                                                                                                             |
+| --------------- | ------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `projectId`     | string                         | no       | Project id for project-scoped queries and mixed listings                                                                |
+| `includeGlobal` | boolean                        | no       | Include global profiles alongside project profiles                                                                      |
+| `enabledOnly`   | boolean                        | no       | Return only enabled profiles                                                                                            |
+| `scope`         | `global`\|`project`\|`visible` | no       | `global`: only global profiles, `project`: only same-project profiles, `visible`: project profiles plus visible globals |
 
 `scope=project` requires `projectId`. `scope=global` returns only reusable profiles (`projectId = null`).
+`scope=visible` is the default when omitted.
 
 ### Effective Runtime Resolution
 

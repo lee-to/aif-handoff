@@ -614,6 +614,8 @@ export function toAppSettingsResponse(row: AppSettingsRow): AppSettings {
 }
 
 function ensureAppSettingsRow(): AppSettingsRow {
+  // Migration 13 seeds row id=1. Keep this fallback for legacy/test databases
+  // so read paths stay resilient even when they start from an empty schema.
   const existing = getDb().select().from(appSettings).where(eq(appSettings.id, APP_SETTINGS_ID)).get();
   if (existing) {
     return existing;
@@ -708,7 +710,7 @@ export function getAppDefaultRuntimeProfileId(
     if (!profile) {
       log.warn(
         { mode, appDefaultSlot: candidate.slot, runtimeProfileId: candidate.profileId },
-        "[FIX] App runtime default points to a missing profile",
+        "App runtime default points to a missing profile",
       );
       continue;
     }
@@ -720,14 +722,14 @@ export function getAppDefaultRuntimeProfileId(
           runtimeProfileId: candidate.profileId,
           ownerProjectId: profile.projectId,
         },
-        "[FIX] App runtime default points to a project-scoped profile",
+        "App runtime default points to a project-scoped profile",
       );
       continue;
     }
     if (!profile.enabled) {
       log.warn(
         { mode, appDefaultSlot: candidate.slot, runtimeProfileId: candidate.profileId },
-        "[FIX] App runtime default points to a disabled profile",
+        "App runtime default points to a disabled profile",
       );
       continue;
     }

@@ -259,6 +259,46 @@ describe("runtimeProfiles API", () => {
     expect(res.status).toBe(400);
   });
 
+  it("lists visible profiles when scope=visible", async () => {
+    const db = testDb.current;
+    db.insert(runtimeProfiles)
+      .values([
+        {
+          id: "global-visible-profile",
+          projectId: null,
+          name: "Global Claude",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "project-visible-profile",
+          projectId: "project-1",
+          name: "Project Claude",
+          runtimeId: "codex",
+          providerId: "openai",
+          enabled: true,
+        },
+        {
+          id: "foreign-project-profile",
+          projectId: "project-2",
+          name: "Foreign Claude",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+      ])
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&scope=visible");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.map((profile: { id: string }) => profile.id)).toEqual([
+      "global-visible-profile",
+      "project-visible-profile",
+    ]);
+  });
+
   it("applies boolean query sanitization for includeGlobal/enabledOnly flags", async () => {
     const db = testDb.current;
     db.insert(runtimeProfiles)

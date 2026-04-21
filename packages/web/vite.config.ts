@@ -26,7 +26,7 @@ export default defineConfig(async () => {
     ({ default: tailwindcss } = await import("@tailwindcss/vite"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`[FIX] Failed to load @tailwindcss/vite: ${message}`);
+    throw new Error(`Failed to load @tailwindcss/vite: ${message}`);
   }
 
   return {

@@ -252,7 +252,7 @@ export const runtimeProfileListQuerySchema = z.object({
 });
 /**
  * Strict allowlist schema for the Codex login callback URL the user pastes in
- * the UI. Both the api and the agent broker validate this - double protection.
+ * the UI. Both the api and the agent broker validate this — double protection.
  * Only http://127.0.0.1|localhost:{loopbackPort}/?code=…&state=… is accepted.
  */
 export const codexCallbackSchema = z

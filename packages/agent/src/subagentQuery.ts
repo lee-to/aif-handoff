@@ -195,6 +195,8 @@ async function getRuntimeRegistry(): Promise<RuntimeRegistry> {
 /**
  * Resolve the RuntimeAdapter that would handle a given task.
  * Useful for reading adapter metadata (e.g. lightModel) without running a query.
+ * This helper is intentionally limited to task-stage modes; chat resolution
+ * goes through the API runtime service instead.
  */
 export async function resolveAdapterForTask(
   taskId: string,

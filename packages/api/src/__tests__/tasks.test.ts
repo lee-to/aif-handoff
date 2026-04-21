@@ -103,6 +103,52 @@ describe("tasks API", () => {
       expect(body).toHaveLength(2);
     });
 
+    it("resolves the app task default for every listed task", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.update(appSettings).set({ defaultTaskRuntimeProfileId: "app-task-default" }).run();
+      db.insert(runtimeProfiles)
+        .values({
+          id: "app-task-default",
+          projectId: null,
+          name: "App Task Default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        })
+        .run();
+      db.insert(tasks)
+        .values([
+          { id: "1", projectId: "test-project", title: "Task 1" },
+          { id: "2", projectId: "test-project", title: "Task 2" },
+        ])
+        .run();
+
+      const res = await app.request("/tasks");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+
+      expect(body).toHaveLength(2);
+      expect(
+        body.map((task: { effectiveRuntime: Record<string, string> }) => task.effectiveRuntime),
+      ).toEqual([
+        {
+          source: "system_default",
+          profileId: "app-task-default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileName: "App Task Default",
+        },
+        {
+          source: "system_default",
+          profileId: "app-task-default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileName: "App Task Default",
+        },
+      ]);
+    });
+
     it("should return 400 for invalid projectId format", async () => {
       const res = await app.request("/tasks?projectId=not-a-uuid");
       expect(res.status).toBe(400);

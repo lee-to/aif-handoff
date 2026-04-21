@@ -256,7 +256,7 @@ describe("ChatPanel", () => {
     fireEvent.click(screen.getByLabelText("Send message"));
 
     expect(
-      screen.queryByText("Runtime changed вЂ” next message will start a new session"),
+      screen.queryByText("Runtime changed — next message will start a new session"),
     ).toBeNull();
     expect(mockPinActiveSession).toHaveBeenCalledTimes(1);
     expect(mockSendMessage).toHaveBeenCalledWith("stay pinned", undefined, false);

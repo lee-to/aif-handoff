@@ -45,9 +45,11 @@ const log = logger("tasks-route");
 
 export const tasksRouter = new Hono();
 
-function toTaskRouteResponse(task: TaskRow) {
+function toTaskRouteResponse(
+  task: TaskRow,
+  systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task"),
+) {
   const response = toTaskResponse(task);
-  const systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task");
   const effective = resolveEffectiveRuntimeProfile({
     taskId: task.id,
     projectId: task.projectId,
@@ -87,8 +89,9 @@ tasksRouter.get("/", (c) => {
   }
 
   const allTasks = listTasks(projectId);
+  const systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task");
   log.debug({ count: allTasks.length, projectId }, "Listed tasks");
-  return c.json(allTasks.map(toTaskRouteResponse));
+  return c.json(allTasks.map((task) => toTaskRouteResponse(task, systemDefaultRuntimeProfileId)));
 });
 
 // POST /tasks — create

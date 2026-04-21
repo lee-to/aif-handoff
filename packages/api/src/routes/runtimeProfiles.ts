@@ -94,6 +94,24 @@ function sanitizeBooleanQuery(value: string | undefined, fallback = false): bool
   return value === "1" || value.toLowerCase() === "true";
 }
 
+function compareVisibleRuntimeProfiles(
+  left: { id: string; projectId: string | null; createdAt: string },
+  right: { id: string; projectId: string | null; createdAt: string },
+): number {
+  const leftRank = left.projectId == null ? 0 : 1;
+  const rightRank = right.projectId == null ? 0 : 1;
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
 function resolveValidationProfile(input: {
   profileId?: string;
   projectId?: string;
@@ -209,7 +227,9 @@ runtimeProfilesRouter.get("/", queryValidator(runtimeProfileListQuerySchema), as
       (row) => row.projectId === projectId,
     );
   } else {
-    rows = listRuntimeProfiles({ projectId, includeGlobal, enabledOnly });
+    rows = listRuntimeProfiles({ projectId, includeGlobal, enabledOnly }).sort(
+      compareVisibleRuntimeProfiles,
+    );
   }
   return c.json(rows.map(toRuntimeProfileResponse));
 });

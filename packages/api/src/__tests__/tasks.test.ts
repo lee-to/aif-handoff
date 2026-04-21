@@ -256,6 +256,36 @@ describe("tasks API", () => {
       expect(body.fieldErrors.runtimeProfileId).toBeDefined();
     });
 
+    it("should reject disabled runtime profiles on create", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.insert(runtimeProfiles)
+        .values({
+          id: "disabled-runtime-profile",
+          projectId: null,
+          name: "Disabled Runtime",
+          runtimeId: "codex",
+          providerId: "openai",
+          enabled: false,
+        })
+        .run();
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Disabled runtime task",
+          projectId: "test-project",
+          runtimeProfileId: "disabled-runtime-profile",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
+    });
+
     it("should persist planner settings from create payload", async () => {
       const res = await app.request("/tasks", {
         method: "POST",

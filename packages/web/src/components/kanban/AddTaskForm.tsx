@@ -61,6 +61,7 @@ export function AddTaskForm({ projectId }: Props) {
     : appTaskRuntimeDefaultId
       ? "the app default runtime profile"
       : "the environment fallback runtime";
+  const selectableRuntimeProfiles = runtimeProfiles.filter((profile) => profile.enabled !== false);
   const selectedRuntimeProfile =
     runtimeProfiles.find((profile) => profile.id === runtimeProfileId) ?? null;
   const selectedRuntimeDescriptor = selectedRuntimeProfile
@@ -380,7 +381,7 @@ export function AddTaskForm({ projectId }: Props) {
                     ? "(project default)"
                     : "(none — runtime resolved by system defaults)"}
                 </option>
-                {runtimeProfiles.map((profile) => (
+                {selectableRuntimeProfiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
                     {formatRuntimeProfileOptionLabel(profile)}
                   </option>

@@ -7,12 +7,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build --configLoader native",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --configLoader runner",
     "coverage": "vitest run --coverage",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
-    "test:watch": "vitest"
+    "test:watch": "vitest --configLoader runner"
   },
   "dependencies": {
     "@aif/shared": "*",

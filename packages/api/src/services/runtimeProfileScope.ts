@@ -27,18 +27,19 @@ export function validateProjectScopedRuntimeProfileSelections(input: {
     if (runtimeProfileId === undefined || runtimeProfileId === null) continue;
 
     const profile = findRuntimeProfileById(runtimeProfileId);
+    const isEnabled = profile != null && profile.enabled !== false;
     const isVisible =
       profile != null &&
       (profile.projectId == null ||
         (input.projectId != null && profile.projectId === input.projectId));
 
-    if (!isVisible) {
+    if (!isVisible || !isEnabled) {
       addFieldError(
         fieldErrors,
         field,
         input.projectId == null
-          ? "Must reference a global runtime profile"
-          : "Must reference a global or same-project runtime profile",
+          ? "Must reference an enabled global runtime profile"
+          : "Must reference an enabled global or same-project runtime profile",
       );
     }
   }

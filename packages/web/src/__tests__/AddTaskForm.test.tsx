@@ -379,6 +379,39 @@ describe("AddTaskForm", () => {
     ).toBeDefined();
   });
 
+  it("filters disabled runtime profiles out of the override selector", () => {
+    mockRuntimeProfilesData.data = [
+      {
+        id: "rp-enabled",
+        name: "Enabled Profile",
+        runtimeId: "codex",
+        providerId: "openai",
+        projectId: null,
+        enabled: true,
+      },
+      {
+        id: "rp-disabled",
+        name: "Disabled Profile",
+        runtimeId: "codex",
+        providerId: "openai",
+        projectId: null,
+        enabled: false,
+      },
+    ];
+
+    render(<AddTaskForm projectId="p-1" />);
+
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.click(screen.getByRole("button", { name: "Runtime override" }));
+
+    expect(
+      screen.getByRole("option", { name: "Enabled Profile [Global] (codex/openai)" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("option", { name: "Disabled Profile [Global] (codex/openai)" }),
+    ).toBeNull();
+  });
+
   it("submits planner settings from advanced options", () => {
     render(<AddTaskForm projectId="p-1" />);
 

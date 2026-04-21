@@ -111,12 +111,9 @@ export function ChatPanel({
 
   const handleSend = () => {
     if (!input.trim() || isStreaming) return;
-    const forceNew = runtimeMismatch;
-    if (!forceNew) {
-      pinActiveSession();
-    }
+    pinActiveSession();
     const files = pendingFiles.length > 0 ? pendingFiles : undefined;
-    void sendMessage(input, files, forceNew);
+    void sendMessage(input, files, false);
     setInput("");
     setPendingFiles([]);
   };
@@ -176,14 +173,8 @@ export function ChatPanel({
   // Find active session title
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
-  // Detect runtime mismatch: session was created with a different runtime profile
-  const currentProfileId = effectiveChatRuntime?.profile?.id ?? null;
   const sessionProfileId = activeSession?.runtimeProfileId ?? null;
-  const runtimeMismatch =
-    Boolean(activeSession) &&
-    Boolean(sessionProfileId) &&
-    Boolean(currentProfileId) &&
-    sessionProfileId !== currentProfileId;
+  const runtimeMismatch = false;
 
   // Show the session's own runtime when it has one, otherwise show the project effective runtime
   const sessionProfile = sessionProfileId

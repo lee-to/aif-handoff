@@ -470,12 +470,18 @@ function buildChatRuntimeWorkflow(prompt: string, systemPromptAppend: string) {
   });
 }
 
-async function resolveChatRuntimeAdapter(projectId: string, prompt: string, systemAppend: string) {
+async function resolveChatRuntimeAdapter(
+  projectId: string,
+  prompt: string,
+  systemAppend: string,
+  options: { runtimeProfileId?: string | null } = {},
+) {
   const workflow = buildChatRuntimeWorkflow(prompt, systemAppend);
   const context = await resolveApiRuntimeContext({
     projectId,
     mode: "chat",
     workflow,
+    runtimeProfileId: options.runtimeProfileId,
   });
   assertApiRuntimeCapabilities({
     adapter: context.adapter,
@@ -981,8 +987,24 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       if (row) currentTask = toTaskResponse(row);
     }
 
+    chatSessionId = inputSessionId ?? null;
+    const incomingVirtual = chatSessionId ? parseVirtualRuntimeSessionId(chatSessionId) : null;
+    let existingSession =
+      chatSessionId && !incomingVirtual ? (findChatSessionById(chatSessionId) ?? null) : null;
+    if (chatSessionId && !incomingVirtual && !existingSession) {
+      log.debug("Provided sessionId=%s not found, will auto-create", chatSessionId);
+      chatSessionId = null;
+    }
+
     const baseSystemAppend = buildContextAppend(project.name, currentTask);
-    const runtimeResolution = await resolveChatRuntimeAdapter(projectId, message, baseSystemAppend);
+    const runtimeResolution = await resolveChatRuntimeAdapter(
+      projectId,
+      message,
+      baseSystemAppend,
+      {
+        runtimeProfileId: existingSession?.runtimeProfileId ?? null,
+      },
+    );
     const runtimeContext = runtimeResolution.context;
     const adapter = runtimeContext.adapter;
     runtimeId = runtimeContext.resolvedProfile.runtimeId;
@@ -996,9 +1018,8 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       interactiveQuestions: chatRuntimeCaps.supportsInteractiveQuestions === true,
     });
 
-    // Resolve or auto-create a chat session
-    chatSessionId = inputSessionId ?? null;
-    const incomingVirtual = chatSessionId ? parseVirtualRuntimeSessionId(chatSessionId) : null;
+    // Resolve or auto-create a chat session. Existing DB sessions are loaded
+    // before runtime resolution so their saved runtimeProfileId stays pinned.
 
     // External runtime sessions are virtual — create a DB session linked to the runtime session
     if (incomingVirtual) {
@@ -1017,12 +1038,6 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         });
         broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
       } else {
-        chatSessionId = null;
-      }
-    } else if (chatSessionId) {
-      const existing = findChatSessionById(chatSessionId);
-      if (!existing) {
-        log.debug("Provided sessionId=%s not found, will auto-create", chatSessionId);
         chatSessionId = null;
       }
     }
@@ -1056,7 +1071,9 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       "INFO [api-runtime] Chat request started",
     );
 
-    const dbSession = chatSessionId ? findChatSessionById(chatSessionId) : null;
+    const dbSession = chatSessionId
+      ? (existingSession ?? findChatSessionById(chatSessionId))
+      : null;
     const resumeRuntimeSessionId =
       dbSession?.runtimeSessionId ?? dbSession?.agentSessionId ?? undefined;
 

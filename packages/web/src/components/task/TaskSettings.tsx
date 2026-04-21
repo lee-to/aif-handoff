@@ -27,6 +27,7 @@ export function TaskSettings({ task, onSave }: Props) {
     : appRuntimeDefaults?.resolvedDefaultTaskRuntimeProfileId
       ? "(app default)"
       : "(env fallback)";
+  const selectableRuntimeProfiles = runtimeProfiles.filter((profile) => profile.enabled !== false);
   const [open, setOpen] = useState(false);
   const [autoMode, setAutoMode] = useState(task.autoMode);
   const [skipReview, setSkipReview] = useState(task.skipReview);
@@ -315,7 +316,7 @@ export function TaskSettings({ task, onSave }: Props) {
                 onChange={(e) => setRuntimeProfileId(e.target.value)}
               >
                 <option value="">{runtimeDefaultLabel}</option>
-                {runtimeProfiles.map((profile) => (
+                {selectableRuntimeProfiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
                     {formatRuntimeProfileOptionLabel(profile)}
                   </option>

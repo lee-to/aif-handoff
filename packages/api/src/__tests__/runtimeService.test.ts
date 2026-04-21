@@ -292,6 +292,41 @@ describe("runtime service", () => {
     );
   });
 
+  it("prefers an explicit runtime profile id over effective chat defaults", async () => {
+    const runtimeService = await loadRuntimeService();
+    mockFindRuntimeProfileById.mockImplementation((id: string) =>
+      id === "profile-pinned"
+        ? {
+            id,
+            runtimeId: "codex",
+            providerId: "openai",
+            defaultModel: "gpt-5.4",
+            enabled: true,
+          }
+        : null,
+    );
+
+    const context = await runtimeService.resolveApiRuntimeContext({
+      projectId: "proj-1",
+      mode: "chat",
+      runtimeProfileId: "profile-pinned",
+      workflow: { workflowKind: "chat", requiredCapabilities: [] } as never,
+    });
+
+    expect(context.selectionSource).toBe("profile_id");
+    expect(mockResolveEffectiveRuntimeProfile).not.toHaveBeenCalled();
+    expect(mockResolveRuntimeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "profile_id",
+        profile: expect.objectContaining({
+          id: "profile-pinned",
+          runtimeId: "codex",
+          providerId: "openai",
+        }),
+      }),
+    );
+  });
+
   it("prefers explicit model/runtime options overrides over task values", async () => {
     const runtimeService = await loadRuntimeService();
     mockFindTaskById.mockReturnValue({

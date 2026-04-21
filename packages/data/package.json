@@ -9,10 +9,10 @@
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests --configLoader runner",
     "coverage": "vitest run --coverage --passWithNoTests",
     "lint": "eslint \"src/**/*.ts\"",
-    "test:watch": "vitest"
+    "test:watch": "vitest --configLoader runner"
   },
   "dependencies": {
     "@aif/shared": "*",

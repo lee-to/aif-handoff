@@ -295,6 +295,62 @@ describe("chat API", () => {
     );
   });
 
+  it("pins resumed chat runs to the saved session runtime profile", async () => {
+    mockFindChatSessionById.mockReturnValue({
+      id: "session-1",
+      projectId: "project-1",
+      title: "Pinned",
+      runtimeProfileId: "profile-pinned",
+      runtimeSessionId: "runtime-session-prev",
+      agentSessionId: null,
+    });
+    mockResolveApiRuntimeContext.mockImplementation(async (input: Record<string, unknown>) => ({
+      project: { id: "project-1", rootPath: "/tmp/project-1" },
+      adapter: runtimeAdapter,
+      resolvedProfile: {
+        source: input.runtimeProfileId ? "profile_id" : "project_default",
+        profileId: (input.runtimeProfileId as string | undefined) ?? "profile-default",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        model: null,
+        baseUrl: null,
+        apiKey: null,
+        apiKeyEnvVar: null,
+        headers: {},
+        options: {},
+      },
+      selectionSource: input.runtimeProfileId ? "profile_id" : "project_default",
+    }));
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "resume pinned session",
+        sessionId: "session-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockResolveApiRuntimeContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "project-1",
+        mode: "chat",
+        runtimeProfileId: "profile-pinned",
+      }),
+    );
+    expect(mockAdapterResume).toHaveBeenCalledTimes(1);
+    expect(mockUpdateChatSession).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        runtimeProfileId: "profile-pinned",
+        runtimeSessionId: "runtime-session-1",
+      }),
+    );
+  });
+
   it("passes chat execution timeouts from env", async () => {
     const res = await app.request("/chat", {
       method: "POST",

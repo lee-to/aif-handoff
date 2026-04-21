@@ -409,6 +409,43 @@ describe("projects API", () => {
     expect(body.fieldErrors.defaultTaskRuntimeProfileId).toBeDefined();
   });
 
+  it("rejects disabled runtime profile defaults on update", async () => {
+    testDb.current
+      .insert(runtimeProfiles)
+      .values({
+        id: "disabled-global-profile",
+        projectId: null,
+        name: "Disabled Global",
+        runtimeId: "codex",
+        providerId: "openai",
+        enabled: false,
+      })
+      .run();
+
+    const createRes = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Scoped", rootPath: "/tmp/scoped-project-disabled" }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json();
+
+    const updateRes = await app.request(`/projects/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Scoped",
+        rootPath: "/tmp/scoped-project-disabled",
+        defaultTaskRuntimeProfileId: "disabled-global-profile",
+      }),
+    });
+
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.error).toBeTruthy();
+    expect(body.fieldErrors.defaultTaskRuntimeProfileId).toBeDefined();
+  });
+
   describe("auto-queue mode", () => {
     beforeEach(() => {
       testDb.current.insert(projects).values({ id: "p-1", name: "P1", rootPath: "/tmp/p1" }).run();

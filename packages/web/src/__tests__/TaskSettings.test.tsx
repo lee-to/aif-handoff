@@ -12,6 +12,9 @@ const mockAppRuntimeDefaultsData = {
       }
     | undefined,
 };
+const mockRuntimeProfilesData = {
+  data: [] as Array<Record<string, unknown>>,
+};
 
 vi.mock("@/hooks/useProjects", () => ({
   useProjects: () => ({ data: mockProjectsData.data }),
@@ -19,7 +22,7 @@ vi.mock("@/hooks/useProjects", () => ({
 
 vi.mock("@/hooks/useRuntimeProfiles", () => ({
   useAppRuntimeDefaults: () => ({ data: mockAppRuntimeDefaultsData.data }),
-  useRuntimeProfiles: () => ({ data: [] }),
+  useRuntimeProfiles: () => ({ data: mockRuntimeProfilesData.data }),
   useRuntimes: () => ({ data: [] }),
 }));
 
@@ -73,6 +76,7 @@ describe("TaskSettings", () => {
     onSave = vi.fn();
     mockProjectsData.data = [{ id: "test-project", parallelEnabled: false }];
     mockAppRuntimeDefaultsData.data = undefined;
+    mockRuntimeProfilesData.data = [];
   });
 
   it("renders Settings button when collapsed", () => {
@@ -271,6 +275,38 @@ describe("TaskSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Runtime override" }));
 
     expect(screen.getByText("(app default)")).toBeDefined();
+  });
+
+  it("filters disabled runtime profiles out of the override selector", () => {
+    mockRuntimeProfilesData.data = [
+      {
+        id: "rp-enabled",
+        name: "Enabled Profile",
+        runtimeId: "codex",
+        providerId: "openai",
+        projectId: null,
+        enabled: true,
+      },
+      {
+        id: "rp-disabled",
+        name: "Disabled Profile",
+        runtimeId: "codex",
+        providerId: "openai",
+        projectId: null,
+        enabled: false,
+      },
+    ];
+
+    render(<TaskSettings task={mockTask} onSave={onSave} />);
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Runtime override" }));
+
+    expect(
+      screen.getByRole("option", { name: "Enabled Profile [Global] (codex/openai)" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("option", { name: "Disabled Profile [Global] (codex/openai)" }),
+    ).toBeNull();
   });
 
   it("does not include planner fields in save for fix tasks", () => {

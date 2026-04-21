@@ -7,6 +7,12 @@ Element.prototype.scrollIntoView = vi.fn();
 const mockSendMessage = vi.fn();
 const mockClearMessages = vi.fn();
 const mockSetExplore = vi.fn();
+const mockPinActiveSession = vi.fn();
+const mockClearActiveSession = vi.fn();
+const mockDeleteSession = vi.fn();
+const mockRenameSession = vi.fn();
+const mockSetActiveSessionId = vi.fn();
+const mockNewSession = vi.fn();
 
 let mockMessages: {
   role: string;
@@ -17,6 +23,8 @@ let mockIsStreaming = false;
 let mockExplore = false;
 let mockChatErrorCode: string | null = null;
 let mockActiveSessionId: string | null = null;
+let mockSessions: Array<Record<string, unknown>> = [];
+let mockRuntimeProfiles: Array<Record<string, unknown>> = [];
 let mockEffectiveChatRuntime: {
   source: string;
   profile: {
@@ -38,21 +46,21 @@ vi.mock("@/hooks/useChat", () => ({
     setExplore: mockSetExplore,
     sendMessage: mockSendMessage,
     clearMessages: mockClearMessages,
-    newSession: vi.fn(),
+    newSession: mockNewSession,
   }),
 }));
 
 vi.mock("@/hooks/useChatSessions", () => ({
   useChatSessions: () => ({
-    sessions: [],
+    sessions: mockSessions,
     isLoading: false,
     activeSessionId: mockActiveSessionId,
-    setActiveSessionId: vi.fn(),
-    pinActiveSession: vi.fn(),
-    clearActiveSession: vi.fn(),
+    setActiveSessionId: mockSetActiveSessionId,
+    pinActiveSession: mockPinActiveSession,
+    clearActiveSession: mockClearActiveSession,
     createSession: vi.fn(),
-    deleteSession: vi.fn(),
-    renameSession: vi.fn(),
+    deleteSession: mockDeleteSession,
+    renameSession: mockRenameSession,
     loadSessionMessages: vi.fn(),
   }),
 }));
@@ -67,7 +75,7 @@ vi.mock("@/hooks/useRuntimeProfiles", () => ({
     data: mockEffectiveChatRuntime,
   }),
   useRuntimeProfiles: () => ({
-    data: [],
+    data: mockRuntimeProfiles,
   }),
 }));
 
@@ -102,10 +110,18 @@ describe("ChatPanel", () => {
     mockExplore = false;
     mockChatErrorCode = null;
     mockActiveSessionId = null;
+    mockSessions = [];
+    mockRuntimeProfiles = [];
     mockEffectiveChatRuntime = null;
     mockSendMessage.mockClear();
     mockClearMessages.mockClear();
     mockSetExplore.mockClear();
+    mockPinActiveSession.mockClear();
+    mockClearActiveSession.mockClear();
+    mockDeleteSession.mockClear();
+    mockRenameSession.mockClear();
+    mockSetActiveSessionId.mockClear();
+    mockNewSession.mockClear();
     mockOnClose.mockClear();
   });
 
@@ -197,6 +213,53 @@ describe("ChatPanel", () => {
     const sendButton = screen.getByLabelText("Send message");
     fireEvent.click(sendButton);
     expect(mockSendMessage).toHaveBeenCalledWith("hello", undefined, false);
+  });
+
+  it("keeps sending in the pinned session when its saved runtime differs from the current default", () => {
+    mockActiveSessionId = "session-1";
+    mockSessions = [
+      {
+        id: "session-1",
+        title: "Pinned session",
+        runtimeProfileId: "profile-saved",
+      },
+    ];
+    mockRuntimeProfiles = [
+      {
+        id: "profile-saved",
+        name: "Saved Runtime",
+        projectId: null,
+        runtimeId: "claude",
+        providerId: "anthropic",
+        defaultModel: "sonnet",
+      },
+    ];
+    mockEffectiveChatRuntime = {
+      source: "project_default",
+      profile: {
+        name: "Current Default",
+        projectId: "p-1",
+        runtimeId: "codex",
+        providerId: "openai",
+        defaultModel: "gpt-5.4",
+      },
+      resolved: {
+        runtimeId: "codex",
+        providerId: "openai",
+        model: "gpt-5.4",
+      },
+    };
+
+    renderPanel();
+    const textarea = screen.getByPlaceholderText("Ask a question...");
+    fireEvent.change(textarea, { target: { value: "stay pinned" } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+
+    expect(
+      screen.queryByText("Runtime changed вЂ” next message will start a new session"),
+    ).toBeNull();
+    expect(mockPinActiveSession).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage).toHaveBeenCalledWith("stay pinned", undefined, false);
   });
 
   it("shows Explore checkbox toggle", () => {

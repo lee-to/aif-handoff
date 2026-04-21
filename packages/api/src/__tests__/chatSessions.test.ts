@@ -259,6 +259,29 @@ describe("chat session API", () => {
       expect(body.error).toBeTruthy();
       expect(body.fieldErrors.runtimeProfileId).toBeDefined();
     });
+
+    it("rejects disabled runtime profiles on create", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "disabled-profile",
+        projectId: null,
+        enabled: false,
+      });
+
+      const res = await app.request("/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          title: "New Chat",
+          runtimeProfileId: "disabled-profile",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
+    });
   });
 
   describe("GET /chat/sessions/:id", () => {
@@ -528,6 +551,26 @@ describe("chat session API", () => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ runtimeProfileId: "foreign-profile" }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
+    });
+
+    it("rejects disabled runtime profiles on update", async () => {
+      mockFindChatSessionById.mockReturnValue(SESSION_ROW);
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "disabled-profile",
+        projectId: null,
+        enabled: false,
+      });
+
+      const res = await app.request("/chat/sessions/session-1", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runtimeProfileId: "disabled-profile" }),
       });
 
       expect(res.status).toBe(400);

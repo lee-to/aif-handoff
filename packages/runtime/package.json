@@ -12,10 +12,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --configLoader runner",
     "coverage": "vitest run --coverage",
     "lint": "eslint \"src/**/*.ts\"",
-    "test:watch": "vitest"
+    "test:watch": "vitest --configLoader runner"
   },
   "dependencies": {
     "@aif/shared": "*",

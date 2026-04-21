@@ -52,6 +52,16 @@ const mixedProfiles = [
     defaultModel: "gpt-5.4",
     enabled: true,
   },
+  {
+    id: "global-disabled",
+    projectId: null,
+    name: "Disabled Global",
+    runtimeId: "codex",
+    providerId: "openai",
+    transport: "cli",
+    defaultModel: "gpt-5.4",
+    enabled: false,
+  },
 ];
 
 vi.mock("@/hooks/useProjects", () => ({
@@ -166,6 +176,28 @@ describe("ProjectRuntimeSettings", () => {
         input: { projectId: null },
       });
     });
+  });
+
+  it("keeps disabled profiles in management lists but removes them from default selectors", () => {
+    render(
+      <ProjectRuntimeSettings
+        project={project}
+        open={true}
+        onOpenChange={vi.fn()}
+        hideTrigger={true}
+      />,
+    );
+
+    expect(screen.getAllByText("Disabled Global [Global] (codex/openai)")).toHaveLength(1);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Project Local [Project] (claude/anthropic)",
+      }),
+    );
+
+    expect(screen.getAllByText("Disabled Global [Global] (codex/openai)")).toHaveLength(1);
+    expect(screen.getAllByText("Shared Codex [Global] (codex/openai)").length).toBeGreaterThan(1);
   });
 
   it("deletes a global profile from the project screen after confirmation", async () => {

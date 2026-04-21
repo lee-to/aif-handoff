@@ -72,10 +72,12 @@ export function ProjectRuntimeSettings({
   );
 
   const runtimeOptions = useMemo(() => {
-    return profiles.map((profile) => ({
-      id: profile.id,
-      label: formatRuntimeProfileOptionLabel(profile),
-    }));
+    return profiles
+      .filter((profile) => profile.enabled !== false)
+      .map((profile) => ({
+        id: profile.id,
+        label: formatRuntimeProfileOptionLabel(profile),
+      }));
   }, [profiles]);
 
   const taskDefaultEmptyLabel = appRuntimeDefaults?.resolvedDefaultTaskRuntimeProfileId

@@ -8,31 +8,42 @@ import {
   toTaskResponse,
   setTaskFields,
 } from "@aif/data";
-import type { ToolContext } from "./index.js";
+import { registerMcpTool, type ToolContext } from "./index.js";
 import { rateLimitError, toMcpError, validationError } from "../middleware/errorHandler.js";
 import { resolveConflict } from "../sync/conflictResolver.js";
 import { compactTaskResponse } from "../utils/compactResponse.js";
 import { broadcastTaskChange } from "../utils/broadcast.js";
 
 const log = logger("mcp:tool:sync-status");
+const syncStatusInputSchema: Record<string, z.ZodTypeAny> = {
+  taskId: z.string().uuid().describe("Task ID to sync status for"),
+  newStatus: z.enum(TASK_STATUSES).describe("New status to set"),
+  sourceTimestamp: z
+    .string()
+    .describe("ISO timestamp with millisecond precision from the source system"),
+  direction: z.enum(["aif_to_handoff", "handoff_to_aif"]).describe("Sync direction"),
+  paused: z
+    .boolean()
+    .optional()
+    .describe("Set paused flag on the task atomically with the status change"),
+};
+
+type SyncStatusArgs = {
+  direction: "aif_to_handoff" | "handoff_to_aif";
+  newStatus: (typeof TASK_STATUSES)[number];
+  paused?: boolean;
+  sourceTimestamp: string;
+  taskId: string;
+};
 
 export function register(server: McpServer, context: ToolContext): void {
-  server.tool(
+  registerMcpTool(
+    server,
     "handoff_sync_status",
     "Bidirectional status sync with conflict detection and resolution",
-    {
-      taskId: z.string().uuid().describe("Task ID to sync status for"),
-      newStatus: z.enum(TASK_STATUSES).describe("New status to set"),
-      sourceTimestamp: z
-        .string()
-        .describe("ISO timestamp with millisecond precision from the source system"),
-      direction: z.enum(["aif_to_handoff", "handoff_to_aif"]).describe("Sync direction"),
-      paused: z
-        .boolean()
-        .optional()
-        .describe("Set paused flag on the task atomically with the status change"),
-    },
-    async (args) => {
+    syncStatusInputSchema,
+    async (rawArgs) => {
+      const args = rawArgs as SyncStatusArgs;
       if (!context.rateLimiter.check("handoff_sync_status", "write")) {
         throw rateLimitError("handoff_sync_status");
       }

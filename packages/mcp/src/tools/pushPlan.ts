@@ -2,22 +2,30 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger, parsePlanAnnotations } from "@aif/shared";
 import { findTaskById, setTaskFields, toTaskResponse } from "@aif/data";
-import type { ToolContext } from "./index.js";
+import { registerMcpTool, type ToolContext } from "./index.js";
 import { rateLimitError, toMcpError, validationError } from "../middleware/errorHandler.js";
 import { compactTaskResponse } from "../utils/compactResponse.js";
 import { broadcastTaskChange } from "../utils/broadcast.js";
 
 const log = logger("mcp:tool:push-plan");
+const pushPlanInputSchema: Record<string, z.ZodTypeAny> = {
+  taskId: z.string().uuid().describe("Task ID to push plan to"),
+  planContent: z.string().max(100_000).describe("Plan content in markdown (max 100KB)"),
+};
+
+type PushPlanArgs = {
+  planContent: string;
+  taskId: string;
+};
 
 export function register(server: McpServer, context: ToolContext): void {
-  server.tool(
+  registerMcpTool(
+    server,
     "handoff_push_plan",
     "Push plan content to a task's plan field with annotation preservation",
-    {
-      taskId: z.string().uuid().describe("Task ID to push plan to"),
-      planContent: z.string().max(100_000).describe("Plan content in markdown (max 100KB)"),
-    },
-    async (args) => {
+    pushPlanInputSchema,
+    async (rawArgs) => {
+      const args = rawArgs as PushPlanArgs;
       try {
         if (!context.rateLimiter.check("handoff_push_plan", "write")) {
           throw rateLimitError("handoff_push_plan");

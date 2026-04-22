@@ -1,25 +1,34 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger, insertPlanAnnotation, parsePlanAnnotations } from "@aif/shared";
-import type { ToolContext } from "./index.js";
+import { registerMcpTool, type ToolContext } from "./index.js";
 import { rateLimitError, toMcpError } from "../middleware/errorHandler.js";
 
 const log = logger("mcp:tool:annotate-plan");
+const annotatePlanInputSchema: Record<string, z.ZodTypeAny> = {
+  taskId: z.string().uuid().describe("Task ID to annotate"),
+  planContent: z.string().max(100_000).describe("Plan content in markdown (max 100KB)"),
+  sectionHeading: z
+    .string()
+    .max(200)
+    .optional()
+    .describe("Section heading to insert annotation after"),
+};
+
+type AnnotatePlanArgs = {
+  planContent: string;
+  sectionHeading?: string;
+  taskId: string;
+};
 
 export function register(server: McpServer, context: ToolContext): void {
-  server.tool(
+  registerMcpTool(
+    server,
     "handoff_annotate_plan",
     "Insert or update task ID annotations in plan markdown",
-    {
-      taskId: z.string().uuid().describe("Task ID to annotate"),
-      planContent: z.string().max(100_000).describe("Plan content in markdown (max 100KB)"),
-      sectionHeading: z
-        .string()
-        .max(200)
-        .optional()
-        .describe("Section heading to insert annotation after"),
-    },
-    async (args) => {
+    annotatePlanInputSchema,
+    async (rawArgs) => {
+      const args = rawArgs as AnnotatePlanArgs;
       try {
         if (!context.rateLimiter.check("handoff_annotate_plan", "write")) {
           throw rateLimitError("handoff_annotate_plan");

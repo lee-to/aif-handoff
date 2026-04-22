@@ -2,28 +2,38 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "@aif/shared";
 import { searchTasksPaginated, toTaskSummary } from "@aif/data";
-import type { ToolContext } from "./index.js";
+import { registerMcpTool, type ToolContext } from "./index.js";
 import { rateLimitError, toMcpError } from "../middleware/errorHandler.js";
 
 const log = logger("mcp:tool:search-tasks");
+const searchTasksInputSchema: Record<string, z.ZodTypeAny> = {
+  query: z.string().min(1).max(200).describe("Search query string (max 200 chars)"),
+  projectId: z.string().uuid().optional().describe("Optional project ID to scope the search"),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Max results per page (default 20, max 50)"),
+  offset: z.number().int().min(0).optional().describe("Number of results to skip (default 0)"),
+};
+
+type SearchTasksArgs = {
+  limit?: number;
+  offset?: number;
+  projectId?: string;
+  query: string;
+};
 
 export function register(server: McpServer, context: ToolContext): void {
-  server.tool(
+  registerMcpTool(
+    server,
     "handoff_search_tasks",
     "Full-text search across task title and description with pagination. Returns summary fields.",
-    {
-      query: z.string().min(1).max(200).describe("Search query string (max 200 chars)"),
-      projectId: z.string().uuid().optional().describe("Optional project ID to scope the search"),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(50)
-        .optional()
-        .describe("Max results per page (default 20, max 50)"),
-      offset: z.number().int().min(0).optional().describe("Number of results to skip (default 0)"),
-    },
-    async (args) => {
+    searchTasksInputSchema,
+    async (rawArgs) => {
+      const args = rawArgs as SearchTasksArgs;
       try {
         if (!context.rateLimiter.check("handoff_search_tasks", "read")) {
           throw rateLimitError("handoff_search_tasks");

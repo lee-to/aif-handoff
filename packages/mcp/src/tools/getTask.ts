@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger } from "@aif/shared";
 import { findTaskById, toTaskResponse } from "@aif/data";
-import type { ToolContext } from "./index.js";
+import { registerMcpTool, type ToolContext } from "./index.js";
 import { rateLimitError, toMcpError } from "../middleware/errorHandler.js";
 import { buildEffectiveTaskRuntimeMetadata } from "./runtimeTaskMetadata.js";
 
@@ -56,21 +56,29 @@ const TASK_FIELDS = [
   "createdAt",
   "updatedAt",
 ] as const;
+const getTaskInputSchema: Record<string, z.ZodTypeAny> = {
+  taskId: z.string().uuid().describe("Task ID to retrieve"),
+  fields: z
+    .array(z.enum(TASK_FIELDS))
+    .optional()
+    .describe(
+      "Optional list of field names to return. Omit for all fields. 'id' is always included.",
+    ),
+};
+
+type GetTaskArgs = {
+  fields?: (typeof TASK_FIELDS)[number][];
+  taskId: string;
+};
 
 export function register(server: McpServer, context: ToolContext): void {
-  server.tool(
+  registerMcpTool(
+    server,
     "handoff_get_task",
     "Get a single task by ID. Pass 'fields' to select specific fields (always includes 'id'); omit for full detail.",
-    {
-      taskId: z.string().uuid().describe("Task ID to retrieve"),
-      fields: z
-        .array(z.enum(TASK_FIELDS))
-        .optional()
-        .describe(
-          "Optional list of field names to return. Omit for all fields. 'id' is always included.",
-        ),
-    },
-    async (args) => {
+    getTaskInputSchema,
+    async (rawArgs) => {
+      const args = rawArgs as GetTaskArgs;
       try {
         if (!context.rateLimiter.check("handoff_get_task", "read")) {
           throw rateLimitError("handoff_get_task");

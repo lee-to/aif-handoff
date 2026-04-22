@@ -73,12 +73,8 @@ export type HydratedTaskRow = TaskRow & {
   autoReviewState?: AutoReviewState | null;
   runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
 };
-type AppSettingsDb = ReturnType<typeof getDb>;
 
 export type CoordinatorStage = "planner" | "plan-checker" | "implementer" | "reviewer";
-
-let appSettingsCacheDb: AppSettingsDb | null = null;
-let appSettingsCache: AppSettingsRow | null = null;
 
 /** DB-level patch: all mutable task columns with their storage types (attachments/tags as JSON strings). */
 export type TaskFieldsPatch = Partial<Omit<TaskRow, "id" | "projectId" | "createdAt">> & {
@@ -905,16 +901,10 @@ export function toAppSettingsResponse(row: AppSettingsRow): AppSettings {
 
 function ensureAppSettingsRow(): AppSettingsRow {
   const db = getDb();
-  if (appSettingsCacheDb === db && appSettingsCache) {
-    return appSettingsCache;
-  }
-
   // Migration 13 seeds row id=1. Keep this fallback for legacy/test databases
   // so read paths stay resilient even when they start from an empty schema.
   const existing = db.select().from(appSettings).where(eq(appSettings.id, APP_SETTINGS_ID)).get();
   if (existing) {
-    appSettingsCacheDb = db;
-    appSettingsCache = existing;
     return existing;
   }
 
@@ -930,10 +920,7 @@ function ensureAppSettingsRow(): AppSettingsRow {
     .onConflictDoNothing()
     .run();
 
-  const seeded = db.select().from(appSettings).where(eq(appSettings.id, APP_SETTINGS_ID)).get()!;
-  appSettingsCacheDb = db;
-  appSettingsCache = seeded;
-  return seeded;
+  return db.select().from(appSettings).where(eq(appSettings.id, APP_SETTINGS_ID)).get()!;
 }
 
 export function getAppSettings(): AppSettingsRow {
@@ -978,10 +965,7 @@ export function updateAppSettings(input: UpdateAppSettingsInput): AppSettingsRow
     .where(eq(appSettings.id, APP_SETTINGS_ID))
     .run();
 
-  appSettingsCache = null;
-  const updated = ensureAppSettingsRow();
-  appSettingsCache = updated;
-  return updated;
+  return ensureAppSettingsRow();
 }
 
 export function getAppDefaultRuntimeProfileId(
@@ -2091,8 +2075,6 @@ export function clearRuntimeProfileLimitSnapshot(
 export function deleteRuntimeProfile(id: string): void {
   log.debug({ runtimeProfileId: id }, "Deleting runtime profile");
   getDb().delete(runtimeProfiles).where(eq(runtimeProfiles.id, id)).run();
-  appSettingsCache = null;
-  appSettingsCacheDb = null;
 }
 
 export function isRuntimeProfileVisibleToProject(input: {

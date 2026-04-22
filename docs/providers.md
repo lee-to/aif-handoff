@@ -88,6 +88,20 @@ Auto-pause semantics follow the precision:
 - `heuristic` snapshots only proactively gate when the provider reports the runtime as blocked.
 - When a provider exposes `resetAt` / `retryAfterSeconds`, the agent uses those values instead of random quota backoff.
 
+### Provider metadata sanitization
+
+Runtime-limit `providerMeta` is sanitized before it is persisted or exposed outside the runtime layer.
+
+- Only provider-specific allow-listed top-level keys survive sanitization.
+- String values are redacted before storage.
+- Nested structured objects stay typed only when the key is registered in `PROVIDER_META_NESTED_SCHEMAS` (currently `modelUsageSummary` and `toolUsageSummary`).
+- Any new allow-listed key that emits a nested object/array must add a schema entry, otherwise that nested container is collapsed to a redacted opaque JSON string.
+
+Redaction helpers have distinct contracts:
+
+- `redactProviderText()` is the strict client-safe helper. Use it for anything returned to clients or persisted in user-visible payloads.
+- `redactProviderTextForLogs()` is the server-log helper. It still scrubs secrets, but preserves URLs and emails so diagnostics remain useful.
+
 For Claude-family profiles, the runtime now distinguishes the backend by resolved endpoint identity, not just `runtimeId/providerId/model`:
 
 - Native Anthropic uses SDK `rate_limit_event` (SDK/CLI) or Anthropic headers (API).

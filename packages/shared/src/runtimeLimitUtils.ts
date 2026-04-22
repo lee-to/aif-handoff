@@ -250,6 +250,10 @@ const PROVIDER_META_NESTED_SCHEMAS: Record<string, ProviderMetaSchema> = normali
   },
 });
 
+// Any new allow-listed key that needs to preserve nested object/array structure
+// must register a schema here. Unknown nested containers intentionally collapse
+// to a redacted opaque JSON string to avoid leaking arbitrary provider payloads.
+
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -312,12 +316,22 @@ function redactProviderTextWithPatterns(
   return redacted;
 }
 
+/**
+ * Strict client-safe redaction for provider text.
+ * Use this for anything returned to clients or persisted in user-visible
+ * payloads.
+ */
 export function redactProviderText(raw: string, options: RedactProviderTextOptions = {}): string {
   const patterns =
     options.redactEmailsAndUrls === false ? SECRET_VALUE_PATTERNS : STRICT_TOKEN_PATTERNS;
   return redactProviderTextWithPatterns(raw, patterns);
 }
 
+/**
+ * Log-oriented redaction for provider text.
+ * Use this for server logs and diagnostics where URLs/emails remain useful,
+ * but secrets still must be scrubbed.
+ */
 export function redactProviderTextForLogs(raw: string): string {
   return redactProviderText(raw, { redactEmailsAndUrls: false });
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { projects, runtimeProfiles, tasks, usageEvents } from "@aif/shared";
+import { appSettings, projects, runtimeProfiles, tasks, usageEvents } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
@@ -679,6 +679,37 @@ describe("runtime profiles data layer", () => {
       defaultPlanRuntimeProfileId: globalProfile!.id,
       defaultReviewRuntimeProfileId: globalProfile!.id,
       defaultChatRuntimeProfileId: globalProfile!.id,
+    });
+  });
+
+  it("reads fresh app settings after direct app_settings writes", () => {
+    const globalProfile = createRuntimeProfile({
+      projectId: null,
+      name: "Global Default",
+      runtimeId: "codex",
+      providerId: "openai",
+      enabled: true,
+    });
+
+    const getAppSettings = dataModuleWithAppSettings.getAppSettings;
+
+    expect(getAppSettings).toBeTypeOf("function");
+    if (!getAppSettings) return;
+
+    expect(getAppSettings()).toMatchObject({
+      id: 1,
+      defaultTaskRuntimeProfileId: null,
+    });
+
+    testDb.current
+      .update(appSettings)
+      .set({ defaultTaskRuntimeProfileId: globalProfile!.id })
+      .where(eq(appSettings.id, 1))
+      .run();
+
+    expect(getAppSettings()).toMatchObject({
+      id: 1,
+      defaultTaskRuntimeProfileId: globalProfile!.id,
     });
   });
 

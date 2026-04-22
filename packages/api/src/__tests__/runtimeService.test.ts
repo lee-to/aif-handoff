@@ -60,73 +60,9 @@ const mockCreateRuntimeWorkflowSpec = vi.fn(
 const mockRedactResolvedRuntimeProfile = vi.fn((profile: Record<string, unknown>) => profile);
 const mockResolveRuntimeProfile = vi.fn();
 const mockNormalizeRuntimeLimitSnapshot = vi.fn((snapshot: unknown) => snapshot);
-const mockBuildRuntimeLimitSignature = vi.fn((snapshot: unknown) => JSON.stringify(snapshot));
-const mockBuildRuntimeLimitCacheSignature = vi.fn((snapshot: unknown, clearOnMissing: boolean) => {
-  if (snapshot) {
-    return `persist:${mockBuildRuntimeLimitSignature(snapshot)}`;
-  }
-  return clearOnMissing ? "clear" : null;
-});
-const mockBuildRuntimeLimitBroadcastCacheKey = vi.fn(
-  (input: { projectId?: string | null; taskId?: string | null; runtimeProfileId: string }) => {
-    return input.projectId
-      ? `${input.projectId}:${input.runtimeProfileId}:${input.taskId ?? ""}`
-      : null;
-  },
-);
-const mockObserveRuntimeLimitEvent = vi.fn(
-  (event: { type?: string; data?: { snapshot?: unknown } }, currentSnapshot: unknown) => {
-    if (event.type === "runtime:limit" && event.data?.snapshot) {
-      return event.data.snapshot;
-    }
-    return currentSnapshot;
-  },
-);
-const mockExtractLatestRuntimeLimitSnapshot = vi.fn(
-  (events: Array<{ data?: { snapshot?: unknown } }> | null | undefined) => {
-    if (!events?.length) {
-      return null;
-    }
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const snapshot = events[index]?.data?.snapshot;
-      if (snapshot) {
-        return snapshot;
-      }
-    }
-    return null;
-  },
-);
-const mockExtractRuntimeLimitSnapshotFromError = vi.fn(function extractFromError(
-  error: unknown,
-): unknown {
-  if (error instanceof MockRuntimeExecutionError && error.limitSnapshot) {
-    return error.limitSnapshot;
-  }
-  if (error instanceof Error && "cause" in error && error.cause) {
-    return extractFromError(error.cause);
-  }
-  return null;
-});
 const mockPersistRuntimeProfileLimitSnapshot = vi.fn();
 const mockClearRuntimeProfileLimitSnapshot = vi.fn();
 const mockBroadcast = vi.fn();
-
-class MockRuntimeExecutionError extends Error {
-  public readonly category: string;
-  public readonly limitSnapshot: unknown;
-
-  constructor(
-    message: string,
-    cause?: unknown,
-    category = "unknown",
-    metadata: { limitSnapshot?: unknown } = {},
-  ) {
-    super(message, cause ? { cause } : undefined);
-    this.name = "RuntimeExecutionError";
-    this.category = category;
-    this.limitSnapshot = metadata.limitSnapshot ?? null;
-  }
-}
 
 const mockFindProjectById = vi.fn();
 const mockFindRuntimeProfileById = vi.fn();
@@ -135,32 +71,31 @@ const mockGetAppDefaultRuntimeProfileId = vi.fn();
 const mockResolveEffectiveRuntimeProfile = vi.fn();
 const mockToRuntimeProfileResponse = vi.fn((row: unknown) => row);
 
-vi.mock("@aif/shared", () => ({
-  logger: vi.fn(() => mockLog),
-  getEnv: () => mockGetEnv(),
-}));
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  return {
+    ...actual,
+    logger: vi.fn(() => mockLog),
+    getEnv: () => mockGetEnv(),
+  };
+});
 
-vi.mock("@aif/runtime", () => ({
-  buildRuntimeLimitBroadcastCacheKey: mockBuildRuntimeLimitBroadcastCacheKey,
-  buildRuntimeLimitCacheSignature: mockBuildRuntimeLimitCacheSignature,
-  bootstrapRuntimeRegistry: mockBootstrapRuntimeRegistry,
-  buildRuntimeLimitSignature: mockBuildRuntimeLimitSignature,
-  checkRuntimeCapabilities: mockCheckRuntimeCapabilities,
-  createRuntimeMemoryCache: mockCreateRuntimeMemoryCache,
-  createRuntimeModelDiscoveryService: mockCreateRuntimeModelDiscoveryService,
-  createRuntimeWorkflowSpec: mockCreateRuntimeWorkflowSpec,
-  extractLatestRuntimeLimitSnapshot: mockExtractLatestRuntimeLimitSnapshot,
-  extractRuntimeLimitSnapshotFromError: mockExtractRuntimeLimitSnapshotFromError,
-  normalizeRuntimeLimitSnapshot: mockNormalizeRuntimeLimitSnapshot,
-  observeRuntimeLimitEvent: mockObserveRuntimeLimitEvent,
-  redactResolvedRuntimeProfile: mockRedactResolvedRuntimeProfile,
-  resolveAdapterCapabilities: (adapter: { descriptor: { capabilities: unknown } }) =>
-    adapter.descriptor.capabilities,
-  resolveRuntimeProfile: mockResolveRuntimeProfile,
-  RuntimeExecutionError: MockRuntimeExecutionError,
-  RUNTIME_LIMIT_EVENT_TYPE: "runtime:limit",
-  RUNTIME_TRUST_TOKEN: Symbol.for("aif.runtime.trust"),
-}));
+vi.mock("@aif/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/runtime")>();
+  return {
+    ...actual,
+    bootstrapRuntimeRegistry: mockBootstrapRuntimeRegistry,
+    checkRuntimeCapabilities: mockCheckRuntimeCapabilities,
+    createRuntimeMemoryCache: mockCreateRuntimeMemoryCache,
+    createRuntimeModelDiscoveryService: mockCreateRuntimeModelDiscoveryService,
+    createRuntimeWorkflowSpec: mockCreateRuntimeWorkflowSpec,
+    normalizeRuntimeLimitSnapshot: mockNormalizeRuntimeLimitSnapshot,
+    redactResolvedRuntimeProfile: mockRedactResolvedRuntimeProfile,
+    resolveAdapterCapabilities: (adapter: { descriptor: { capabilities: unknown } }) =>
+      adapter.descriptor.capabilities,
+    resolveRuntimeProfile: mockResolveRuntimeProfile,
+  };
+});
 
 vi.mock("@aif/data", () => ({
   clearRuntimeProfileLimitSnapshot: mockClearRuntimeProfileLimitSnapshot,
@@ -177,6 +112,8 @@ vi.mock("@aif/data", () => ({
 vi.mock("../ws.js", () => ({
   broadcast: (...args: unknown[]) => mockBroadcast(...args),
 }));
+
+const { RuntimeExecutionError } = await import("@aif/runtime");
 
 function createAdapter() {
   return {
@@ -787,7 +724,7 @@ describe("runtime service", () => {
     const adapter = createAdapter();
     const snapshot = createLimitSnapshot({ status: "blocked" });
     adapter.run = vi.fn().mockRejectedValue(
-      new MockRuntimeExecutionError("rate limited", undefined, "rate_limit", {
+      new RuntimeExecutionError("rate limited", undefined, "rate_limit", {
         limitSnapshot: snapshot,
       }),
     );

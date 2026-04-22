@@ -48,10 +48,10 @@ coverage/
 .playwright-mcp/
 
 # Claude Code
-.claude/
-.claude/settings.local.json
-.claude/projects
-.claude/worktrees
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/pr-review/
 
 # Codex and other agent
 /.codex/

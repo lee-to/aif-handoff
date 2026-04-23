@@ -51,6 +51,9 @@ test-results/
 /packages/web/playwright-report/
 /packages/web/test-results/
 
+# k6 perf reports
+/packages/api/perf/reports/
+
 # Claude Code
 .claude/*
 !.claude/skills/

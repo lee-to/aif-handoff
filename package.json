@@ -38,7 +38,7 @@
     "format:check": "prettier --check .",
     "ai:validate": "npm run format:check && npm run lint && npm run test && npm run coverage && npm run build && npm run ai:perf && npm run ai:load && npm run ai:checklist",
     "ai:perf": "npm run perf --workspace=@aif/web",
-    "ai:load": "node -e \"console.log('[ai:load] k6 load tests not yet configured — skipping')\"",
+    "ai:load": "node packages/api/perf/run.mjs",
     "ai:checklist": "node -e \"console.log('[WARNING] check CHECKLIST.md')\"",
     "prepare": "husky"
   },

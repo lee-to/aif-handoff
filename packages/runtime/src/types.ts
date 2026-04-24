@@ -108,6 +108,16 @@ export interface RuntimeCapabilities {
   /** Adapter supports custom baseUrl / endpoint configuration. */
   supportsCustomEndpoint: boolean;
   /**
+   * Adapter can execute subagent workflows via isolated skill-command sessions
+   * (without collapsing into a shared single-session fallback prompt).
+   */
+  supportsIsolatedSubagentWorkflows?: boolean;
+  /**
+   * Adapter can execute native provider-managed subagent workflows
+   * (for example, Codex custom agents + delegation in a single parent run).
+   */
+  supportsNativeSubagentWorkflows?: boolean;
+  /**
    * Adapter's usage-reporting contract. Required so every new adapter makes an
    * explicit decision — the registry wrapper uses this to enforce invariants
    * on `RuntimeRunResult.usage`.
@@ -130,6 +140,8 @@ export const DEFAULT_RUNTIME_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: false,
   supportsApprovals: false,
   supportsCustomEndpoint: false,
+  supportsIsolatedSubagentWorkflows: false,
+  supportsNativeSubagentWorkflows: false,
   usageReporting: UsageReporting.NONE,
   supportsInteractiveQuestions: false,
 };

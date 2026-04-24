@@ -88,6 +88,8 @@ const CLI_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  supportsIsolatedSubagentWorkflows: false,
+  supportsNativeSubagentWorkflows: false,
   // CLI stream emits token_count events when the turn completes, but some
   // early-termination paths (timeout, non-zero exit) may return before the
   // event is seen — declare PARTIAL so the wrapper tolerates null usage.
@@ -102,6 +104,8 @@ const SDK_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  supportsIsolatedSubagentWorkflows: true,
+  supportsNativeSubagentWorkflows: true,
   usageReporting: UsageReporting.FULL,
 };
 
@@ -113,6 +117,8 @@ const API_CAPABILITIES: RuntimeCapabilities = {
   supportsModelDiscovery: true,
   supportsApprovals: false,
   supportsCustomEndpoint: true,
+  supportsIsolatedSubagentWorkflows: false,
+  supportsNativeSubagentWorkflows: false,
   usageReporting: UsageReporting.FULL,
 };
 

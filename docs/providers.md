@@ -59,13 +59,13 @@ The API exposes effective selection endpoints:
 
 ## Supported Runtimes
 
-| Runtime      | Provider     | Transports    | Resume         | Sessions       | Agent Defs    | Usage Reporting               | Light Model         | Status                    |
-| ------------ | ------------ | ------------- | -------------- | -------------- | ------------- | ----------------------------- | ------------------- | ------------------------- |
-| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI)  | Yes (SDK/CLI)  | Yes (SDK/CLI) | `FULL` (all transports)       | `claude-haiku-3-5`  | Built-in                  |
-| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK only) | Yes (SDK only) | No            | `FULL` SDK/API, `PARTIAL` CLI | default             | Built-in                  |
-| `opencode`   | `opencode`   | API           | Yes            | Yes            | No            | `NONE`                        | null (configurable) | Built-in                  |
-| `openrouter` | `openrouter` | API           | No             | No             | No            | `FULL`                        | null (configurable) | Built-in                  |
-| Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Must declare                  | Configurable        | Via `AIF_RUNTIME_MODULES` |
+| Runtime      | Provider     | Transports    | Resume         | Sessions       | Agent Defs    | Native Subagents | Isolated Fallback | Usage Reporting               | Light Model         | Status                    |
+| ------------ | ------------ | ------------- | -------------- | -------------- | ------------- | ---------------- | ----------------- | ----------------------------- | ------------------- | ------------------------- |
+| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI)  | Yes (SDK/CLI)  | Yes (SDK/CLI) | No               | No                | `FULL` (all transports)       | `claude-haiku-3-5`  | Built-in                  |
+| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK only) | Yes (SDK only) | No            | SDK only         | SDK only          | `FULL` SDK/API, `PARTIAL` CLI | default             | Built-in                  |
+| `opencode`   | `opencode`   | API           | Yes            | Yes            | No            | No               | No                | `NONE`                        | null (configurable) | Built-in                  |
+| `openrouter` | `openrouter` | API           | No             | No             | No            | No               | No                | `FULL`                        | null (configurable) | Built-in                  |
+| Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Configurable     | Configurable      | Must declare                  | Configurable        | Via `AIF_RUNTIME_MODULES` |
 
 Capabilities are **transport-aware**: the same adapter may expose different capabilities depending on the selected transport. For example, the Codex adapter supports resume/sessions via SDK transport but not via CLI. Use `resolveAdapterCapabilities(adapter, transport)` to get the effective set.
 
@@ -215,7 +215,12 @@ SDK-specific options:
 - `sandboxMode` — one of `read-only`, `workspace-write`, `danger-full-access`
 - `approvalPolicy` — one of `untrusted`, `on-failure`, `on-request`, `never`
 - `modelReasoningEffort` — one of `minimal`, `low`, `medium`, `high`, `xhigh`
+- `codexSubagentStrategy` — `native` (default when required `.codex` assets are present) or `isolated`; use `isolated` as an escape hatch when you need the legacy fresh-session skill workflow instead of native Codex agents
 - `skipGitRepoCheck` — bypass the Codex guard that refuses to run outside a git repo (both SDK and CLI)
+
+> Migration note: older releases defaulted `codexSubagentStrategy` to `isolated`.
+> If you relied on the isolated skill-session path, set `codexSubagentStrategy: "isolated"` explicitly after upgrading.
+> If the project was bootstrapped before AI Factory `2.9.3`, Handoff now checks for materialized `.codex/agents/*.toml` and `.codex/config.toml` before using the native path and automatically falls back to `isolated` until `ai-factory init --agents claude,codex` is re-run.
 
 Invalid `options.approvalPolicy` / `options.sandboxMode` values are ignored with a runtime warning, and the adapter falls back to the effective default for that execution path.
 
@@ -438,6 +443,8 @@ Runtime descriptors declare capability flags:
 - `supportsModelDiscovery`
 - `supportsApprovals`
 - `supportsCustomEndpoint`
+- `supportsNativeSubagentWorkflows`
+- `supportsIsolatedSubagentWorkflows`
 
 Additionally, `RuntimeExecutionIntent` supports `outputSchema` for structured JSON output (passed to adapters that support it, e.g. Codex SDK).
 
@@ -483,6 +490,7 @@ const adapter: RuntimeAdapter = {
       supportsModelDiscovery: true,
       supportsApprovals: false,
       supportsCustomEndpoint: true,
+      supportsIsolatedSubagentWorkflows: false,
     },
   },
   async run(input) {

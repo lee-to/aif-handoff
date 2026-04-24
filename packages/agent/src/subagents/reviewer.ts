@@ -147,6 +147,7 @@ ${reviewOutputContract}`;
     agentDefinitionName: useSubagents ? reviewAgentName : undefined,
     fallbackSlashCommand: "/aif-review",
     fallbackStrategy: useSubagents ? "slash_command" : "none",
+    executionMode: useSubagents ? "native_subagents" : "standard",
     sessionReusePolicy: "new_session",
     systemPromptAppend: scopeConstraint,
   });
@@ -157,6 +158,7 @@ ${reviewOutputContract}`;
     agentDefinitionName: useSubagents ? securityAgentName : undefined,
     fallbackSlashCommand: "/aif-security-checklist",
     fallbackStrategy: useSubagents ? "slash_command" : "none",
+    executionMode: useSubagents ? "native_subagents" : "standard",
     sessionReusePolicy: "new_session",
     systemPromptAppend: scopeConstraint,
   });

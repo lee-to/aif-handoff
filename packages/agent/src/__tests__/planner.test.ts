@@ -87,6 +87,10 @@ describe("runPlanner comment selection", () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
     const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
     expect(call.prompt).not.toContain("/aif-plan");
+    expect(call.prompt).toContain("HANDOFF_MODE: 1");
+    expect(call.prompt).toContain("HANDOFF_TASK_ID: task-1");
+    expect(call.prompt).toContain("Autonomous Handoff mode: true.");
+    expect(call.prompt).toContain("Do not perform Handoff MCP sync yourself.");
     expect(call.prompt).toContain("Mode: fast, tests: false, docs: false.");
     expect(call.prompt).toContain("Plan file: @.ai-factory/PLAN.md");
     expect(call.prompt).toContain("message: comment-12");
@@ -234,5 +238,7 @@ describe("runPlanner comment selection", () => {
 
     const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
     expect(call.prompt).toContain("/aif-plan fast @.ai-factory/PLAN.md docs:false tests:false");
+    expect(call.prompt).toContain("HANDOFF_MODE: 1");
+    expect(call.prompt).toContain("HANDOFF_TASK_ID: task-skill-1");
   });
 });

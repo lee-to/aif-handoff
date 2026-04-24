@@ -2712,6 +2712,16 @@ export function buildCodexLimitHeadKey(input: {
   ]);
 }
 
+// SQLite default SQLITE_MAX_VARIABLE_NUMBER is 999. Each row binds N columns,
+// so bulk writes must chunk to stay under the limit. Without chunking the
+// indexer warm-up crashes with "too many SQL variables" on any real
+// ~/.codex/sessions (thousands of rollouts).
+const CODEX_SESSION_UPSERT_BATCH = 50; // 14 cols × 50 = 700
+const CODEX_SESSION_FILE_UPSERT_BATCH = 70; // 11 cols × 70 = 770
+const CODEX_LIMIT_HEAD_UPSERT_BATCH = 70; // 12 cols × 70 = 840
+const CODEX_LIMIT_HISTORY_INSERT_BATCH = 90; // 10 cols × 90 = 900
+const CODEX_FILEPATH_IN_ARRAY_BATCH = 500; // single-column inArray
+
 export function upsertCodexSessions(rows: UpsertCodexSessionInput[]): number {
   if (rows.length === 0) {
     log.debug({ requestedCount: 0 }, "Skipping codex session upsert (empty batch)");
@@ -2736,33 +2746,38 @@ export function upsertCodexSessions(rows: UpsertCodexSessionInput[]): number {
     updatedAt: nowIso,
   }));
 
-  const result = getDb()
-    .insert(codexSessions)
-    .values(values)
-    .onConflictDoUpdate({
-      target: codexSessions.sessionId,
-      set: {
-        filePath: sql`excluded.file_path`,
-        title: sql`excluded.title`,
-        projectRoot: sql`excluded.project_root`,
-        accountFingerprint: sql`excluded.account_fingerprint`,
-        sourceCreatedAt: sql`excluded.source_created_at`,
-        sourceUpdatedAt: sql`excluded.source_updated_at`,
-        messageCount: sql`excluded.message_count`,
-        previewText: sql`excluded.preview_text`,
-        sizeBytes: sql`excluded.size_bytes`,
-        mtimeMs: sql`excluded.mtime_ms`,
-        lastIndexedAt: sql`excluded.last_indexed_at`,
-        updatedAt: sql`excluded.updated_at`,
-      },
-    })
-    .run();
+  let totalChanges = 0;
+  for (let i = 0; i < values.length; i += CODEX_SESSION_UPSERT_BATCH) {
+    const chunk = values.slice(i, i + CODEX_SESSION_UPSERT_BATCH);
+    const result = getDb()
+      .insert(codexSessions)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: codexSessions.sessionId,
+        set: {
+          filePath: sql`excluded.file_path`,
+          title: sql`excluded.title`,
+          projectRoot: sql`excluded.project_root`,
+          accountFingerprint: sql`excluded.account_fingerprint`,
+          sourceCreatedAt: sql`excluded.source_created_at`,
+          sourceUpdatedAt: sql`excluded.source_updated_at`,
+          messageCount: sql`excluded.message_count`,
+          previewText: sql`excluded.preview_text`,
+          sizeBytes: sql`excluded.size_bytes`,
+          mtimeMs: sql`excluded.mtime_ms`,
+          lastIndexedAt: sql`excluded.last_indexed_at`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      })
+      .run();
+    totalChanges += result.changes;
+  }
 
   log.debug(
-    { requestedCount: rows.length, changedRows: result.changes },
+    { requestedCount: rows.length, changedRows: totalChanges },
     "Upserted codex session index batch",
   );
-  return result.changes;
+  return totalChanges;
 }
 
 export function upsertCodexSessionFiles(rows: UpsertCodexSessionFileInput[]): number {
@@ -2786,30 +2801,35 @@ export function upsertCodexSessionFiles(rows: UpsertCodexSessionFileInput[]): nu
     updatedAt: nowIso,
   }));
 
-  const result = getDb()
-    .insert(codexSessionFiles)
-    .values(values)
-    .onConflictDoUpdate({
-      target: codexSessionFiles.filePath,
-      set: {
-        sessionId: sql`excluded.session_id`,
-        sizeBytes: sql`excluded.size_bytes`,
-        mtimeMs: sql`excluded.mtime_ms`,
-        parsedOffset: sql`excluded.parsed_offset`,
-        pendingTail: sql`excluded.pending_tail`,
-        missing: sql`excluded.missing`,
-        importVersion: sql`excluded.import_version`,
-        lastSeenAt: sql`excluded.last_seen_at`,
-        updatedAt: sql`excluded.updated_at`,
-      },
-    })
-    .run();
+  let totalChanges = 0;
+  for (let i = 0; i < values.length; i += CODEX_SESSION_FILE_UPSERT_BATCH) {
+    const chunk = values.slice(i, i + CODEX_SESSION_FILE_UPSERT_BATCH);
+    const result = getDb()
+      .insert(codexSessionFiles)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: codexSessionFiles.filePath,
+        set: {
+          sessionId: sql`excluded.session_id`,
+          sizeBytes: sql`excluded.size_bytes`,
+          mtimeMs: sql`excluded.mtime_ms`,
+          parsedOffset: sql`excluded.parsed_offset`,
+          pendingTail: sql`excluded.pending_tail`,
+          missing: sql`excluded.missing`,
+          importVersion: sql`excluded.import_version`,
+          lastSeenAt: sql`excluded.last_seen_at`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      })
+      .run();
+    totalChanges += result.changes;
+  }
 
   log.debug(
-    { requestedCount: rows.length, changedRows: result.changes },
+    { requestedCount: rows.length, changedRows: totalChanges },
     "Upserted codex session-file index batch",
   );
-  return result.changes;
+  return totalChanges;
 }
 
 export function listCodexSessionFileStates(): CodexSessionFileIndexRow[] {
@@ -2827,28 +2847,41 @@ export function listCodexSessionFileStatesByPaths(filePaths: string[]): CodexSes
     return [];
   }
 
-  const rows = getDb()
-    .select()
-    .from(codexSessionFiles)
-    .where(inArray(codexSessionFiles.filePath, filePaths))
-    .all();
+  const all: CodexSessionFileIndexRow[] = [];
+  for (let i = 0; i < filePaths.length; i += CODEX_FILEPATH_IN_ARRAY_BATCH) {
+    const chunk = filePaths.slice(i, i + CODEX_FILEPATH_IN_ARRAY_BATCH);
+    const rows = getDb()
+      .select()
+      .from(codexSessionFiles)
+      .where(inArray(codexSessionFiles.filePath, chunk))
+      .all();
+    all.push(...rows);
+  }
   log.debug(
-    { requestedCount: filePaths.length, returnedCount: rows.length },
+    { requestedCount: filePaths.length, returnedCount: all.length },
     "Listed codex session-file index rows by file path",
   );
-  return rows;
+  return all;
 }
 
 export function deleteCodexSessionsByFilePaths(filePaths: string[]): number {
   if (filePaths.length === 0) {
     return 0;
   }
-  const result = getDb().delete(codexSessions).where(inArray(codexSessions.filePath, filePaths)).run();
+  let totalChanges = 0;
+  for (let i = 0; i < filePaths.length; i += CODEX_FILEPATH_IN_ARRAY_BATCH) {
+    const chunk = filePaths.slice(i, i + CODEX_FILEPATH_IN_ARRAY_BATCH);
+    const result = getDb()
+      .delete(codexSessions)
+      .where(inArray(codexSessions.filePath, chunk))
+      .run();
+    totalChanges += result.changes;
+  }
   log.debug(
-    { requestedCount: filePaths.length, deletedRows: result.changes },
+    { requestedCount: filePaths.length, deletedRows: totalChanges },
     "Deleted codex indexed sessions by file paths",
   );
-  return result.changes;
+  return totalChanges;
 }
 
 export function listCodexLimitHeadScopesByFilePaths(
@@ -2857,51 +2890,66 @@ export function listCodexLimitHeadScopesByFilePaths(
   if (filePaths.length === 0) {
     return [];
   }
-  const rows = getDb()
-    .select({
-      headKey: codexLimitHeads.headKey,
-      projectRoot: codexLimitHeads.projectRoot,
-      observedAt: codexLimitHeads.observedAt,
-      filePath: codexLimitHeads.filePath,
-    })
-    .from(codexLimitHeads)
-    .where(inArray(codexLimitHeads.filePath, filePaths))
-    .all();
+  const all: CodexLimitHeadScopeRow[] = [];
+  for (let i = 0; i < filePaths.length; i += CODEX_FILEPATH_IN_ARRAY_BATCH) {
+    const chunk = filePaths.slice(i, i + CODEX_FILEPATH_IN_ARRAY_BATCH);
+    const rows = getDb()
+      .select({
+        headKey: codexLimitHeads.headKey,
+        projectRoot: codexLimitHeads.projectRoot,
+        observedAt: codexLimitHeads.observedAt,
+        filePath: codexLimitHeads.filePath,
+      })
+      .from(codexLimitHeads)
+      .where(inArray(codexLimitHeads.filePath, chunk))
+      .all();
+    all.push(...rows);
+  }
   log.debug(
-    { requestedCount: filePaths.length, returnedCount: rows.length },
+    { requestedCount: filePaths.length, returnedCount: all.length },
     "Listed codex limit-head scopes by file paths",
   );
-  return rows;
+  return all;
 }
 
 export function deleteCodexLimitHeadsByFilePaths(filePaths: string[]): number {
   if (filePaths.length === 0) {
     return 0;
   }
-  const result = getDb()
-    .delete(codexLimitHeads)
-    .where(inArray(codexLimitHeads.filePath, filePaths))
-    .run();
+  let totalChanges = 0;
+  for (let i = 0; i < filePaths.length; i += CODEX_FILEPATH_IN_ARRAY_BATCH) {
+    const chunk = filePaths.slice(i, i + CODEX_FILEPATH_IN_ARRAY_BATCH);
+    const result = getDb()
+      .delete(codexLimitHeads)
+      .where(inArray(codexLimitHeads.filePath, chunk))
+      .run();
+    totalChanges += result.changes;
+  }
   log.debug(
-    { requestedCount: filePaths.length, deletedRows: result.changes },
+    { requestedCount: filePaths.length, deletedRows: totalChanges },
     "Deleted codex limit-head rows by file paths",
   );
-  return result.changes;
+  return totalChanges;
 }
 
 export function deleteCodexLimitHistoryByFilePaths(filePaths: string[]): number {
   if (filePaths.length === 0) {
     return 0;
   }
-  const result = getDb()
-    .delete(codexLimitHistory)
-    .where(inArray(codexLimitHistory.filePath, filePaths))
-    .run();
+  let totalChanges = 0;
+  for (let i = 0; i < filePaths.length; i += CODEX_FILEPATH_IN_ARRAY_BATCH) {
+    const chunk = filePaths.slice(i, i + CODEX_FILEPATH_IN_ARRAY_BATCH);
+    const result = getDb()
+      .delete(codexLimitHistory)
+      .where(inArray(codexLimitHistory.filePath, chunk))
+      .run();
+    totalChanges += result.changes;
+  }
   log.debug(
-    { requestedCount: filePaths.length, deletedRows: result.changes },
+    { requestedCount: filePaths.length, deletedRows: totalChanges },
     "Deleted codex limit-history rows by file paths",
   );
-  return result.changes;
+  return totalChanges;
 }
 
 export function upsertCodexLimitHeads(rows: UpsertCodexLimitHeadInput[]): number {
@@ -2926,31 +2974,36 @@ export function upsertCodexLimitHeads(rows: UpsertCodexLimitHeadInput[]): number
     updatedAt: nowIso,
   }));
 
-  const result = getDb()
-    .insert(codexLimitHeads)
-    .values(values)
-    .onConflictDoUpdate({
-      target: codexLimitHeads.headKey,
-      set: {
-        accountFingerprint: sql`excluded.account_fingerprint`,
-        projectRoot: sql`excluded.project_root`,
-        limitId: sql`excluded.limit_id`,
-        model: sql`excluded.model`,
-        source: sql`excluded.source`,
-        snapshotJson: sql`excluded.snapshot_json`,
-        observedAt: sql`excluded.observed_at`,
-        sessionId: sql`excluded.session_id`,
-        filePath: sql`excluded.file_path`,
-        updatedAt: sql`excluded.updated_at`,
-      },
-    })
-    .run();
+  let totalChanges = 0;
+  for (let i = 0; i < values.length; i += CODEX_LIMIT_HEAD_UPSERT_BATCH) {
+    const chunk = values.slice(i, i + CODEX_LIMIT_HEAD_UPSERT_BATCH);
+    const result = getDb()
+      .insert(codexLimitHeads)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: codexLimitHeads.headKey,
+        set: {
+          accountFingerprint: sql`excluded.account_fingerprint`,
+          projectRoot: sql`excluded.project_root`,
+          limitId: sql`excluded.limit_id`,
+          model: sql`excluded.model`,
+          source: sql`excluded.source`,
+          snapshotJson: sql`excluded.snapshot_json`,
+          observedAt: sql`excluded.observed_at`,
+          sessionId: sql`excluded.session_id`,
+          filePath: sql`excluded.file_path`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      })
+      .run();
+    totalChanges += result.changes;
+  }
 
   log.debug(
-    { requestedCount: rows.length, changedRows: result.changes },
+    { requestedCount: rows.length, changedRows: totalChanges },
     "Upserted codex limit-head index batch",
   );
-  return result.changes;
+  return totalChanges;
 }
 
 export function appendCodexLimitHistory(rows: AppendCodexLimitHistoryInput[]): number {
@@ -2973,12 +3026,17 @@ export function appendCodexLimitHistory(rows: AppendCodexLimitHistoryInput[]): n
     createdAt: nowIso,
   }));
 
-  const result = getDb().insert(codexLimitHistory).values(values).run();
+  let totalChanges = 0;
+  for (let i = 0; i < values.length; i += CODEX_LIMIT_HISTORY_INSERT_BATCH) {
+    const chunk = values.slice(i, i + CODEX_LIMIT_HISTORY_INSERT_BATCH);
+    const result = getDb().insert(codexLimitHistory).values(chunk).run();
+    totalChanges += result.changes;
+  }
   log.debug(
-    { requestedCount: rows.length, changedRows: result.changes },
+    { requestedCount: rows.length, changedRows: totalChanges },
     "Appended codex limit-history rows",
   );
-  return result.changes;
+  return totalChanges;
 }
 
 export function pruneCodexLimitHistoryByHead(input: {
@@ -2999,16 +3057,24 @@ export function pruneCodexLimitHistoryByHead(input: {
     return 0;
   }
 
-  const result = getDb().delete(codexLimitHistory).where(inArray(codexLimitHistory.id, staleIds)).run();
+  let deleted = 0;
+  for (let i = 0; i < staleIds.length; i += CODEX_FILEPATH_IN_ARRAY_BATCH) {
+    const chunk = staleIds.slice(i, i + CODEX_FILEPATH_IN_ARRAY_BATCH);
+    const result = getDb()
+      .delete(codexLimitHistory)
+      .where(inArray(codexLimitHistory.id, chunk))
+      .run();
+    deleted += result.changes;
+  }
   log.debug(
     {
       headKey: input.headKey,
       keepLatest,
-      deletedRows: result.changes,
+      deletedRows: deleted,
     },
     "Pruned codex limit-history rows",
   );
-  return result.changes;
+  return deleted;
 }
 
 export function pruneCodexLimitHistoryRetention(maxRowsPerHead: number): number {

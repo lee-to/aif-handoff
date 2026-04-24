@@ -146,6 +146,7 @@ export interface Task {
   runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
   runtimeLimitUpdatedAt?: string | null;
   scheduledAt: string | null;
+  branchName: string | null;
   createdAt: string;
   updatedAt: string;
 }

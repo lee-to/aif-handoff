@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projects, taskComments, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { eq } from "drizzle-orm";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -214,6 +215,108 @@ describe("runPlanner comment selection", () => {
 
     const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-fallback")).get();
     expect(updatedTask?.plan).toBe("## Fallback Plan\n- [ ] Step from fallback");
+  });
+
+  it("creates a feature branch when plannerMode=full and git.create_branches=true", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-git-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+
+    db.insert(projects)
+      .values({
+        id: "project-git",
+        name: "Git Project",
+        rootPath: projectRoot,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-git-1",
+        projectId: "project-git",
+        title: "Add user authentication",
+        description: "Implement JWT login",
+        status: "planning",
+        plannerMode: "full",
+        useSubagents: true,
+      })
+      .run();
+
+    await runPlanner("task-git-1", projectRoot);
+
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(branch).toMatch(/^feature\/add-user-authentication-/);
+
+    const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-git-1")).get();
+    expect(updatedTask?.branchName).toBe(branch);
+  });
+
+  it("skips branch creation when plannerMode=fast", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-fast-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+
+    db.insert(projects)
+      .values({
+        id: "project-fast",
+        name: "Fast Project",
+        rootPath: projectRoot,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-fast-1",
+        projectId: "project-fast",
+        title: "Quick fix",
+        description: "",
+        status: "planning",
+        plannerMode: "fast",
+        useSubagents: true,
+      })
+      .run();
+
+    await runPlanner("task-fast-1", projectRoot);
+
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(branch).toBe("main");
+
+    const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-fast-1")).get();
+    expect(updatedTask?.branchName).toBeNull();
   });
 
   it("uses /aif-plan command format only in skill mode", async () => {

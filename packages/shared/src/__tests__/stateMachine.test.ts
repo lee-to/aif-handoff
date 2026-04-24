@@ -42,6 +42,7 @@ function makeTask(status: Task["status"]): Task {
     runtimeOptions: null,
     sessionId: null,
     scheduledAt: null,
+    branchName: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };

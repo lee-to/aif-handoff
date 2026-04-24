@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projects, taskComments, tasks } from "@aif/shared";
@@ -399,5 +400,97 @@ describe("runImplementer rework behavior", () => {
 
     // Stored session must NOT be resumed for rework, even in skill mode
     expect(call.options.resume).toBeUndefined();
+  });
+});
+
+describe("runImplementer feature branch routing", () => {
+  let projectRoot: string;
+
+  beforeEach(() => {
+    (globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
+      queryMock;
+    testDb.current = createTestDb();
+    queryMock.mockReset();
+    queryMock.mockReturnValue(streamSuccess("Implementation done"));
+    projectRoot = mkdtempSync(join(tmpdir(), "aif-implementer-branch-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    // Pre-create the task's feature branch so implementer can switch to it
+    execFileSync("git", ["checkout", "-b", "feature/my-task"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+
+    testDb.current
+      .insert(projects)
+      .values({ id: "project-b", name: "Branch", rootPath: projectRoot })
+      .run();
+  });
+
+  it("switches HEAD to task.branchName before running implementer", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-b-1",
+        projectId: "project-b",
+        title: "Has branch",
+        description: "",
+        status: "implementing",
+        plan: "## Plan\n- [ ] Do work",
+        branchName: "feature/my-task",
+      })
+      .run();
+
+    // HEAD is on main before run
+    const before = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(before).toBe("main");
+
+    await runImplementer("task-b-1", projectRoot);
+
+    const after = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(after).toBe("feature/my-task");
+  });
+
+  it("does not touch HEAD when task has no branchName", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-b-2",
+        projectId: "project-b",
+        title: "No branch",
+        description: "",
+        status: "implementing",
+        plan: "## Plan\n- [ ] Do work",
+      })
+      .run();
+
+    await runImplementer("task-b-2", projectRoot);
+
+    const after = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(after).toBe("main");
   });
 });

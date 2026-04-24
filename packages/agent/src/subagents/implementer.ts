@@ -18,6 +18,7 @@ import { createRuntimeWorkflowSpec } from "@aif/runtime";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery } from "../subagentQuery.js";
 import { computePendingPlanLayers, computePlanLayers } from "../planLayers.js";
+import { ensureFeatureBranch } from "../gitBranch.js";
 
 const log = logger("implementer");
 const AGENT_NAME = "implement-coordinator";
@@ -220,6 +221,41 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   }
 
   log.info({ taskId, title: task.title, useSubagents }, "Starting implementation stage");
+
+  // If the task has a persisted feature branch (set by planner), ensure HEAD
+  // is on it before the implementer runs. Auto-queue may have switched branches
+  // between stages; without this, the implementer would write into whichever
+  // branch happens to be current.
+  if (task.branchName && !task.isFix) {
+    try {
+      const branchResult = ensureFeatureBranch({
+        projectRoot,
+        taskId,
+        title: task.title,
+        explicitBranchName: task.branchName,
+        switchOnly: true,
+      });
+      if (branchResult.action === "switched") {
+        logActivity(taskId, "Agent", `Switched to feature branch: ${branchResult.branchName}`);
+      } else if (branchResult.action === "created") {
+        logActivity(
+          taskId,
+          "Agent",
+          `Recreated missing feature branch: ${branchResult.branchName}`,
+        );
+      }
+    } catch (err) {
+      log.warn(
+        {
+          taskId,
+          branchName: task.branchName,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        "Could not restore task feature branch — continuing on current branch",
+      );
+    }
+  }
+
   const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}
 All files must be created and modified inside this directory. Do NOT create files outside of it.`;
   const implementSlashCommand = `/aif-implement ${planSection}`;

@@ -1,9 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { findProjectById, findTaskById, listTaskComments, persistTaskPlanForTask } from "@aif/data";
+import {
+  findProjectById,
+  findTaskById,
+  listTaskComments,
+  persistTaskPlanForTask,
+  setTaskFields,
+} from "@aif/data";
 import { createRuntimeWorkflowSpec } from "@aif/runtime";
 import { logger, formatAttachmentsForPrompt, getProjectConfig } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
+import { ensureFeatureBranch } from "../gitBranch.js";
+import { logActivity } from "../hooks.js";
 
 const log = logger("planner");
 const AGENT_NAME = "plan-coordinator";
@@ -136,6 +144,46 @@ export async function runPlanner(taskId: string, projectRoot: string): Promise<v
   const planPath = normalizePlanPath(task.planPath, projectRoot);
   const planDocs = task.planDocs ? "true" : "false";
   const planTests = task.planTests ? "true" : "false";
+
+  // Deterministic branch creation — runs regardless of whether the subagent
+  // skill honors Step 1.4. Only activates for full-mode plans; fast mode stays
+  // on current branch by design. See aif-handoff#83.
+  if (plannerMode === "full" && !task.isFix) {
+    try {
+      const branchResult = ensureFeatureBranch({
+        projectRoot,
+        taskId,
+        title: task.title,
+        explicitBranchName: task.branchName ?? null,
+      });
+      if (branchResult.action !== "skipped" && branchResult.branchName) {
+        if (task.branchName !== branchResult.branchName) {
+          setTaskFields(taskId, {
+            branchName: branchResult.branchName,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        logActivity(
+          taskId,
+          "Agent",
+          `Feature branch ${branchResult.action}: ${branchResult.branchName}`,
+        );
+      } else if (branchResult.reason) {
+        log.debug({ taskId, reason: branchResult.reason }, "Branch creation skipped");
+      }
+    } catch (err) {
+      log.warn(
+        { taskId, err: err instanceof Error ? err.message : String(err) },
+        "Feature branch creation failed — continuing on current branch",
+      );
+      logActivity(
+        taskId,
+        "Agent",
+        `Branch creation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   const taskContext = `Title: ${task.title}
 Description: ${task.description}
 Task attachments:

@@ -12,6 +12,7 @@ const mockBuildCodexLimitHeadKey = vi.fn(() => "head-key");
 const mockDeleteCodexLimitHeadsByFilePaths = vi.fn(() => 0);
 const mockDeleteCodexLimitHistoryByFilePaths = vi.fn(() => 0);
 const mockDeleteCodexSessionsByFilePaths = vi.fn(() => 0);
+const mockListCodexLimitHeadScopesByFilePaths = vi.fn(() => [] as Array<Record<string, unknown>>);
 const mockListCodexSessionFileStates = vi.fn(() => [] as Array<Record<string, unknown>>);
 const mockListProjects = vi.fn(() => [] as Array<Record<string, unknown>>);
 const mockListRuntimeProfileResponses = vi.fn(
@@ -50,6 +51,7 @@ vi.mock("@aif/data", () => ({
   deleteCodexLimitHeadsByFilePaths: mockDeleteCodexLimitHeadsByFilePaths,
   deleteCodexLimitHistoryByFilePaths: mockDeleteCodexLimitHistoryByFilePaths,
   deleteCodexSessionsByFilePaths: mockDeleteCodexSessionsByFilePaths,
+  listCodexLimitHeadScopesByFilePaths: mockListCodexLimitHeadScopesByFilePaths,
   listCodexSessionFileStates: mockListCodexSessionFileStates,
   listProjects: mockListProjects,
   listRuntimeProfileResponses: mockListRuntimeProfileResponses,
@@ -100,6 +102,7 @@ describe("codex index service", () => {
       parsedOffset: 0,
       pendingTail: "",
     });
+    mockListCodexLimitHeadScopesByFilePaths.mockReturnValue([]);
     mockListProjects.mockReturnValue([]);
     mockListRuntimeProfileResponses.mockReturnValue([]);
   });
@@ -184,6 +187,66 @@ describe("codex index service", () => {
           missing: true,
         }),
       ]),
+    );
+  });
+
+  it("notifies visible project runtime profiles when stale limit heads are deleted without replacements", async () => {
+    const { createCodexIndexService } = await loadService();
+    mockListCodexSessionFileStates.mockReturnValue([
+      {
+        filePath: "/tmp/project-1/.codex/sessions/deleted.jsonl",
+        sessionId: "session-deleted",
+        sizeBytes: 100,
+        mtimeMs: 100,
+        parsedOffset: 100,
+        pendingTail: "",
+        missing: false,
+        importVersion: 1,
+        lastSeenAt: "2026-04-23T00:00:00.000Z",
+        createdAt: "2026-04-23T00:00:00.000Z",
+        updatedAt: "2026-04-23T00:00:00.000Z",
+      },
+    ]);
+    mockListCodexSessionFileInfos.mockResolvedValue([]);
+    mockListCodexLimitHeadScopesByFilePaths.mockReturnValue([
+      {
+        headKey: "head-key",
+        projectRoot: "/tmp/project-1",
+        observedAt: "2026-04-23T00:00:02.000Z",
+        filePath: "/tmp/project-1/.codex/sessions/deleted.jsonl",
+      },
+    ]);
+    mockDeleteCodexLimitHeadsByFilePaths.mockReturnValue(1);
+    mockDeleteCodexLimitHistoryByFilePaths.mockReturnValue(1);
+    mockListProjects.mockReturnValue([
+      { id: "project-1", rootPath: "/tmp/project-1" },
+      { id: "project-2", rootPath: "/tmp/project-2" },
+    ]);
+    mockListRuntimeProfileResponses.mockImplementation((input: { projectId: string }) =>
+      input.projectId === "project-1"
+        ? [
+            {
+              id: "profile-codex-1",
+              runtimeId: "codex",
+              transport: "sdk",
+              enabled: true,
+            },
+          ]
+        : [],
+    );
+
+    const service = createCodexIndexService();
+    const summary = await service.runReconcileOnce("manual");
+
+    expect(summary.headRowsDeleted).toBe(1);
+    expect(mockListCodexLimitHeadScopesByFilePaths).toHaveBeenCalledWith([
+      "/tmp/project-1/.codex/sessions/deleted.jsonl",
+    ]);
+    expect(mockNotifyRuntimeLimitProjectUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "project-1",
+        runtimeProfileId: "profile-codex-1",
+      }),
     );
   });
 

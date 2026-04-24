@@ -2632,6 +2632,13 @@ export interface CodexLimitHeadWithSnapshot {
   updatedAt: string;
 }
 
+export interface CodexLimitHeadScopeRow {
+  headKey: string;
+  projectRoot: string | null;
+  observedAt: string;
+  filePath: string | null;
+}
+
 function normalizeCodexProjectRoot(projectRoot: string | null | undefined): string | null {
   if (typeof projectRoot !== "string") return null;
   const trimmed = projectRoot.trim();
@@ -2842,6 +2849,29 @@ export function deleteCodexSessionsByFilePaths(filePaths: string[]): number {
     "Deleted codex indexed sessions by file paths",
   );
   return result.changes;
+}
+
+export function listCodexLimitHeadScopesByFilePaths(
+  filePaths: string[],
+): CodexLimitHeadScopeRow[] {
+  if (filePaths.length === 0) {
+    return [];
+  }
+  const rows = getDb()
+    .select({
+      headKey: codexLimitHeads.headKey,
+      projectRoot: codexLimitHeads.projectRoot,
+      observedAt: codexLimitHeads.observedAt,
+      filePath: codexLimitHeads.filePath,
+    })
+    .from(codexLimitHeads)
+    .where(inArray(codexLimitHeads.filePath, filePaths))
+    .all();
+  log.debug(
+    { requestedCount: filePaths.length, returnedCount: rows.length },
+    "Listed codex limit-head scopes by file paths",
+  );
+  return rows;
 }
 
 export function deleteCodexLimitHeadsByFilePaths(filePaths: string[]): number {

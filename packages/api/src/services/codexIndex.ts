@@ -4,6 +4,7 @@ import {
   deleteCodexLimitHeadsByFilePaths,
   deleteCodexLimitHistoryByFilePaths,
   deleteCodexSessionsByFilePaths,
+  listCodexLimitHeadScopesByFilePaths,
   listCodexSessionFileStates,
   listProjects,
   listRuntimeProfileResponses,
@@ -16,6 +17,7 @@ import {
   type UpsertCodexLimitHeadInput,
   type UpsertCodexSessionFileInput,
   type UpsertCodexSessionInput,
+  type CodexLimitHeadScopeRow,
 } from "@aif/data";
 import {
   buildCodexAuthFingerprint,
@@ -141,10 +143,13 @@ export function createCodexIndexService(
 
   const notifyVisibleProjectsWithCodexLimitUpdate = (input: {
     headRows: UpsertCodexLimitHeadInput[];
+    deletedScopes: CodexLimitHeadScopeRow[];
     summary: CodexIndexReconcileSummary;
     cursorTimestamp: string;
   }): void => {
-    if (input.summary.headRowsUpserted <= 0 || input.headRows.length === 0) {
+    const hasUpsertedHeads = input.summary.headRowsUpserted > 0 && input.headRows.length > 0;
+    const hasDeletedHeads = input.summary.headRowsDeleted > 0 && input.deletedScopes.length > 0;
+    if (!hasUpsertedHeads && !hasDeletedHeads) {
       return;
     }
 
@@ -159,6 +164,14 @@ export function createCodexIndexService(
 
     for (const row of input.headRows) {
       const projectRoot = normalizeProjectRoot(row.projectRoot);
+      if (!projectRoot) {
+        includesGlobalScope = true;
+        break;
+      }
+      touchedRoots.add(projectRoot);
+    }
+    for (const scope of input.deletedScopes) {
+      const projectRoot = normalizeProjectRoot(scope.projectRoot);
       if (!projectRoot) {
         includesGlobalScope = true;
         break;
@@ -182,9 +195,13 @@ export function createCodexIndexService(
       return;
     }
 
-    const latestObservedAt = input.headRows.reduce<string | null>((latest, row) => {
-      if (!latest) return row.observedAt;
-      return parseTimestampMs(row.observedAt) > parseTimestampMs(latest) ? row.observedAt : latest;
+    const observedAtValues = [
+      ...input.headRows.map((row) => row.observedAt),
+      ...input.deletedScopes.map((scope) => scope.observedAt),
+    ];
+    const latestObservedAt = observedAtValues.reduce<string | null>((latest, observedAt) => {
+      if (!latest) return observedAt;
+      return parseTimestampMs(observedAt) > parseTimestampMs(latest) ? observedAt : latest;
     }, null);
     const signature = [
       "codex-index",
@@ -192,6 +209,7 @@ export function createCodexIndexService(
       providerId,
       latestObservedAt ?? input.cursorTimestamp,
       String(input.summary.headRowsUpserted),
+      String(input.summary.headRowsDeleted),
       String(input.summary.historyRowsDeleted),
     ].join(":");
 
@@ -220,6 +238,7 @@ export function createCodexIndexService(
         affectedProjectCount: projectIds.size,
         profileBroadcastCount,
         headRowsUpserted: input.summary.headRowsUpserted,
+        headRowsDeleted: input.summary.headRowsDeleted,
       },
       "Codex index reconcile notified project runtime-limit overlays",
     );
@@ -369,6 +388,10 @@ export function createCodexIndexService(
     }
 
     const uniqueStaleLimitFilePaths = [...new Set(staleLimitFilePaths)];
+    const deletedLimitScopes =
+      uniqueStaleLimitFilePaths.length > 0
+        ? listCodexLimitHeadScopesByFilePaths(uniqueStaleLimitFilePaths)
+        : [];
     const headRowsDeleted =
       uniqueStaleLimitFilePaths.length > 0
         ? deleteCodexLimitHeadsByFilePaths(uniqueStaleLimitFilePaths)
@@ -382,6 +405,7 @@ export function createCodexIndexService(
         {
           reason,
           staleFileCount: uniqueStaleLimitFilePaths.length,
+          deletedScopeCount: deletedLimitScopes.length,
           headRowsDeleted,
           historyRowsDeleted: staleHistoryRowsDeleted,
         },
@@ -424,6 +448,7 @@ export function createCodexIndexService(
     });
     notifyVisibleProjectsWithCodexLimitUpdate({
       headRows,
+      deletedScopes: deletedLimitScopes,
       summary,
       cursorTimestamp: nowIso,
     });

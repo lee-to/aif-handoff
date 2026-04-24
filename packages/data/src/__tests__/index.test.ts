@@ -67,6 +67,7 @@ const {
   pruneCodexLimitHistoryRetention,
   deleteCodexLimitHeadsByFilePaths,
   deleteCodexLimitHistoryByFilePaths,
+  listCodexLimitHeadScopesByFilePaths,
   upsertCodexIndexCursor,
   findCodexIndexCursor,
   listCodexSessionFileStates,
@@ -1327,6 +1328,13 @@ describe("data layer", () => {
         },
       ]);
 
+      expect(listCodexLimitHeadScopesByFilePaths(["/tmp/codex/stale.jsonl"])).toEqual([
+        expect.objectContaining({
+          projectRoot: "/tmp/test",
+          observedAt: snapshot.checkedAt,
+          filePath: "/tmp/codex/stale.jsonl",
+        }),
+      ]);
       expect(deleteCodexLimitHeadsByFilePaths(["/tmp/codex/stale.jsonl"])).toBe(1);
       expect(deleteCodexLimitHistoryByFilePaths(["/tmp/codex/stale.jsonl"])).toBe(1);
 

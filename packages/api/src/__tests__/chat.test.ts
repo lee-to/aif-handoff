@@ -63,6 +63,8 @@ vi.mock("@aif/data", () => ({
   createChatMessage: (input: unknown) => mockCreateChatMessage(input),
   updateChatSessionTimestamp: (id: string) => mockUpdateChatSessionTimestamp(id),
   listChatSessions: vi.fn(() => []),
+  listCodexSessionsByProjectRoot: vi.fn(() => []),
+  findCodexSessionFilePathBySessionId: vi.fn(() => null),
   listChatMessages: (...args: unknown[]) => mockListChatMessages(...args),
   toChatSessionResponse: vi.fn((row: unknown) => row),
   toChatMessageResponse: (row: unknown) => mockToChatMessageResponse(row),
@@ -112,6 +114,7 @@ vi.mock("../services/sessionCache.js", () => ({
   invalidateCache: (...args: unknown[]) => mockInvalidateCache(...args),
   invalidateAllSessionCaches: vi.fn(),
   sessionCacheKey: vi.fn(() => "runtime-cache-key"),
+  shouldUseSessionCacheForRuntime: vi.fn(() => true),
 }));
 
 vi.mock("@aif/shared", async (importOriginal) => {

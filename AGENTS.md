@@ -14,7 +14,7 @@ Autonomous task management system with Kanban board and AI subagents. Tasks flow
 - **Runtime Abstraction:** `@aif/runtime` workspace (runtime/provider contracts + registry)
 - **Database:** SQLite (better-sqlite3 + drizzle-orm)
 - **Frontend:** React 19 + Vite + TailwindCSS 4
-- **Runtime:** Pluggable adapter system (`@aif/runtime`) — built-in Claude (Agent SDK) + Codex (CLI/API) + OpenRouter (API) adapters
+- **Runtime:** Pluggable adapter system (`@aif/runtime`) — built-in Claude (Agent SDK) + Codex (SDK/CLI/API) + OpenRouter (API) adapters
 - **Agent:** Runtime-neutral coordinator + node-cron
 - **Testing:** Vitest
 
@@ -60,7 +60,7 @@ packages/
 │   └── src/
 │       ├── index.ts         # Server entry point
 │       ├── routes/          # tasks.ts, projects.ts, chat.ts, runtimeProfiles.ts
-│       ├── services/        # runtime.ts, fastFix.ts, roadmapGeneration.ts
+│       ├── services/        # runtime.ts, codexIndex.ts, fastFix.ts, roadmapGeneration.ts
 │       ├── middleware/      # logger.ts, rateLimit.ts, zodValidator.ts
 │       ├── schemas.ts       # Zod request validation
 │       └── ws.ts            # WebSocket handler

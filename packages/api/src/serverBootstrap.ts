@@ -10,6 +10,7 @@ interface StartServerOptions {
   port: number;
   hostname?: string;
   injectWebSocket?: (server: ServerType) => void;
+  onStarted?: () => void;
   logger: StartupLogger;
 }
 
@@ -28,6 +29,7 @@ export function startServer({
   port,
   hostname,
   injectWebSocket,
+  onStarted,
   logger,
 }: StartServerOptions): ServerType {
   const server = createAdaptorServer({ fetch, hostname });
@@ -56,6 +58,7 @@ export function startServer({
   server.listen(port, hostname, () => {
     startupPhase = "after-ready";
     logger.info({ hostname, port }, "API server started");
+    onStarted?.();
   });
 
   return server;

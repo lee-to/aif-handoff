@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { projects, tasks } from "@aif/shared";
+import { eq } from "drizzle-orm";
+import { codexLimitHeads, codexLimitHistory, codexSessionFiles, codexSessions, projects, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
@@ -58,6 +59,17 @@ const {
   listAutoQueueProjects,
   countActivePipelineTasksForProject,
   claimBacklogTaskForAdvance,
+  upsertCodexSessions,
+  upsertCodexSessionFiles,
+  upsertCodexLimitHeads,
+  appendCodexLimitHistory,
+  pruneCodexLimitHistoryByHead,
+  pruneCodexLimitHistoryRetention,
+  upsertCodexIndexCursor,
+  findCodexIndexCursor,
+  listCodexSessionFileStates,
+  listCodexSessionFileStatesByPaths,
+  deleteCodexSessionsByFilePaths,
 } = await import("../index.js");
 
 function seedProject(id = "proj-1") {
@@ -65,6 +77,26 @@ function seedProject(id = "proj-1") {
     .insert(projects)
     .values({ id, name: "Test", rootPath: "/tmp/test" })
     .run();
+}
+
+function makeCodexSnapshot(checkedAt = "2026-04-23T10:00:00.000Z") {
+  return {
+    source: "sdk_event" as const,
+    status: "warning" as const,
+    precision: "heuristic" as const,
+    checkedAt,
+    providerId: "openai",
+    runtimeId: "codex",
+    profileId: "profile-codex",
+    primaryScope: "time" as const,
+    windows: [
+      {
+        scope: "time" as const,
+        percentUsed: 61,
+        percentRemaining: 39,
+      },
+    ],
+  };
 }
 
 describe("data layer", () => {
@@ -1142,6 +1174,149 @@ describe("data layer", () => {
   });
 
   // ── toTaskSummary ─────────────────────────────────────────
+
+  describe("codex index repositories", () => {
+    it("upserts session and file index batches", () => {
+      const sessionChanges = upsertCodexSessions([
+        {
+          sessionId: "codex-session-1",
+          filePath: "/tmp/codex/s1.jsonl",
+          title: "Session One",
+          projectRoot: "/tmp/test",
+          accountFingerprint: "acct-1",
+          sourceUpdatedAt: "2026-04-23T10:00:00.000Z",
+          sizeBytes: 100,
+          mtimeMs: 1713866400000,
+        },
+      ]);
+      const fileChanges = upsertCodexSessionFiles([
+        {
+          filePath: "/tmp/codex/s1.jsonl",
+          sessionId: "codex-session-1",
+          sizeBytes: 100,
+          mtimeMs: 1713866400000,
+          parsedOffset: 64,
+          pendingTail: "",
+          missing: false,
+          importVersion: 1,
+        },
+      ]);
+
+      expect(sessionChanges).toBeGreaterThan(0);
+      expect(fileChanges).toBeGreaterThan(0);
+
+      const sessionRow = testDb.current
+        .select()
+        .from(codexSessions)
+        .where(eq(codexSessions.sessionId, "codex-session-1"))
+        .get();
+      const fileRow = testDb.current
+        .select()
+        .from(codexSessionFiles)
+        .where(eq(codexSessionFiles.filePath, "/tmp/codex/s1.jsonl"))
+        .get();
+
+      expect(sessionRow?.projectRoot).toBe("/tmp/test");
+      expect(fileRow?.parsedOffset).toBe(64);
+
+      const allFileStates = listCodexSessionFileStates();
+      const matchedStates = listCodexSessionFileStatesByPaths(["/tmp/codex/s1.jsonl"]);
+      expect(allFileStates).toHaveLength(1);
+      expect(matchedStates).toHaveLength(1);
+
+      const deleted = deleteCodexSessionsByFilePaths(["/tmp/codex/s1.jsonl"]);
+      expect(deleted).toBe(1);
+    });
+
+    it("upserts heads, appends history, and prunes retention", () => {
+      const snapshotA = makeCodexSnapshot("2026-04-23T10:00:00.000Z");
+      const snapshotB = makeCodexSnapshot("2026-04-23T11:00:00.000Z");
+      const snapshotC = makeCodexSnapshot("2026-04-23T12:00:00.000Z");
+
+      const headChanges = upsertCodexLimitHeads([
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex",
+          snapshot: snapshotA,
+          observedAt: "2026-04-23T10:00:00.000Z",
+        },
+      ]);
+      const appended = appendCodexLimitHistory([
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex",
+          snapshot: snapshotA,
+          observedAt: "2026-04-23T10:00:00.000Z",
+        },
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex",
+          snapshot: snapshotB,
+          observedAt: "2026-04-23T11:00:00.000Z",
+        },
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex",
+          snapshot: snapshotC,
+          observedAt: "2026-04-23T12:00:00.000Z",
+        },
+      ]);
+
+      expect(headChanges).toBeGreaterThan(0);
+      expect(appended).toBe(3);
+
+      const headKey = testDb.current
+        .select({ headKey: codexLimitHeads.headKey })
+        .from(codexLimitHeads)
+        .where(eq(codexLimitHeads.accountFingerprint, "acct-1"))
+        .get()?.headKey;
+      expect(headKey).toBeDefined();
+
+      const deletedByHead = pruneCodexLimitHistoryByHead({
+        headKey: headKey!,
+        keepLatest: 2,
+      });
+      expect(deletedByHead).toBe(1);
+
+      const retainedRows = testDb.current
+        .select()
+        .from(codexLimitHistory)
+        .where(eq(codexLimitHistory.headKey, headKey!))
+        .all();
+      expect(retainedRows).toHaveLength(2);
+
+      appendCodexLimitHistory([
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex",
+          snapshot: makeCodexSnapshot("2026-04-23T13:00:00.000Z"),
+          observedAt: "2026-04-23T13:00:00.000Z",
+        },
+      ]);
+      const deletedByGlobalRetention = pruneCodexLimitHistoryRetention(2);
+      expect(deletedByGlobalRetention).toBeGreaterThanOrEqual(1);
+    });
+
+    it("upserts and resolves index cursors with parsed JSON", () => {
+      const saved = upsertCodexIndexCursor({
+        cursorKey: "codex:reconcile",
+        cursorValue: "12345",
+        cursorJson: { watermark: "w1", pass: 2 },
+      });
+      expect(saved).toBeDefined();
+      expect(saved?.cursorValue).toBe("12345");
+      expect(saved?.cursorJson).toEqual({ watermark: "w1", pass: 2 });
+
+      const loaded = findCodexIndexCursor("codex:reconcile");
+      expect(loaded).toBeDefined();
+      expect(loaded?.cursorJson).toEqual({ watermark: "w1", pass: 2 });
+    });
+  });
 
   describe("toTaskSummary", () => {
     it("parses tags from JSON string", () => {

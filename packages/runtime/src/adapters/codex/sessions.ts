@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -31,7 +32,7 @@ const AUTH_FILE = join(homedir(), ".codex", "auth.json");
 const SESSION_FILE_PATTERN =
   /(?:^|[/\\])rollout-[^/\\]*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
-interface CodexSessionMeta {
+export interface CodexSessionMeta {
   id: string;
   model?: string;
   prompt?: string;
@@ -41,11 +42,25 @@ interface CodexSessionMeta {
   filePath?: string;
 }
 
-interface CodexSessionFileInfo {
+export interface CodexSessionFileInfo {
   filePath: string;
   birthtimeMs: number;
   mtimeMs: number;
   size: number;
+}
+
+export interface CodexIndexedFileState {
+  sizeBytes: number;
+  mtimeMs: number;
+  importVersion: number;
+}
+
+export type CodexSessionFileStatus = "new" | "unchanged" | "appended" | "rewrite" | "missing";
+
+export interface CodexAppendLimitSnapshotsResult {
+  snapshots: RuntimeLimitSnapshot[];
+  parsedOffset: number;
+  pendingTail: string;
 }
 
 interface CodexSessionRateLimitWindow {
@@ -245,6 +260,44 @@ export async function getCodexAuthIdentity(): Promise<CodexAuthIdentity | null> 
   };
 }
 
+export function buildCodexAuthFingerprint(
+  identity: CodexAuthIdentity | null | undefined,
+): string | null {
+  if (!identity) {
+    return null;
+  }
+
+  const accountId = identity.accountId?.trim().toLowerCase() ?? "";
+  const accountEmail = identity.accountEmail?.trim().toLowerCase() ?? "";
+  const accountName = identity.accountName?.trim().toLowerCase() ?? "";
+  const authMode = identity.authMode?.trim().toLowerCase() ?? "";
+  const planType = identity.planType?.trim().toLowerCase() ?? "";
+  const stableValue = `${accountId}|${accountEmail}|${accountName}|${authMode}|${planType}`;
+  if (!stableValue.replace(/\|/g, "")) {
+    return null;
+  }
+
+  return createHash("sha256").update(stableValue).digest("hex");
+}
+
+export function readCodexSnapshotAccountFingerprint(
+  snapshot: RuntimeLimitSnapshot | null | undefined,
+): string | null {
+  const providerMeta = asRecord(snapshot?.providerMeta);
+  const embedded = readString(providerMeta?.accountFingerprint);
+  if (embedded) {
+    return embedded;
+  }
+
+  return buildCodexAuthFingerprint({
+    accountId: readString(providerMeta?.accountId) ?? null,
+    authMode: readString(providerMeta?.authMode) ?? null,
+    accountName: readString(providerMeta?.accountName) ?? null,
+    accountEmail: readString(providerMeta?.accountEmail) ?? null,
+    planType: readString(providerMeta?.planType) ?? null,
+  });
+}
+
 function sessionIdFromFilePath(filePath: string): string | null {
   const match = SESSION_FILE_PATTERN.exec(filePath);
   return match?.[1] ?? null;
@@ -258,12 +311,16 @@ function readDateMs(value: Date | number | undefined, fallbackMs: number): numbe
   return typeof value === "number" && Number.isFinite(value) ? value : fallbackMs;
 }
 
-function normalizePath(value: string | undefined): string | null {
+export function normalizeCodexProjectPath(value: string | undefined | null): string | null {
   if (!value) return null;
   return value
     .replace(/[\\/]+/g, "/")
     .replace(/\/$/, "")
     .toLowerCase();
+}
+
+function normalizePath(value: string | undefined): string | null {
+  return normalizeCodexProjectPath(value);
 }
 
 function normalizeSessionResetAt(value: unknown): string | null {
@@ -382,6 +439,7 @@ function buildCodexLimitSnapshot(
     .map((window) => window.resetAt)
     .find((value): value is string => typeof value === "string" && value.length > 0);
   const credits = asRecord(rateLimits.credits) as CodexSessionCredits | null;
+  const accountFingerprint = buildCodexAuthFingerprint(input.authIdentity);
 
   return {
     source: RuntimeLimitSource.SDK_EVENT,
@@ -404,6 +462,7 @@ function buildCodexLimitSnapshot(
       authMode: input.authIdentity?.authMode ?? null,
       accountName: input.authIdentity?.accountName ?? null,
       accountEmail: input.authIdentity?.accountEmail ?? null,
+      accountFingerprint,
       credits: {
         hasCredits: readBoolean(credits?.has_credits),
         unlimited: readBoolean(credits?.unlimited),
@@ -466,6 +525,12 @@ async function listSessionFileInfos(dir: string): Promise<CodexSessionFileInfo[]
 
   files.sort((left, right) => right.mtimeMs - left.mtimeMs);
   return files;
+}
+
+export async function listCodexSessionFileInfos(input?: {
+  sessionsDir?: string;
+}): Promise<CodexSessionFileInfo[]> {
+  return await listSessionFileInfos(input?.sessionsDir ?? SESSIONS_DIR);
 }
 
 // Cap streamed-meta reads: session_meta/turn_context sit on the first handful
@@ -576,6 +641,12 @@ async function readSessionMetaFromFile(
   return meta;
 }
 
+export async function readCodexSessionMetaFromFile(
+  fileInfoOrPath: CodexSessionFileInfo | string,
+): Promise<CodexSessionMeta | null> {
+  return await readSessionMetaFromFile(fileInfoOrPath);
+}
+
 async function readSessionMetas(): Promise<CodexSessionMeta[]> {
   const cached = sessionMetasCache.get("all");
   if (cached) {
@@ -641,6 +712,41 @@ async function findSessionFileInfoById(sessionId: string): Promise<CodexSessionF
   return null;
 }
 
+export async function findCodexSessionFileInfoById(
+  sessionId: string,
+): Promise<CodexSessionFileInfo | null> {
+  return await findSessionFileInfoById(sessionId);
+}
+
+export function classifyCodexSessionFileStatus(input: {
+  previous: CodexIndexedFileState | null;
+  current: CodexSessionFileInfo | null;
+  importVersion: number;
+}): CodexSessionFileStatus {
+  if (!input.current) {
+    return "missing";
+  }
+  if (!input.previous) {
+    return "new";
+  }
+  if (input.previous.importVersion !== input.importVersion) {
+    return "rewrite";
+  }
+  if (
+    input.previous.mtimeMs === input.current.mtimeMs &&
+    input.previous.sizeBytes === input.current.size
+  ) {
+    return "unchanged";
+  }
+  if (
+    input.current.size > input.previous.sizeBytes &&
+    input.current.mtimeMs >= input.previous.mtimeMs
+  ) {
+    return "appended";
+  }
+  return "rewrite";
+}
+
 export async function listCodexSdkSessions(
   input: RuntimeSessionListInput,
 ): Promise<RuntimeSession[]> {
@@ -663,13 +769,19 @@ export async function listCodexSdkSessionEvents(
   input: RuntimeSessionEventsInput,
 ): Promise<RuntimeEvent[]> {
   const fileInfo = await findSessionFileInfoById(input.sessionId);
-  if (!fileInfo) {
-    return [];
-  }
+  if (!fileInfo) return [];
+  return await readSessionEventsFromFile(fileInfo, { limit: input.limit ?? undefined });
+}
+
+async function readSessionEventsFromFile(
+  fileInfoOrPath: CodexSessionFileInfo | string,
+  input: { limit?: number } = {},
+): Promise<RuntimeEvent[]> {
+  const filePath = typeof fileInfoOrPath === "string" ? fileInfoOrPath : fileInfoOrPath.filePath;
 
   let lines: string[];
   try {
-    const raw = await readFile(fileInfo.filePath, "utf-8");
+    const raw = await readFile(filePath, "utf-8");
     lines = raw.split("\n").filter((line) => line.trim().length > 0);
   } catch {
     return [];
@@ -709,6 +821,13 @@ export async function listCodexSdkSessionEvents(
   }
 
   return input.limit ? events.slice(-input.limit) : events;
+}
+
+export async function readCodexSessionEventsFromFile(
+  fileInfoOrPath: CodexSessionFileInfo | string,
+  input: { limit?: number } = {},
+): Promise<RuntimeEvent[]> {
+  return await readSessionEventsFromFile(fileInfoOrPath, input);
 }
 
 export async function getCodexSessionLimitSnapshot(input: {
@@ -799,7 +918,118 @@ async function* readJsonlLinesNewestFirst(fileInfo: CodexSessionFileInfo): Async
   }
 }
 
-async function readCodexSessionLimitSnapshotsFromFile(
+function splitAppendedJsonlLines(raw: string): {
+  lines: string[];
+  pendingTail: string;
+} {
+  const lines = raw.split(/\r?\n/);
+  const pendingTail = lines.pop() ?? "";
+  return { lines, pendingTail };
+}
+
+function collectCodexLimitSnapshotsFromLines(
+  lines: Iterable<string>,
+  input: {
+    runtimeId: string;
+    providerId: string;
+    profileId?: string | null;
+    authIdentity?: CodexAuthIdentity | null;
+    keepLatestPerLimit: boolean;
+  },
+): RuntimeLimitSnapshot[] {
+  const snapshotsByLimitId = new Map<string, RuntimeLimitSnapshot>();
+  let latestUnknownSnapshot: RuntimeLimitSnapshot | null = null;
+
+  for (const line of lines) {
+    const entry = parseJsonLine(line);
+    if (!entry || readString(entry.type) !== "event_msg") continue;
+
+    const payload = asRecord(entry.payload);
+    if (!payload) continue;
+    if (readString(payload.type) !== "token_count") continue;
+
+    const snapshot = buildCodexLimitSnapshot(payload.rate_limits, {
+      runtimeId: input.runtimeId,
+      providerId: input.providerId,
+      profileId: input.profileId ?? null,
+      checkedAt: toIso(entry.timestamp as string | number | undefined),
+      authIdentity: input.authIdentity,
+    });
+    if (!snapshot) {
+      continue;
+    }
+
+    const limitId = readSnapshotLimitId(snapshot);
+    if (!limitId) {
+      latestUnknownSnapshot = input.keepLatestPerLimit
+        ? snapshot
+        : (latestUnknownSnapshot ?? snapshot);
+    } else if (input.keepLatestPerLimit || !snapshotsByLimitId.has(limitId)) {
+      snapshotsByLimitId.set(limitId, snapshot);
+    }
+  }
+
+  const snapshots = [...snapshotsByLimitId.values()];
+  if (latestUnknownSnapshot) {
+    snapshots.push(latestUnknownSnapshot);
+  }
+  snapshots.sort(
+    (left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt),
+  );
+  return snapshots;
+}
+
+export async function readCodexSessionLimitSnapshotsFromAppend(input: {
+  fileInfo: CodexSessionFileInfo;
+  startOffset: number;
+  pendingTail?: string | null;
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+  authIdentity?: CodexAuthIdentity | null;
+}): Promise<CodexAppendLimitSnapshotsResult> {
+  const previousTail = input.pendingTail ?? "";
+  const startOffset =
+    typeof input.startOffset === "number" && Number.isFinite(input.startOffset)
+      ? Math.max(0, Math.trunc(input.startOffset))
+      : 0;
+  if (input.fileInfo.size <= startOffset) {
+    return {
+      snapshots: [],
+      parsedOffset: input.fileInfo.size,
+      pendingTail: previousTail,
+    };
+  }
+
+  try {
+    const appended = await readFileRange({
+      filePath: input.fileInfo.filePath,
+      start: startOffset,
+      end: input.fileInfo.size - 1,
+    });
+    const { lines, pendingTail } = splitAppendedJsonlLines(`${previousTail}${appended}`);
+    const authIdentity = input.authIdentity ?? (await getCodexAuthIdentity());
+    return {
+      snapshots: collectCodexLimitSnapshotsFromLines(lines, {
+        runtimeId: input.runtimeId,
+        providerId: input.providerId,
+        profileId: input.profileId ?? null,
+        authIdentity,
+        keepLatestPerLimit: true,
+      }),
+      parsedOffset: input.fileInfo.size,
+      pendingTail,
+    };
+  } catch {
+    return {
+      snapshots: [],
+      parsedOffset: startOffset,
+      pendingTail: previousTail,
+    };
+  }
+}
+
+export async function readCodexSessionLimitSnapshotsFromFile(
   fileInfo: CodexSessionFileInfo,
   input: {
     runtimeId: string;
@@ -817,37 +1047,26 @@ async function readCodexSessionLimitSnapshotsFromFile(
   }
 
   const authIdentity = input.authIdentity ?? (await getCodexAuthIdentity());
-  const snapshotsByLimitId = new Map<string, RuntimeLimitSnapshot>();
-  let latestUnknownSnapshot: RuntimeLimitSnapshot | null = null;
+  const lines: string[] = [];
 
   try {
     for await (const line of readJsonlLinesNewestFirst(fileInfo)) {
+      lines.push(line);
+
       const entry = parseJsonLine(line);
-      if (!entry || readString(entry.type) !== "event_msg") continue;
-
-      const payload = asRecord(entry.payload);
-      if (!payload) continue;
-      if (readString(payload.type) !== "token_count") continue;
-
-      const snapshot = buildCodexLimitSnapshot(payload.rate_limits, {
-        runtimeId: input.runtimeId,
-        providerId: input.providerId,
-        profileId: input.profileId ?? null,
-        checkedAt: toIso(entry.timestamp as string | number | undefined),
-        authIdentity,
-      });
-      if (!snapshot) {
-        continue;
-      }
-
-      const limitId = readSnapshotLimitId(snapshot);
-      if (!limitId) {
-        latestUnknownSnapshot ??= snapshot;
-      } else if (!snapshotsByLimitId.has(limitId)) {
-        snapshotsByLimitId.set(limitId, snapshot);
-      }
-
-      if (input.fast && (limitId || latestUnknownSnapshot)) {
+      const payload =
+        entry && readString(entry.type) === "event_msg" ? asRecord(entry.payload) : null;
+      const snapshot =
+        payload && readString(payload.type) === "token_count"
+          ? buildCodexLimitSnapshot(payload.rate_limits, {
+              runtimeId: input.runtimeId,
+              providerId: input.providerId,
+              profileId: input.profileId ?? null,
+              checkedAt: toIso(entry?.timestamp as string | number | undefined),
+              authIdentity,
+            })
+          : null;
+      if (input.fast && snapshot) {
         break;
       }
     }
@@ -855,16 +1074,33 @@ async function readCodexSessionLimitSnapshotsFromFile(
     return [];
   }
 
-  const snapshots = [...snapshotsByLimitId.values()];
-  if (latestUnknownSnapshot) {
-    snapshots.push(latestUnknownSnapshot);
-  }
-  snapshots.sort(
-    (left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt),
-  );
+  const snapshots = collectCodexLimitSnapshotsFromLines(lines, {
+    runtimeId: input.runtimeId,
+    providerId: input.providerId,
+    profileId: input.profileId ?? null,
+    authIdentity,
+    keepLatestPerLimit: false,
+  });
   const normalizedSnapshots = snapshots.map((snapshot) => ({ ...snapshot, profileId: null }));
   sessionLimitSnapshotsCache.set(cacheKey, normalizedSnapshots);
   return normalizedSnapshots.map((snapshot) => applySnapshotProfileId(snapshot, input.profileId));
+}
+
+export async function readLatestCodexSessionLimitSnapshotFromFile(input: {
+  fileInfo: CodexSessionFileInfo;
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+  authIdentity?: CodexAuthIdentity | null;
+}): Promise<RuntimeLimitSnapshot | null> {
+  const snapshots = await readCodexSessionLimitSnapshotsFromFile(input.fileInfo, {
+    runtimeId: input.runtimeId,
+    providerId: input.providerId,
+    profileId: input.profileId ?? null,
+    authIdentity: input.authIdentity ?? null,
+    fast: true,
+  });
+  return snapshots[0] ?? null;
 }
 
 async function getCodexSessionLimitSnapshots(input: {

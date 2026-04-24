@@ -11,6 +11,7 @@ import { codexAuthRouter } from "./routes/codexAuth.js";
 import { setupWebSocket, closeAllWebSocketClients } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
 import { startServer } from "./serverBootstrap.js";
+import { createCodexIndexService } from "./services/codexIndex.js";
 
 const log = logger("server");
 const startTime = Date.now();
@@ -98,11 +99,15 @@ const port = Number(process.env.PORT) || 3009;
 
 // Ensure data layer / DB is ready
 listProjects();
+const codexIndexService = createCodexIndexService();
 
 const server = startServer({
   fetch: app.fetch,
   port,
   injectWebSocket,
+  onStarted() {
+    void codexIndexService.start();
+  },
   logger: log,
 });
 
@@ -117,6 +122,7 @@ function onShutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   log.info({ signal }, "Shutdown signal received — terminating WS + exiting");
+  void codexIndexService.stop();
   closeAllWebSocketClients();
   // Fire-and-forget server.close so any in-flight response can drain, but
   // don't wait for its callback — tsx watch + turbo race on Ctrl+C and

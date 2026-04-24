@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  buildCodexAuthFingerprint,
   createRuntimeWorkflowSpec,
   getCodexAuthIdentity,
   isValidEnvVarName,
-  listLatestCodexLimitSnapshots,
   redactResolvedRuntimeProfile,
   resolveClaudeProviderIdentity,
   resolveRuntimeProfile,
@@ -20,6 +20,7 @@ import {
   createRuntimeProfile,
   deleteRuntimeProfile,
   findRuntimeProfileById,
+  listCodexLimitHeadsForOverlay,
   findProjectById,
   findTaskById,
   getRuntimeProfileResponseById,
@@ -148,8 +149,6 @@ interface ClaudeIdentityProfileLike {
   runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
 }
 
-type CodexLiveSnapshotList = Awaited<ReturnType<typeof listLatestCodexLimitSnapshots>>;
-
 function enrichProfileWithCodexIdentity<T extends LocalCodexAccountProfileLike>(
   profile: T,
   identity: Awaited<ReturnType<typeof getCodexAuthIdentity>>,
@@ -211,59 +210,67 @@ function applyCodexSnapshotToProfile<T extends RuntimeLimitSnapshot>(
   return normalizeRuntimeLimitSnapshot(nextSnapshot) as unknown as T;
 }
 
-function mergeCodexLimitSnapshots<T extends RuntimeLimitSnapshot>(...groups: T[][]): T[] {
-  const snapshots = groups
-    .flat()
-    .sort((left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt));
-  const merged = new Map<string, T>();
+function createCodexIndexedSnapshotLookup() {
+  const cache = new Map<string, Promise<RuntimeLimitSnapshot[]>>();
+  let authFingerprintPromise: Promise<string | null> | null = null;
 
-  for (const snapshot of snapshots) {
-    const limitId =
-      readProviderMetaString(
-        isObjectRecord(snapshot.providerMeta) ? snapshot.providerMeta : null,
-        "limitId",
-      ) ?? "__unknown__";
-    if (!merged.has(limitId)) {
-      merged.set(limitId, snapshot);
+  const readAuthFingerprint = async (): Promise<string | null> => {
+    if (!authFingerprintPromise) {
+      authFingerprintPromise = getCodexAuthIdentity().then((identity) =>
+        buildCodexAuthFingerprint(identity),
+      );
     }
-  }
-
-  return [...merged.values()];
-}
-
-function createCodexLiveSnapshotLookup() {
-  const cache = new Map<string, Promise<CodexLiveSnapshotList>>();
+    return await authFingerprintPromise;
+  };
 
   return {
+    async resolveAccountFingerprint(profile: LocalCodexAccountProfileLike): Promise<string | null> {
+      const providerMeta = isObjectRecord(profile.runtimeLimitSnapshot?.providerMeta)
+        ? profile.runtimeLimitSnapshot?.providerMeta
+        : null;
+      const embeddedFingerprint = readProviderMetaString(providerMeta, "accountFingerprint");
+      if (embeddedFingerprint) {
+        return embeddedFingerprint;
+      }
+      return await readAuthFingerprint();
+    },
     async get(input: {
-      runtimeId: string;
-      providerId: string;
+      accountFingerprint: string;
       projectRoot?: string | null;
-    }): Promise<CodexLiveSnapshotList> {
-      const key = `${input.runtimeId}|${input.providerId}|${input.projectRoot ?? "__global__"}`;
+    }): Promise<RuntimeLimitSnapshot[]> {
+      const key = `${input.accountFingerprint}|${input.projectRoot ?? "__global__"}`;
       const cached = cache.get(key);
       if (cached) {
         return await cached;
       }
 
-      const request = listLatestCodexLimitSnapshots({
-        runtimeId: input.runtimeId,
-        providerId: input.providerId,
-        projectRoot: input.projectRoot ?? null,
-      }).catch((error) => {
-        cache.delete(key);
-        throw error;
-      });
+      const request = Promise.resolve(
+        listCodexLimitHeadsForOverlay({
+          accountFingerprint: input.accountFingerprint,
+          projectRoot: input.projectRoot ?? null,
+          includeGlobalFallback: true,
+          limit: 50,
+        }),
+      )
+        .then((rows) =>
+          rows
+            .map((row) => row.snapshot)
+            .filter((snapshot): snapshot is RuntimeLimitSnapshot => Boolean(snapshot)),
+        )
+        .catch((error) => {
+          cache.delete(key);
+          throw error;
+        });
       cache.set(key, request);
       return await request;
     },
   };
 }
 
-async function refreshProfileWithLiveCodexLimit<T extends LocalCodexAccountProfileLike>(
+async function refreshProfileWithIndexedCodexLimit<T extends LocalCodexAccountProfileLike>(
   profile: T,
   selectedProjectId?: string | null,
-  snapshotLookup = createCodexLiveSnapshotLookup(),
+  snapshotLookup = createCodexIndexedSnapshotLookup(),
 ): Promise<T> {
   // Usage-limits feature is the expensive-I/O path (Codex session scan,
   // Claude identity network call). Gate here so a deployment can opt out
@@ -285,28 +292,39 @@ async function refreshProfileWithLiveCodexLimit<T extends LocalCodexAccountProfi
   const projectRoot = effectiveProjectId
     ? (findProjectById(effectiveProjectId)?.rootPath ?? null)
     : null;
-  const projectSnapshots = projectRoot
-    ? await snapshotLookup.get({
-        runtimeId: profile.runtimeId,
-        providerId: profile.providerId,
-        projectRoot,
-      })
-    : [];
-  const globalSnapshots = await snapshotLookup.get({
-    runtimeId: profile.runtimeId,
-    providerId: profile.providerId,
-  });
-  const liveSnapshots = mergeCodexLimitSnapshots(projectSnapshots, globalSnapshots);
   const persistedProviderMeta = isObjectRecord(profile.runtimeLimitSnapshot?.providerMeta)
     ? profile.runtimeLimitSnapshot.providerMeta
     : null;
   const persistedLimitId = readProviderMetaString(persistedProviderMeta, "limitId");
-  const liveSnapshot = selectPreferredCodexLimitSnapshot({
+  const accountFingerprint = await snapshotLookup.resolveAccountFingerprint(profile);
+  if (!accountFingerprint) {
+    log.debug(
+      {
+        profileId: profile.id,
+        projectId: effectiveProjectId,
+        projectRoot,
+      },
+      "DEBUG [runtime-profile-route] Skipping indexed Codex overlay because no account fingerprint is available",
+    );
+    return profile;
+  }
+
+  const indexedSnapshots = await snapshotLookup.get({ accountFingerprint, projectRoot });
+  const selectedSnapshot = selectPreferredCodexLimitSnapshot({
     model,
-    snapshots: liveSnapshots,
+    snapshots: indexedSnapshots,
     preferredLimitId: persistedLimitId,
   });
-  if (!liveSnapshot) {
+  if (!selectedSnapshot) {
+    log.debug(
+      {
+        profileId: profile.id,
+        projectId: effectiveProjectId,
+        projectRoot,
+        overlayCount: indexedSnapshots.length,
+      },
+      "DEBUG [runtime-profile-route] No indexed Codex overlay snapshot selected for profile",
+    );
     return profile;
   }
 
@@ -314,29 +332,40 @@ async function refreshProfileWithLiveCodexLimit<T extends LocalCodexAccountProfi
     parseTimestampMs(profile.runtimeLimitUpdatedAt ?? null),
     parseTimestampMs(profile.runtimeLimitSnapshot?.checkedAt ?? null),
   );
-  const liveCheckedAtMs = parseTimestampMs(liveSnapshot.checkedAt);
-  if (persistedAtMs > liveCheckedAtMs) {
+  const indexedCheckedAtMs = parseTimestampMs(selectedSnapshot.checkedAt);
+  log.debug(
+    {
+      profileId: profile.id,
+      projectId: effectiveProjectId,
+      projectRoot,
+      overlayCount: indexedSnapshots.length,
+      persistedAtMs: Number.isFinite(persistedAtMs) ? persistedAtMs : null,
+      indexedCheckedAtMs: Number.isFinite(indexedCheckedAtMs) ? indexedCheckedAtMs : null,
+    },
+    "DEBUG [runtime-profile-route] Evaluated indexed Codex overlay snapshot freshness",
+  );
+  if (persistedAtMs > indexedCheckedAtMs) {
     return profile;
   }
 
   return {
     ...profile,
-    runtimeLimitSnapshot: applyCodexSnapshotToProfile(liveSnapshot, profile.id),
-    runtimeLimitUpdatedAt: liveSnapshot.checkedAt,
+    runtimeLimitSnapshot: applyCodexSnapshotToProfile(selectedSnapshot, profile.id),
+    runtimeLimitUpdatedAt: selectedSnapshot.checkedAt,
   };
 }
 
-async function refreshProfilesWithLiveCodexLimits<T extends LocalCodexAccountProfileLike>(
+async function refreshProfilesWithIndexedCodexLimits<T extends LocalCodexAccountProfileLike>(
   profiles: T[],
   selectedProjectId?: string | null,
 ): Promise<T[]> {
   if (!getEnv().AIF_USAGE_LIMITS_ENABLED) {
     return profiles;
   }
-  const snapshotLookup = createCodexLiveSnapshotLookup();
+  const snapshotLookup = createCodexIndexedSnapshotLookup();
   return await Promise.all(
     profiles.map((profile) =>
-      refreshProfileWithLiveCodexLimit(profile, selectedProjectId, snapshotLookup),
+      refreshProfileWithIndexedCodexLimit(profile, selectedProjectId, snapshotLookup),
     ),
   );
 }
@@ -542,7 +571,10 @@ runtimeProfilesRouter.get("/", queryValidator(runtimeProfileListQuerySchema), as
       compareVisibleRuntimeProfiles,
     );
   }
-  const refreshedProfiles = await refreshProfilesWithLiveCodexLimits(profiles, projectId ?? null);
+  const refreshedProfiles = await refreshProfilesWithIndexedCodexLimits(
+    profiles,
+    projectId ?? null,
+  );
   return c.json(await enrichProfilesWithProviderIdentity(refreshedProfiles));
 });
 
@@ -551,7 +583,7 @@ runtimeProfilesRouter.get("/:id", async (c) => {
   const { id } = c.req.param();
   const profile = getRuntimeProfileResponseById(id);
   if (!profile) return c.json({ error: "Runtime profile not found" }, 404);
-  const refreshedProfile = await refreshProfileWithLiveCodexLimit(
+  const refreshedProfile = await refreshProfileWithIndexedCodexLimit(
     profile,
     profile.projectId ?? null,
   );
@@ -652,7 +684,7 @@ runtimeProfilesRouter.get("/effective/task/:taskId", async (c) => {
     profile: effective.profile
       ? (
           await enrichProfilesWithProviderIdentity([
-            await refreshProfileWithLiveCodexLimit(effective.profile, task.projectId),
+            await refreshProfileWithIndexedCodexLimit(effective.profile, task.projectId),
           ])
         )[0]
       : effective.profile,
@@ -693,7 +725,7 @@ runtimeProfilesRouter.get("/effective/chat/:projectId", async (c) => {
     profile: effective.profile
       ? (
           await enrichProfilesWithProviderIdentity([
-            await refreshProfileWithLiveCodexLimit(effective.profile, projectId),
+            await refreshProfileWithIndexedCodexLimit(effective.profile, projectId),
           ])
         )[0]
       : effective.profile,

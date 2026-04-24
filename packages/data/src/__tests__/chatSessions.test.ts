@@ -22,6 +22,10 @@ const {
   updateChatSessionTimestamp,
   toChatSessionResponse,
   toChatMessageResponse,
+  upsertCodexSessions,
+  upsertCodexSessionFiles,
+  listCodexSessionsByProjectRoot,
+  findCodexSessionFilePathBySessionId,
 } = await import("../index.js");
 
 function seedProject(id = "proj-1") {
@@ -177,6 +181,91 @@ describe("chat sessions data layer", () => {
       const ts = new Date(updated!.updatedAt).getTime();
       expect(ts).toBeGreaterThanOrEqual(before - 1000);
       expect(ts).toBeLessThanOrEqual(Date.now() + 1000);
+    });
+  });
+
+  describe("codex indexed session lookups", () => {
+    it("lists project-scoped indexed codex sessions newest-first", () => {
+      upsertCodexSessions([
+        {
+          sessionId: "codex-1",
+          filePath: "/tmp/codex/c1.jsonl",
+          projectRoot: "/tmp/test",
+          sourceUpdatedAt: "2026-04-23T10:00:00.000Z",
+          sizeBytes: 100,
+          mtimeMs: 100,
+        },
+        {
+          sessionId: "codex-2",
+          filePath: "/tmp/codex/c2.jsonl",
+          projectRoot: "/tmp/test",
+          sourceUpdatedAt: "2026-04-23T12:00:00.000Z",
+          sizeBytes: 200,
+          mtimeMs: 200,
+        },
+        {
+          sessionId: "codex-global",
+          filePath: "/tmp/codex/global.jsonl",
+          projectRoot: null,
+          sourceUpdatedAt: "2026-04-23T13:00:00.000Z",
+          sizeBytes: 300,
+          mtimeMs: 300,
+        },
+      ]);
+
+      const rows = listCodexSessionsByProjectRoot({ projectRoot: "/tmp/test", limit: 10 });
+      expect(rows).toHaveLength(2);
+      expect(rows[0].sessionId).toBe("codex-2");
+      expect(rows[1].sessionId).toBe("codex-1");
+    });
+
+    it("normalizes Codex project roots for indexed session lookups", () => {
+      upsertCodexSessions([
+        {
+          sessionId: "codex-windows",
+          filePath: "C:/codex/c1.jsonl",
+          projectRoot: "C:\\Projects\\AIF\\",
+          sourceUpdatedAt: "2026-04-23T10:00:00.000Z",
+          sizeBytes: 100,
+          mtimeMs: 100,
+        },
+      ]);
+
+      const rows = listCodexSessionsByProjectRoot({
+        projectRoot: "c:/projects/aif",
+        limit: 10,
+      });
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].sessionId).toBe("codex-windows");
+      expect(rows[0].projectRoot).toBe("c:/projects/aif");
+    });
+
+    it("resolves file path by session id from session table then file-state fallback", () => {
+      upsertCodexSessions([
+        {
+          sessionId: "codex-hit",
+          filePath: "/tmp/codex/hit.jsonl",
+          projectRoot: "/tmp/test",
+          sizeBytes: 150,
+          mtimeMs: 150,
+        },
+      ]);
+      upsertCodexSessionFiles([
+        {
+          filePath: "/tmp/codex/fallback.jsonl",
+          sessionId: "codex-fallback",
+          sizeBytes: 88,
+          mtimeMs: 88,
+          parsedOffset: 32,
+          missing: false,
+          importVersion: 1,
+        },
+      ]);
+
+      expect(findCodexSessionFilePathBySessionId("codex-hit")).toBe("/tmp/codex/hit.jsonl");
+      expect(findCodexSessionFilePathBySessionId("codex-fallback")).toBe("/tmp/codex/fallback.jsonl");
+      expect(findCodexSessionFilePathBySessionId("missing")).toBeNull();
     });
   });
 

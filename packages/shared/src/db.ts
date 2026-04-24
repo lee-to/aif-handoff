@@ -194,6 +194,78 @@ function ensureTables(sqlite: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
   `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS codex_sessions (
+      session_id TEXT PRIMARY KEY,
+      file_path TEXT NOT NULL UNIQUE,
+      title TEXT,
+      project_root TEXT,
+      account_fingerprint TEXT,
+      source_created_at TEXT,
+      source_updated_at TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      preview_text TEXT,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      mtime_ms INTEGER NOT NULL DEFAULT 0,
+      last_indexed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS codex_session_files (
+      file_path TEXT PRIMARY KEY,
+      session_id TEXT,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      mtime_ms INTEGER NOT NULL DEFAULT 0,
+      parsed_offset INTEGER NOT NULL DEFAULT 0,
+      pending_tail TEXT NOT NULL DEFAULT '',
+      missing INTEGER NOT NULL DEFAULT 0,
+      import_version INTEGER NOT NULL DEFAULT 1,
+      last_seen_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS codex_limit_heads (
+      head_key TEXT PRIMARY KEY,
+      account_fingerprint TEXT NOT NULL,
+      project_root TEXT,
+      limit_id TEXT NOT NULL,
+      model TEXT,
+      source TEXT NOT NULL DEFAULT 'codex',
+      snapshot_json TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      session_id TEXT,
+      file_path TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS codex_limit_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      head_key TEXT NOT NULL,
+      account_fingerprint TEXT NOT NULL,
+      project_root TEXT,
+      limit_id TEXT NOT NULL,
+      model TEXT,
+      snapshot_json TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      session_id TEXT,
+      file_path TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS codex_index_cursors (
+      cursor_key TEXT PRIMARY KEY,
+      cursor_value TEXT,
+      cursor_json TEXT,
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
 
   runMigrations(sqlite);
   ensureTriggers(sqlite);
@@ -494,6 +566,74 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN runtime_limit_updated_at TEXT;
     `,
   },
+  {
+    version: 16,
+    description: "Add Codex index read-model tables for session and usage-limit overlays",
+    sql: `
+      CREATE TABLE IF NOT EXISTS codex_sessions (
+        session_id TEXT PRIMARY KEY,
+        file_path TEXT NOT NULL UNIQUE,
+        title TEXT,
+        project_root TEXT,
+        account_fingerprint TEXT,
+        source_created_at TEXT,
+        source_updated_at TEXT,
+        message_count INTEGER NOT NULL DEFAULT 0,
+        preview_text TEXT,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        mtime_ms INTEGER NOT NULL DEFAULT 0,
+        last_indexed_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS codex_session_files (
+        file_path TEXT PRIMARY KEY,
+        session_id TEXT,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        mtime_ms INTEGER NOT NULL DEFAULT 0,
+        parsed_offset INTEGER NOT NULL DEFAULT 0,
+        pending_tail TEXT NOT NULL DEFAULT '',
+        missing INTEGER NOT NULL DEFAULT 0,
+        import_version INTEGER NOT NULL DEFAULT 1,
+        last_seen_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS codex_limit_heads (
+        head_key TEXT PRIMARY KEY,
+        account_fingerprint TEXT NOT NULL,
+        project_root TEXT,
+        limit_id TEXT NOT NULL,
+        model TEXT,
+        source TEXT NOT NULL DEFAULT 'codex',
+        snapshot_json TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        session_id TEXT,
+        file_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS codex_limit_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        head_key TEXT NOT NULL,
+        account_fingerprint TEXT NOT NULL,
+        project_root TEXT,
+        limit_id TEXT NOT NULL,
+        model TEXT,
+        snapshot_json TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        session_id TEXT,
+        file_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS codex_index_cursors (
+        cursor_key TEXT PRIMARY KEY,
+        cursor_value TEXT,
+        cursor_json TEXT,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `,
+  },
 ];
 
 function splitSqlStatements(sqlText: string): string[] {
@@ -751,6 +891,16 @@ function ensureIndexes(sqlite: Database.Database): void {
     "CREATE INDEX IF NOT EXISTS idx_usage_events_chat_session ON usage_events(chat_session_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_usage_events_source ON usage_events(source, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_usage_events_runtime ON usage_events(runtime_id, provider_id, created_at)",
+    // Codex index: project session listing and session detail lookup.
+    "CREATE INDEX IF NOT EXISTS idx_codex_sessions_project_root_updated ON codex_sessions(project_root, source_updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_codex_sessions_file_path ON codex_sessions(file_path)",
+    // Codex file-state reconcile scans.
+    "CREATE INDEX IF NOT EXISTS idx_codex_session_files_session_id ON codex_session_files(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_codex_session_files_dirty ON codex_session_files(missing, mtime_ms, size_bytes)",
+    // Codex latest-head and bounded-history lookups.
+    "CREATE INDEX IF NOT EXISTS idx_codex_limit_heads_lookup ON codex_limit_heads(account_fingerprint, project_root, limit_id, observed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_codex_limit_history_head ON codex_limit_history(head_key, observed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_codex_limit_history_account ON codex_limit_history(account_fingerprint, project_root, limit_id, observed_at DESC)",
   ];
 
   for (const ddl of indexDefs) {

@@ -391,6 +391,17 @@ describe("Codex SDK session store parsing", () => {
     ]);
   });
 
+  it("reads session events directly from a known file path without session-id discovery", async () => {
+    const events = await sessionsModule.readCodexSessionEventsFromFile(newerFile, { limit: 1 });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        message: "Final answer",
+        data: expect.objectContaining({ role: "assistant" }),
+      }),
+    ]);
+  });
+
   it("parses the latest Codex token_count rate limits into a runtime limit snapshot", async () => {
     const snapshot = await sessionsModule.getCodexSessionLimitSnapshot({
       sessionId: newerSessionId,
@@ -439,6 +450,7 @@ describe("Codex SDK session store parsing", () => {
         authMode: "chatgpt",
         accountName: "Anton Ageev",
         accountEmail: "ichi.chaik@gmail.com",
+        accountFingerprint: expect.any(String),
         credits: {
           hasCredits: null,
           unlimited: null,
@@ -719,5 +731,146 @@ describe("Codex SDK session store parsing", () => {
     });
 
     expect(snapshot).toBeNull();
+  });
+
+  it("builds deterministic auth fingerprints and reads them from snapshots", async () => {
+    const identity = await sessionsModule.getCodexAuthIdentity();
+    const fingerprint = sessionsModule.buildCodexAuthFingerprint(identity);
+    expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    const snapshot = await sessionsModule.getCodexSessionLimitSnapshot({
+      sessionId: newerSessionId,
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+    });
+    const snapshotFingerprint = sessionsModule.readCodexSnapshotAccountFingerprint(snapshot);
+    expect(snapshotFingerprint).toBe(fingerprint);
+  });
+
+  it("classifies codex file dirtiness for indexer reconciliation", () => {
+    const baseInfo = {
+      filePath: newerFile,
+      birthtimeMs: Date.parse("2026-04-08T17:38:48.271Z"),
+      mtimeMs: Date.parse("2026-04-08T17:39:48.271Z"),
+      size: 1024,
+    };
+
+    expect(
+      sessionsModule.classifyCodexSessionFileStatus({
+        previous: null,
+        current: baseInfo,
+        importVersion: 1,
+      }),
+    ).toBe("new");
+    expect(
+      sessionsModule.classifyCodexSessionFileStatus({
+        previous: { sizeBytes: 1024, mtimeMs: baseInfo.mtimeMs, importVersion: 1 },
+        current: baseInfo,
+        importVersion: 1,
+      }),
+    ).toBe("unchanged");
+    expect(
+      sessionsModule.classifyCodexSessionFileStatus({
+        previous: { sizeBytes: 1024, mtimeMs: baseInfo.mtimeMs, importVersion: 1 },
+        current: { ...baseInfo, size: 2048, mtimeMs: baseInfo.mtimeMs + 10 },
+        importVersion: 1,
+      }),
+    ).toBe("appended");
+    expect(
+      sessionsModule.classifyCodexSessionFileStatus({
+        previous: { sizeBytes: 1024, mtimeMs: baseInfo.mtimeMs, importVersion: 1 },
+        current: { ...baseInfo, size: 512, mtimeMs: baseInfo.mtimeMs + 10 },
+        importVersion: 1,
+      }),
+    ).toBe("rewrite");
+    expect(
+      sessionsModule.classifyCodexSessionFileStatus({
+        previous: { sizeBytes: 1024, mtimeMs: baseInfo.mtimeMs, importVersion: 1 },
+        current: null,
+        importVersion: 1,
+      }),
+    ).toBe("missing");
+  });
+
+  it("exposes file inventory and fast latest-snapshot parsing helpers for ingestion", async () => {
+    const files = await sessionsModule.listCodexSessionFileInfos();
+    expect(files[0]?.filePath).toBe(alternatePoolFile);
+
+    const meta = await sessionsModule.readCodexSessionMetaFromFile(files[0]!);
+    expect(meta?.id).toBe(alternatePoolSessionId);
+
+    const latest = await sessionsModule.readLatestCodexSessionLimitSnapshotFromFile({
+      fileInfo: files[0]!,
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+    });
+    expect(latest?.providerMeta?.limitId).toBe("codex_bengalfox");
+  });
+
+  it("parses appended limit snapshots from a stored offset and carries an incomplete tail", async () => {
+    const appendFile = join(aprilDir, `rollout-2026-04-08T22-41-48-${newerSessionId}.jsonl`);
+    const completeLine = JSON.stringify({
+      timestamp: "2026-04-08T18:00:09.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          limit_id: "codex",
+          primary: {
+            used_percent: 5,
+            window_minutes: 300,
+            resets_at: 4080085200,
+          },
+        },
+      },
+    });
+    const pendingTail = completeLine.slice(0, 64);
+    const appendedRange = `${completeLine.slice(64)}\n{"timestamp":`;
+    const prefix = "already parsed\n";
+    const content = `${prefix}${appendedRange}`;
+    readFileMock.mockImplementation(async (target: string) => {
+      if (target === appendFile) {
+        return content;
+      }
+      if (target === authFile) {
+        return JSON.stringify({
+          tokens: {
+            id_token: null,
+            access_token: null,
+            refresh_token: null,
+            account_id: null,
+          },
+        });
+      }
+      return "";
+    });
+
+    const result = await sessionsModule.readCodexSessionLimitSnapshotsFromAppend({
+      fileInfo: {
+        filePath: appendFile,
+        birthtimeMs: 100,
+        mtimeMs: 200,
+        size: Buffer.byteLength(content),
+      },
+      startOffset: Buffer.byteLength(prefix),
+      pendingTail,
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+    });
+
+    expect(result.parsedOffset).toBe(Buffer.byteLength(content));
+    expect(result.pendingTail).toBe('{"timestamp":');
+    expect(result.snapshots).toHaveLength(1);
+    expect(result.snapshots[0]?.providerMeta?.limitId).toBe("codex");
+    expect(createReadStreamMock).toHaveBeenCalledWith(
+      appendFile,
+      expect.objectContaining({
+        start: Buffer.byteLength(prefix),
+        end: Buffer.byteLength(content) - 1,
+      }),
+    );
   });
 });

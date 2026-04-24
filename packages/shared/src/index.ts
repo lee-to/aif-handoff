@@ -8,6 +8,11 @@ export {
   chatSessions,
   chatMessages,
   usageEvents,
+  codexSessions,
+  codexSessionFiles,
+  codexLimitHeads,
+  codexLimitHistory,
+  codexIndexCursors,
 } from "./schema.js";
 export type {
   ProjectRow,
@@ -26,6 +31,16 @@ export type {
   NewChatMessageRow,
   UsageEventRow,
   NewUsageEventRow,
+  CodexSessionRow,
+  NewCodexSessionRow,
+  CodexSessionFileRow,
+  NewCodexSessionFileRow,
+  CodexLimitHeadRow,
+  NewCodexLimitHeadRow,
+  CodexLimitHistoryRow,
+  NewCodexLimitHistoryRow,
+  CodexIndexCursorRow,
+  NewCodexIndexCursorRow,
 } from "./schema.js";
 
 // Types

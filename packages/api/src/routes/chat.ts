@@ -5,6 +5,8 @@ import {
   createRuntimeWorkflowSpec,
   getResultSessionId,
   isRuntimeErrorCategory,
+  readCodexSessionEventsFromFile,
+  readCodexSessionMetaFromFile,
   RUNTIME_TRUST_TOKEN,
   resolveAdapterCapabilities,
   RuntimeTransport,
@@ -32,11 +34,13 @@ import {
   createChatSession,
   deleteChatSession,
   findChatSessionById,
+  findCodexSessionFilePathBySessionId,
   findProjectById,
   findRuntimeProfileById,
   findTaskById,
   listChatMessages,
   listChatSessions,
+  listCodexSessionsByProjectRoot,
   toChatMessageResponse,
   toChatSessionResponse,
   toRuntimeProfileResponse,
@@ -53,6 +57,7 @@ import {
   invalidateCache,
   sessionCacheKey,
   setCached,
+  shouldUseSessionCacheForRuntime,
 } from "../services/sessionCache.js";
 import {
   assertApiRuntimeCapabilities,
@@ -227,6 +232,12 @@ function normalizeRuntimeId(value: string): string {
   return value.trim().toLowerCase();
 }
 
+const CODEX_RUNTIME_ID = "codex";
+
+function isLocalCodexRuntimeId(runtimeId: string): boolean {
+  return normalizeRuntimeId(runtimeId) === CODEX_RUNTIME_ID;
+}
+
 function formatVirtualRuntimeSessionId(
   runtimeId: string,
   runtimeSessionId: string,
@@ -265,6 +276,79 @@ function parseVirtualRuntimeSessionId(
 
 function runtimeSourceFromTransport(transport: string): "cli" | "agent" {
   return transport === RuntimeTransport.CLI ? "cli" : "agent";
+}
+
+function mapRuntimeEventsToChatMessages(
+  runtimeEvents: RuntimeEvent[],
+  sessionId: string,
+  adapter?: RuntimeAdapter,
+): ChatSessionMessage[] {
+  return runtimeEvents
+    .map((event) => {
+      if (event.type === "tool:question") {
+        const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
+        if (!payload) return null;
+        const rendered = formatToolQuestion(payload);
+        if (!rendered || !rendered.trim()) return null;
+        return {
+          id: eventId(event),
+          sessionId,
+          role: "assistant" as const,
+          content: rendered,
+          createdAt: event.timestamp,
+        } as ChatSessionMessage;
+      }
+      const role = eventRole(event);
+      const rawContent = event.message ?? "";
+      const content = extractMessageContent(rawContent, adapter);
+      if (!role || !content.trim()) return null;
+      return {
+        id: eventId(event),
+        sessionId,
+        role,
+        content,
+        createdAt: event.timestamp,
+      } as ChatSessionMessage;
+    })
+    .filter((message): message is ChatSessionMessage => Boolean(message));
+}
+
+async function loadIndexedCodexVirtualSession(input: {
+  virtualId: string;
+  projectId: string | null;
+  runtimeProfileId: string | null;
+  runtimeSessionId: string;
+}): Promise<ChatSession | null> {
+  const filePath = findCodexSessionFilePathBySessionId(input.runtimeSessionId);
+  if (!filePath) return null;
+
+  const meta = await readCodexSessionMetaFromFile(filePath);
+  if (!meta) return null;
+
+  return {
+    id: input.virtualId,
+    projectId: input.projectId ?? "",
+    title: meta.prompt || "Untitled",
+    agentSessionId: null,
+    runtimeProfileId: input.runtimeProfileId,
+    runtimeSessionId: meta.id,
+    source: "agent",
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+  };
+}
+
+async function loadIndexedCodexRuntimeMessages(input: {
+  runtimeSessionId: string;
+  chatSessionId: string;
+  limit?: number;
+}): Promise<ChatSessionMessage[] | null> {
+  const filePath = findCodexSessionFilePathBySessionId(input.runtimeSessionId);
+  if (!filePath) return null;
+  const runtimeEvents = await readCodexSessionEventsFromFile(filePath, {
+    limit: input.limit,
+  });
+  return mapRuntimeEventsToChatMessages(runtimeEvents, input.chatSessionId);
 }
 
 function isAbortError(err: unknown): boolean {
@@ -702,58 +786,27 @@ chatRouter.get("/sessions", async (c) => {
     );
     const adapter = context.adapter;
     const runtimeId = context.resolvedProfile.runtimeId;
-    const caps = resolveAdapterCapabilities(adapter, context.resolvedProfile.transport);
-    if (!caps.supportsSessionList || !adapter.listSessions) {
-      log.warn(
-        {
-          projectId,
-          runtimeId,
-          profileId: context.resolvedProfile.profileId,
-        },
-        "WARN [chat-route] Runtime does not support external session listing; returning DB sessions only",
-      );
-    } else {
-      const cacheKey = sessionCacheKey(
-        runtimeId,
-        context.resolvedProfile.profileId,
-        project.rootPath,
-      );
-      let listed =
-        getCached<Awaited<ReturnType<NonNullable<typeof adapter.listSessions>>>>(cacheKey);
-      if (!listed) {
-        listed = await adapter.listSessions({
-          runtimeId,
-          providerId: context.resolvedProfile.providerId,
-          profileId: context.resolvedProfile.profileId,
-          projectRoot: project.rootPath,
-          limit: 50,
-          options: {
-            ...context.resolvedProfile.options,
-            ...(context.resolvedProfile.baseUrl
-              ? { baseUrl: context.resolvedProfile.baseUrl }
-              : {}),
-          },
-          headers: context.resolvedProfile.headers,
-        });
-        setCached(cacheKey, listed);
-      }
-
-      runtimeSessions = listed
-        .filter((session) => !linkedRuntimeSessionIds.has(session.id))
+    if (isLocalCodexRuntimeId(runtimeId)) {
+      const indexed = listCodexSessionsByProjectRoot({
+        projectRoot: project.rootPath,
+        limit: 50,
+      });
+      runtimeSessions = indexed
+        .filter((session) => !linkedRuntimeSessionIds.has(session.sessionId))
         .map((session) => ({
           id: formatVirtualRuntimeSessionId(
             runtimeId,
-            session.id,
+            session.sessionId,
             context.resolvedProfile.transport,
           ),
           projectId,
-          title: session.title || "Untitled",
+          title: session.title || session.previewText || "Untitled",
           agentSessionId: null,
           runtimeProfileId: context.resolvedProfile.profileId,
-          runtimeSessionId: session.id,
+          runtimeSessionId: session.sessionId,
           source: runtimeSourceFromTransport(context.resolvedProfile.transport),
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
+          createdAt: session.sourceCreatedAt ?? session.createdAt,
+          updatedAt: session.sourceUpdatedAt ?? session.updatedAt,
         }));
 
       log.debug(
@@ -761,12 +814,86 @@ chatRouter.get("/sessions", async (c) => {
           projectId,
           runtimeId,
           profileId: context.resolvedProfile.profileId,
-          discovered: listed.length,
+          source: "codex_index",
+          discovered: indexed.length,
           mergedRuntimeSessions: runtimeSessions.length,
           dbSessions: dbSessions.length,
         },
         "DEBUG [chat-route] Runtime session discovery completed",
       );
+    } else {
+      const caps = resolveAdapterCapabilities(adapter, context.resolvedProfile.transport);
+      if (!caps.supportsSessionList || !adapter.listSessions) {
+        log.warn(
+          {
+            projectId,
+            runtimeId,
+            profileId: context.resolvedProfile.profileId,
+          },
+          "WARN [chat-route] Runtime does not support external session listing; returning DB sessions only",
+        );
+      } else {
+        const useCache = shouldUseSessionCacheForRuntime(runtimeId);
+        const cacheKey = sessionCacheKey(
+          runtimeId,
+          context.resolvedProfile.profileId,
+          project.rootPath,
+        );
+        let listed = useCache
+          ? getCached<Awaited<ReturnType<NonNullable<typeof adapter.listSessions>>>>(cacheKey)
+          : undefined;
+        if (!listed) {
+          listed = await adapter.listSessions({
+            runtimeId,
+            providerId: context.resolvedProfile.providerId,
+            profileId: context.resolvedProfile.profileId,
+            projectRoot: project.rootPath,
+            limit: 50,
+            options: {
+              ...context.resolvedProfile.options,
+              ...(context.resolvedProfile.baseUrl
+                ? { baseUrl: context.resolvedProfile.baseUrl }
+                : {}),
+            },
+            headers: context.resolvedProfile.headers,
+          });
+          if (useCache) {
+            setCached(cacheKey, listed);
+          }
+        }
+
+        runtimeSessions = listed
+          .filter((session) => !linkedRuntimeSessionIds.has(session.id))
+          .map((session) => ({
+            id: formatVirtualRuntimeSessionId(
+              runtimeId,
+              session.id,
+              context.resolvedProfile.transport,
+            ),
+            projectId,
+            title: session.title || "Untitled",
+            agentSessionId: null,
+            runtimeProfileId: context.resolvedProfile.profileId,
+            runtimeSessionId: session.id,
+            source: runtimeSourceFromTransport(context.resolvedProfile.transport),
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+          }));
+
+        log.debug(
+          {
+            projectId,
+            runtimeId,
+            profileId: context.resolvedProfile.profileId,
+            source: "runtime_adapter",
+            cacheEnabled: useCache,
+            discovered: listed.length,
+            mergedRuntimeSessions: runtimeSessions.length,
+            dbSessions: dbSessions.length,
+          },
+          "DEBUG [chat-route] Runtime session discovery completed",
+        );
+      }
     }
   } catch (err) {
     log.warn(
@@ -816,6 +943,28 @@ chatRouter.get("/sessions/:id", async (c) => {
 
   const virtual = parseVirtualRuntimeSessionId(id);
   if (virtual) {
+    const queryProjectId = parseOptionalQueryParam(c.req.query("projectId"));
+    const queryRuntimeProfileId = parseOptionalQueryParam(c.req.query("runtimeProfileId"));
+    if (isLocalCodexRuntimeId(virtual.runtimeId)) {
+      const indexedSession = await loadIndexedCodexVirtualSession({
+        virtualId: id,
+        projectId: queryProjectId,
+        runtimeProfileId: queryRuntimeProfileId,
+        runtimeSessionId: virtual.sessionId,
+      });
+      if (indexedSession) {
+        return c.json(indexedSession);
+      }
+      log.debug(
+        {
+          runtimeId: virtual.runtimeId,
+          runtimeSessionId: virtual.sessionId,
+          source: "codex_index",
+        },
+        "DEBUG [chat-route] Indexed Codex session lookup missed; falling back to adapter",
+      );
+    }
+
     try {
       const adapter = await getAdapterForRuntimeId(virtual.runtimeId);
       if (!adapter.getSession) {
@@ -824,8 +973,8 @@ chatRouter.get("/sessions/:id", async (c) => {
       const lookupContext = await resolveVirtualSessionLookupContext({
         runtimeId: virtual.runtimeId,
         adapter,
-        projectId: parseOptionalQueryParam(c.req.query("projectId")),
-        runtimeProfileId: parseOptionalQueryParam(c.req.query("runtimeProfileId")),
+        projectId: queryProjectId,
+        runtimeProfileId: queryRuntimeProfileId,
       });
       const info = await adapter.getSession({
         runtimeId: virtual.runtimeId,
@@ -871,6 +1020,26 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 
   const virtual = parseVirtualRuntimeSessionId(id);
   if (virtual) {
+    const queryProjectId = parseOptionalQueryParam(c.req.query("projectId"));
+    const queryRuntimeProfileId = parseOptionalQueryParam(c.req.query("runtimeProfileId"));
+    if (isLocalCodexRuntimeId(virtual.runtimeId)) {
+      const indexedMessages = await loadIndexedCodexRuntimeMessages({
+        runtimeSessionId: virtual.sessionId,
+        chatSessionId: id,
+      });
+      if (indexedMessages) {
+        return c.json(indexedMessages);
+      }
+      log.debug(
+        {
+          runtimeId: virtual.runtimeId,
+          runtimeSessionId: virtual.sessionId,
+          source: "codex_index",
+        },
+        "DEBUG [chat-route] Indexed Codex session-message lookup missed; falling back to adapter",
+      );
+    }
+
     try {
       const adapter = await getAdapterForRuntimeId(virtual.runtimeId);
       if (!adapter.listSessionEvents) {
@@ -879,8 +1048,8 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
       const lookupContext = await resolveVirtualSessionLookupContext({
         runtimeId: virtual.runtimeId,
         adapter,
-        projectId: parseOptionalQueryParam(c.req.query("projectId")),
-        runtimeProfileId: parseOptionalQueryParam(c.req.query("runtimeProfileId")),
+        projectId: queryProjectId,
+        runtimeProfileId: queryRuntimeProfileId,
       });
 
       const runtimeEvents = await adapter.listSessionEvents({
@@ -893,33 +1062,7 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
         headers: lookupContext.headers,
       });
 
-      const messages: ChatSessionMessage[] = runtimeEvents
-        .map((event) => {
-          if (event.type === "tool:question") {
-            const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
-            if (!payload) return null;
-            const rendered = formatToolQuestion(payload);
-            if (!rendered || !rendered.trim()) return null;
-            return {
-              id: eventId(event),
-              sessionId: id,
-              role: "assistant" as const,
-              content: rendered,
-              createdAt: event.timestamp,
-            } as ChatSessionMessage;
-          }
-          const role = eventRole(event);
-          const content = event.message ?? "";
-          if (!role || !content.trim()) return null;
-          return {
-            id: eventId(event),
-            sessionId: id,
-            role,
-            content: extractMessageContent(content, adapter),
-            createdAt: event.timestamp,
-          } as ChatSessionMessage;
-        })
-        .filter((message): message is ChatSessionMessage => Boolean(message));
+      const messages = mapRuntimeEventsToChatMessages(runtimeEvents, id, adapter);
 
       return c.json(messages);
     } catch (err) {
@@ -962,6 +1105,28 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
     }
 
     try {
+      if (isLocalCodexRuntimeId(runtimeId)) {
+        const indexedRuntimeMessages = await loadIndexedCodexRuntimeMessages({
+          runtimeSessionId: linkedRuntimeSessionId,
+          chatSessionId: id,
+        });
+        if (indexedRuntimeMessages) {
+          if (indexedRuntimeMessages.length === 0 && dbMessages.length > 0) {
+            log.debug(
+              {
+                sessionId: id,
+                runtimeId,
+                runtimeSessionId: linkedRuntimeSessionId,
+                dbMessageCount: dbMessages.length,
+              },
+              "DEBUG [chat-route] Indexed Codex runtime events were empty; falling back to DB messages",
+            );
+            return c.json(dbMessages);
+          }
+          return c.json(mergeRuntimeAndDbMessages(indexedRuntimeMessages, dbMessages));
+        }
+      }
+
       const adapter = await getAdapterForRuntimeId(runtimeId);
       if (adapter.listSessionEvents) {
         const runtimeEvents = await adapter.listSessionEvents({
@@ -977,34 +1142,7 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
           headers: profileHeaders,
         });
 
-        const runtimeMessages: ChatSessionMessage[] = runtimeEvents
-          .map((event) => {
-            if (event.type === "tool:question") {
-              const payload = event.data as unknown as RuntimeToolQuestionPayload | undefined;
-              if (!payload) return null;
-              const rendered = formatToolQuestion(payload);
-              if (!rendered || !rendered.trim()) return null;
-              return {
-                id: eventId(event),
-                sessionId: id,
-                role: "assistant" as const,
-                content: rendered,
-                createdAt: event.timestamp,
-              } as ChatSessionMessage;
-            }
-            const role = eventRole(event);
-            const rawContent = event.message ?? "";
-            const content = extractMessageContent(rawContent, adapter);
-            if (!role || !content.trim()) return null;
-            return {
-              id: eventId(event),
-              sessionId: id,
-              role,
-              content,
-              createdAt: event.timestamp,
-            } as ChatSessionMessage;
-          })
-          .filter((message): message is ChatSessionMessage => Boolean(message));
+        const runtimeMessages = mapRuntimeEventsToChatMessages(runtimeEvents, id, adapter);
 
         if (runtimeMessages.length === 0 && dbMessages.length > 0) {
           log.debug(

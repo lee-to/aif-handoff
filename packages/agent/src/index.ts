@@ -3,6 +3,7 @@ import { getEnv, logger } from "@aif/shared";
 import { bootstrapRuntimeRegistry } from "@aif/runtime";
 import { pollAndProcess, setRuntimeRegistry } from "./coordinator.js";
 import { flushAllActivityQueues } from "./hooks.js";
+import { notifyProjectRuntimeLimitBroadcast } from "./notifier.js";
 import { connectWakeChannel, closeWakeChannel, waitForApiReady } from "./wakeChannel.js";
 import { abortAllActiveStages } from "./stageAbort.js";
 import { startPollScheduler } from "./pollScheduler.js";
@@ -27,7 +28,14 @@ const pollScheduler = startPollScheduler(async () => {
 // Pre-load runtime registry so project init includes all adapters
 bootstrapRuntimeRegistry({
   runtimeModules: env.AIF_RUNTIME_MODULES,
-  usageSink: createDbUsageSink(),
+  usageSink: createDbUsageSink({
+    onRecorded: (event) => {
+      if (!event.context.projectId || !event.profileId) return;
+      void notifyProjectRuntimeLimitBroadcast(event.context.projectId, event.profileId, {
+        taskId: event.context.taskId ?? null,
+      });
+    },
+  }),
 })
   .then((registry) => {
     setRuntimeRegistry(registry);

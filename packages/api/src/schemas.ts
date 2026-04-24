@@ -133,8 +133,13 @@ export const autoQueueModeSchema = z.object({
 });
 
 export const broadcastProjectSchema = z.object({
-  type: z.enum(["project:auto_queue_mode_changed", "project:auto_queue_advanced"]),
-  taskId: z.string().uuid().optional(),
+  type: z.enum([
+    "project:auto_queue_mode_changed",
+    "project:auto_queue_advanced",
+    "project:runtime_limit_updated",
+  ]),
+  taskId: z.string().min(1).optional(),
+  runtimeProfileId: z.string().min(1).nullable().optional(),
 });
 
 export const roadmapImportSchema = z.object({
@@ -158,6 +163,17 @@ export const updateChatSessionSchema = z.object({
   runtimeProfileId: z.string().min(1).nullable().optional(),
   runtimeSessionId: z.string().min(1).nullable().optional(),
 });
+
+export const updateAppRuntimeDefaultsSchema = z
+  .object({
+    defaultTaskRuntimeProfileId: z.string().min(1).nullable().optional(),
+    defaultPlanRuntimeProfileId: z.string().min(1).nullable().optional(),
+    defaultReviewRuntimeProfileId: z.string().min(1).nullable().optional(),
+    defaultChatRuntimeProfileId: z.string().min(1).nullable().optional(),
+  })
+  .refine((payload) => Object.keys(payload).length > 0, {
+    message: "At least one field is required",
+  });
 
 export const chatAttachmentSchema = z.object({
   name: z.string().min(1).max(500),
@@ -233,6 +249,12 @@ export const runtimeProfileModelsSchema = z.object({
   forceRefresh: z.boolean().optional(),
 });
 
+export const runtimeProfileListQuerySchema = z.object({
+  projectId: z.string().min(1).optional(),
+  includeGlobal: z.string().optional(),
+  enabledOnly: z.string().optional(),
+  scope: z.enum(["global", "project", "visible"]).optional(),
+});
 /**
  * Strict allowlist schema for the Codex login callback URL the user pastes in
  * the UI. Both the api and the agent broker validate this — double protection.

@@ -20,13 +20,14 @@ import {
   sleepMs,
   withStreamTimeouts,
 } from "../../timeouts.js";
-import { asRecord, readString } from "../../utils.js";
+import { buildRuntimeLimitEvent } from "../../limitEvents.js";
 import { classifyCodexRuntimeError } from "./errors.js";
 import {
   normalizeCodexApprovalPolicy,
   normalizeCodexSandboxMode,
   warnOnInvalidCodexPermissionOverride,
 } from "./permissions.js";
+import { getCodexSessionLimitSnapshot } from "./sessions.js";
 
 export interface CodexSdkLogger {
   debug?(context: Record<string, unknown>, message: string): void;
@@ -35,6 +36,21 @@ export interface CodexSdkLogger {
   error?(context: Record<string, unknown>, message: string): void;
 }
 
+const CODEX_SESSION_LIMIT_POLL_INTERVAL_MS = 1_000;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
 function formatToolDetail(value: unknown, maxLength = 200): string {
   if (value == null) return "";
 
@@ -453,6 +469,110 @@ function threadEventToRuntimeEvent(event: ThreadEvent): RuntimeEvent | null {
   }
 }
 
+function hasRuntimeLimitSnapshotSignature(
+  events: RuntimeEvent[] | null | undefined,
+  signature: string,
+): boolean {
+  return (
+    events?.some((event) => {
+      if (event.type !== "runtime:limit") {
+        return false;
+      }
+      return JSON.stringify(event.data?.snapshot ?? null) === signature;
+    }) ?? false
+  );
+}
+
+async function appendCodexSessionLimitEvent(input: RuntimeRunInput, result: RuntimeRunResult) {
+  const sessionId = result.sessionId ?? null;
+  if (!sessionId) {
+    return result;
+  }
+
+  const snapshot = await getCodexSessionLimitSnapshot({
+    sessionId,
+    runtimeId: input.runtimeId,
+    providerId: input.providerId ?? "openai",
+    profileId: input.profileId ?? null,
+  });
+  if (!snapshot) {
+    return result;
+  }
+
+  const signature = JSON.stringify(snapshot);
+  if (hasRuntimeLimitSnapshotSignature(result.events, signature)) {
+    return result;
+  }
+
+  const limitEvent = buildRuntimeLimitEvent(snapshot, "token_count");
+  const nextEvents = [...(result.events ?? []), limitEvent];
+  input.execution?.onEvent?.(limitEvent);
+
+  return {
+    ...result,
+    events: nextEvents,
+  };
+}
+
+interface CodexSessionLimitObserverState {
+  lastCheckedAtMs: number;
+  lastSignature: string | null;
+}
+
+async function maybeEmitCodexSessionLimitEvent(input: {
+  runtimeInput: RuntimeRunInput;
+  sessionId: string | null;
+  runtimeEvents: RuntimeEvent[];
+  observerState: CodexSessionLimitObserverState;
+  logger?: CodexSdkLogger;
+  force?: boolean;
+}): Promise<void> {
+  const sessionId = input.sessionId;
+  if (!sessionId) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  if (
+    input.force !== true &&
+    input.observerState.lastCheckedAtMs > 0 &&
+    nowMs - input.observerState.lastCheckedAtMs < CODEX_SESSION_LIMIT_POLL_INTERVAL_MS
+  ) {
+    return;
+  }
+  input.observerState.lastCheckedAtMs = nowMs;
+
+  const snapshot = await getCodexSessionLimitSnapshot({
+    sessionId,
+    runtimeId: input.runtimeInput.runtimeId,
+    providerId: input.runtimeInput.providerId ?? "openai",
+    profileId: input.runtimeInput.profileId ?? null,
+  });
+  if (!snapshot) {
+    return;
+  }
+
+  const signature = JSON.stringify(snapshot);
+  if (input.observerState.lastSignature === signature) {
+    return;
+  }
+  input.observerState.lastSignature = signature;
+
+  const limitEvent = buildRuntimeLimitEvent(snapshot, "token_count");
+  input.runtimeEvents.push(limitEvent);
+  input.runtimeInput.execution?.onEvent?.(limitEvent);
+  input.logger?.debug?.(
+    {
+      runtimeId: input.runtimeInput.runtimeId,
+      transport: "sdk",
+      sessionId,
+      status: snapshot.status,
+      checkedAt: snapshot.checkedAt,
+    },
+    "Observed Codex session token_count rate limits during SDK run",
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main SDK execution
 // ---------------------------------------------------------------------------
@@ -498,6 +618,10 @@ async function runCodexSdkAttempt(
   let sessionId: string | null = null;
   let usage: RuntimeUsage | null = null;
   const runtimeEvents: RuntimeEvent[] = [];
+  const limitObserverState: CodexSessionLimitObserverState = {
+    lastCheckedAtMs: 0,
+    lastSignature: null,
+  };
 
   for await (const event of wrappedEvents) {
     // Extract thread ID from the first event
@@ -535,6 +659,14 @@ async function runCodexSdkAttempt(
       runtimeEvents.push(runtimeEvent);
       execution?.onEvent?.(runtimeEvent);
     }
+
+    await maybeEmitCodexSessionLimitEvent({
+      runtimeInput: input,
+      sessionId,
+      runtimeEvents,
+      observerState: limitObserverState,
+      logger,
+    });
   }
 
   // Fallback: thread.id is populated after the first turn starts
@@ -542,12 +674,23 @@ async function runCodexSdkAttempt(
     sessionId = thread.id ?? null;
   }
 
-  return {
+  await maybeEmitCodexSessionLimitEvent({
+    runtimeInput: input,
+    sessionId,
+    runtimeEvents,
+    observerState: limitObserverState,
+    logger,
+    force: true,
+  });
+
+  const result: RuntimeRunResult = {
     outputText,
     sessionId,
     usage,
     events: runtimeEvents,
   };
+
+  return appendCodexSessionLimitEvent(input, result);
 }
 
 export async function runCodexSdk(

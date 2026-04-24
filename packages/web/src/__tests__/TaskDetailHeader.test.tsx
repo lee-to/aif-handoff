@@ -305,4 +305,44 @@ describe("TaskDetailHeader", () => {
     expect(screen.getByText(/in: 1,234/)).toBeDefined();
     expect(screen.getByText(/out: 567/)).toBeDefined();
   });
+
+  it("should render structured runtime auto-pause details for blocked tasks", () => {
+    render(
+      <TaskDetailHeader
+        task={{
+          ...baseTask,
+          status: "blocked_external",
+          retryAfter: "2026-04-17T01:00:00.000Z",
+          runtimeLimitSnapshot: {
+            source: "api_headers",
+            status: "blocked",
+            precision: "exact",
+            checkedAt: "2026-04-17T00:00:00.000Z",
+            providerId: "anthropic",
+            runtimeId: "claude",
+            primaryScope: "requests",
+            resetAt: "2099-04-17T01:00:00.000Z",
+            warningThreshold: 10,
+            windows: [{ scope: "requests", percentRemaining: 5, warningThreshold: 10 }],
+            providerMeta: null,
+          },
+        }}
+        activeTab="implementation"
+        onTabChange={vi.fn()}
+        onActionClick={vi.fn()}
+        onTogglePaused={vi.fn()}
+        isDisabled={false}
+        isCheckingStartAi={false}
+        planChangeSuccess={null}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Auto-paused by runtime limit.")).toBeDefined();
+    expect(
+      screen.getByText("Request quota crossed the 10% safety threshold (5% remaining)."),
+    ).toBeDefined();
+    expect(screen.getByText(/Provider reset/)).toBeDefined();
+    expect(screen.getByText(/Task retry .*scheduled/)).toBeDefined();
+  });
 });

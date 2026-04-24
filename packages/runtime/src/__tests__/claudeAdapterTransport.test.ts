@@ -14,7 +14,11 @@ vi.mock("../adapters/claude/cli.js", () => ({
 }));
 
 vi.mock("../adapters/claude/findPath.js", () => ({
-  findClaudePath: () => "/usr/local/bin/claude",
+  findClaudePath: () => "C:\\nvm4w\\nodejs\\claude",
+  resolveClaudeSdkExecutablePath: (path: string | null | undefined) =>
+    path === "C:\\nvm4w\\nodejs\\claude"
+      ? "C:\\nvm4w\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
+      : (path ?? undefined),
 }));
 
 vi.mock("../adapters/claude/sessions.js", () => ({
@@ -51,6 +55,10 @@ describe("Claude adapter — transport routing and capabilities", () => {
       expect(result.outputText).toBe("sdk-output");
       expect(runClaudeRuntimeMock).toHaveBeenCalledTimes(1);
       expect(runClaudeCliMock).not.toHaveBeenCalled();
+      expect(runClaudeRuntimeMock.mock.calls[0][2]).toEqual({
+        pathToClaudeCodeExecutable:
+          "C:\\nvm4w\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe",
+      });
     });
 
     it("routes to CLI transport when transport is 'cli'", async () => {
@@ -60,6 +68,9 @@ describe("Claude adapter — transport routing and capabilities", () => {
       expect(result.outputText).toBe("cli-output");
       expect(runClaudeCliMock).toHaveBeenCalledTimes(1);
       expect(runClaudeRuntimeMock).not.toHaveBeenCalled();
+      expect(runClaudeCliMock.mock.calls[0][2]).toEqual({
+        pathToClaudeCodeExecutable: "C:\\nvm4w\\nodejs\\claude",
+      });
     });
 
     it("routes to SDK for API transport (both use Agent SDK)", async () => {

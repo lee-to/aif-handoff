@@ -23,6 +23,8 @@ export async function createProject(input: {
   reviewSidecarMaxBudgetUsd?: number | null;
   parallelEnabled?: boolean;
   defaultTaskRuntimeProfileId?: string | null;
+  defaultPlanRuntimeProfileId?: string | null;
+  defaultReviewRuntimeProfileId?: string | null;
   defaultChatRuntimeProfileId?: string | null;
 }): Promise<{ project: ProjectRow | undefined; pathError?: string; initError?: string }> {
   const pathError = validateProjectRootPath(input.rootPath);

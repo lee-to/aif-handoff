@@ -26,7 +26,16 @@ const { createClaudeRuntimeAdapter } = await import("../adapters/claude/index.js
 const { ClaudeRuntimeAdapterError } = await import("../adapters/claude/errors.js");
 
 function createRunInput(overrides: Record<string, unknown> = {}) {
-  return {
+  const overrideOptions =
+    overrides.options && typeof overrides.options === "object"
+      ? (overrides.options as Record<string, unknown>)
+      : {};
+  const overrideExecution =
+    overrides.execution && typeof overrides.execution === "object"
+      ? (overrides.execution as Record<string, unknown>)
+      : {};
+
+  const input = {
     runtimeId: "claude",
     providerId: "anthropic",
     profileId: "profile-1",
@@ -36,6 +45,8 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     cwd: "/tmp/project",
     options: {
       apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      baseUrl: "https://api.anthropic.com",
+      ...overrideOptions,
     },
     execution: {
       startTimeoutMs: 10,
@@ -43,6 +54,20 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
     },
     usageContext: TEST_USAGE_CONTEXT,
     ...overrides,
+  };
+
+  return {
+    ...input,
+    options: {
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      baseUrl: "https://api.anthropic.com",
+      ...overrideOptions,
+    },
+    execution: {
+      startTimeoutMs: 10,
+      startRetryDelayMs: 0,
+      ...overrideExecution,
+    },
   };
 }
 

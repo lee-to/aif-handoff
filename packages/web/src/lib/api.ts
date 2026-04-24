@@ -18,6 +18,7 @@ import type {
   RuntimeProfile,
   CreateRuntimeProfileInput,
   UpdateRuntimeProfileInput,
+  RuntimeLimitSnapshot,
 } from "@aif/shared/browser";
 
 export class ApiError extends Error {
@@ -74,6 +75,17 @@ export interface AifConfig {
   };
 }
 
+export interface AppRuntimeDefaultsResponse {
+  defaultTaskRuntimeProfileId: string | null;
+  defaultPlanRuntimeProfileId: string | null;
+  defaultReviewRuntimeProfileId: string | null;
+  defaultChatRuntimeProfileId: string | null;
+  resolvedDefaultTaskRuntimeProfileId: string | null;
+  resolvedDefaultPlanRuntimeProfileId: string | null;
+  resolvedDefaultReviewRuntimeProfileId: string | null;
+  resolvedDefaultChatRuntimeProfileId: string | null;
+}
+
 const API_PREFIX = import.meta.env.DEV ? "" : "/api";
 const API_BASE = "/tasks";
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -85,6 +97,7 @@ export interface SettingsResponse {
   useSubagents: boolean;
   maxReviewIterations: number;
   autoReviewStrategy: "full_re_review" | "closure_first";
+  usageLimitsEnabled: boolean;
   runtimeReadiness: {
     availableRuntimeCount: number;
     runtimeProfileCount: number;
@@ -94,7 +107,30 @@ export interface SettingsResponse {
     modules: string[];
     openAiBaseUrlConfigured: boolean;
     codexCliPathConfigured: boolean;
+    app: AppRuntimeDefaultsResponse;
   };
+}
+
+export interface SendChatMessageResponse {
+  conversationId: string;
+  sessionId: string | null;
+  assistantMessage?: string | null;
+  attachments?: ChatMessageAttachment[];
+  runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
+}
+
+interface ChatSessionRequestContext {
+  projectId?: string | null;
+  runtimeProfileId?: string | null;
+}
+
+function withChatSessionContext(path: string, context?: ChatSessionRequestContext): string {
+  if (!context) return path;
+  const qs = new URLSearchParams();
+  if (context.projectId) qs.set("projectId", context.projectId);
+  if (context.runtimeProfileId) qs.set("runtimeProfileId", context.runtimeProfileId);
+  const suffix = qs.toString();
+  return suffix ? `${path}?${suffix}` : path;
 }
 
 async function request<T>(
@@ -159,6 +195,24 @@ export const api = {
   getSettings(): Promise<SettingsResponse> {
     console.debug("[api] GET /settings");
     return request("/settings");
+  },
+
+  getAppRuntimeDefaults(): Promise<AppRuntimeDefaultsResponse> {
+    console.debug("[api] GET /settings/runtime-defaults");
+    return request("/settings/runtime-defaults");
+  },
+
+  updateAppRuntimeDefaults(input: {
+    defaultTaskRuntimeProfileId?: string | null;
+    defaultPlanRuntimeProfileId?: string | null;
+    defaultReviewRuntimeProfileId?: string | null;
+    defaultChatRuntimeProfileId?: string | null;
+  }): Promise<AppRuntimeDefaultsResponse> {
+    console.debug("[api] PUT /settings/runtime-defaults", input);
+    return request("/settings/runtime-defaults", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
   },
 
   // Projects
@@ -379,23 +433,13 @@ export const api = {
     });
   },
 
-  sendChatMessage(input: ChatRequest): Promise<{
-    conversationId: string;
-    sessionId: string | null;
-    assistantMessage?: string | null;
-    attachments?: ChatMessageAttachment[];
-  }> {
+  sendChatMessage(input: ChatRequest): Promise<SendChatMessageResponse> {
     console.debug("[api] POST /chat", {
       projectId: input.projectId,
       explore: input.explore,
       sessionId: input.sessionId,
     });
-    return request<{
-      conversationId: string;
-      sessionId: string | null;
-      assistantMessage?: string | null;
-      attachments?: ChatMessageAttachment[];
-    }>(
+    return request<SendChatMessageResponse>(
       "/chat",
       {
         method: "POST",
@@ -427,14 +471,19 @@ export const api = {
     });
   },
 
-  getChatSession(id: string): Promise<ChatSession> {
+  getChatSession(id: string, context?: ChatSessionRequestContext): Promise<ChatSession> {
     console.debug("[api] GET /chat/sessions/%s", id);
-    return request<ChatSession>(`/chat/sessions/${id}`);
+    return request<ChatSession>(withChatSessionContext(`/chat/sessions/${id}`, context));
   },
 
-  getChatSessionMessages(sessionId: string): Promise<ChatSessionMessage[]> {
+  getChatSessionMessages(
+    sessionId: string,
+    context?: ChatSessionRequestContext,
+  ): Promise<ChatSessionMessage[]> {
     console.debug("[api] GET /chat/sessions/%s/messages", sessionId);
-    return request<ChatSessionMessage[]>(`/chat/sessions/${sessionId}/messages`);
+    return request<ChatSessionMessage[]>(
+      withChatSessionContext(`/chat/sessions/${sessionId}/messages`, context),
+    );
   },
 
   updateChatSession(id: string, input: UpdateChatSessionInput): Promise<ChatSession> {
@@ -455,11 +504,13 @@ export const api = {
     projectId?: string;
     includeGlobal?: boolean;
     enabledOnly?: boolean;
+    scope?: "global" | "project";
   }): Promise<RuntimeProfile[]> {
     const qs = new URLSearchParams();
     if (params?.projectId) qs.set("projectId", params.projectId);
     if (params?.includeGlobal !== undefined) qs.set("includeGlobal", String(params.includeGlobal));
     if (params?.enabledOnly !== undefined) qs.set("enabledOnly", String(params.enabledOnly));
+    if (params?.scope) qs.set("scope", params.scope);
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return request<RuntimeProfile[]>(`/runtime-profiles${suffix}`);
   },

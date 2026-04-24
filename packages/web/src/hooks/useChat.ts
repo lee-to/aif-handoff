@@ -6,6 +6,7 @@ import type {
   ChatStreamTokenPayload,
   ChatDonePayload,
   ChatErrorPayload,
+  RuntimeLimitSnapshot,
 } from "@aif/shared/browser";
 import { api, ApiError } from "@/lib/api";
 import { getWsClientId } from "./useWebSocket";
@@ -42,12 +43,15 @@ export function useChat(
   sessionId: string | null = null,
   taskId: string | null = null,
   onSessionResolved?: (sessionId: string) => void,
+  sessionRuntimeProfileId: string | null = null,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [explore, setExplore] = useState(false);
   const [chatErrorCode, setChatErrorCode] = useState<string | null>(null);
+  const [chatRuntimeLimitSnapshot, setChatRuntimeLimitSnapshot] =
+    useState<RuntimeLimitSnapshot | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
 
   // Per-session streaming state: conversationId → streamKey (sessionId or conversationId)
@@ -120,6 +124,7 @@ export function useChat(
         queueMicrotask(() => {
           setMessages([]);
           setChatErrorCode(null);
+          setChatRuntimeLimitSnapshot(null);
           setIsStreaming(false);
           setIsLoadingMessages(false);
         });
@@ -138,6 +143,7 @@ export function useChat(
       setMessages(streamState.messages);
       setIsStreaming(true);
       setChatErrorCode(null);
+      setChatRuntimeLimitSnapshot(null);
       setIsLoadingMessages(false);
       return;
     }
@@ -147,12 +153,16 @@ export function useChat(
       setIsStreaming(false);
       setMessages([]);
       setChatErrorCode(null);
+      setChatRuntimeLimitSnapshot(null);
       setIsLoadingMessages(true);
     });
     console.debug("[useChat] Loading session messages sessionId=%s", sessionId);
 
     api
-      .getChatSessionMessages(sessionId)
+      .getChatSessionMessages(sessionId, {
+        projectId,
+        runtimeProfileId: sessionRuntimeProfileId,
+      })
       .then((msgs) => {
         if (currentSessionIdRef.current !== sessionId) return;
         if (isSessionStreaming(sessionId)) {
@@ -169,6 +179,7 @@ export function useChat(
           })),
         );
         setChatErrorCode(null);
+        setChatRuntimeLimitSnapshot(null);
         setIsLoadingMessages(false);
       })
       .catch((err) => {
@@ -177,7 +188,7 @@ export function useChat(
           setIsLoadingMessages(false);
         }
       });
-  }, [sessionId, isSessionStreaming]);
+  }, [projectId, sessionId, sessionRuntimeProfileId, isSessionStreaming]);
 
   // Listen for chat stream events dispatched by useWebSocket
   useEffect(() => {
@@ -210,7 +221,7 @@ export function useChat(
     };
 
     const handleDone = (e: Event) => {
-      const { conversationId } = (e as CustomEvent<ChatDonePayload>).detail;
+      const { conversationId, runtimeLimitSnapshot } = (e as CustomEvent<ChatDonePayload>).detail;
       const streamKey = activeStreamsRef.current.get(conversationId);
       if (!streamKey) return;
 
@@ -221,12 +232,15 @@ export function useChat(
 
       if (isCurrentStream(streamKey)) {
         setIsStreaming(false);
+        setChatRuntimeLimitSnapshot(runtimeLimitSnapshot ?? null);
       }
       handledErrorConversationsRef.current.delete(conversationId);
     };
 
     const handleError = (e: Event) => {
-      const { conversationId, message, code } = (e as CustomEvent<ChatErrorPayload>).detail;
+      const { conversationId, message, code, runtimeLimitSnapshot } = (
+        e as CustomEvent<ChatErrorPayload>
+      ).detail;
       const streamKey = activeStreamsRef.current.get(conversationId);
       if (!streamKey) return;
 
@@ -242,6 +256,7 @@ export function useChat(
       if (isCurrentStream(streamKey)) {
         setIsStreaming(false);
         setChatErrorCode(code ?? null);
+        setChatRuntimeLimitSnapshot(runtimeLimitSnapshot ?? null);
         // User-initiated aborts surface as a banner via chatErrorCode, not a
         // phantom assistant bubble. The bubble was misleading because only
         // partial streamed text (if any) is persisted to DB — the "Chat run
@@ -317,6 +332,7 @@ export function useChat(
       setMessages(newMessages);
       setIsStreaming(true);
       setChatErrorCode(null);
+      setChatRuntimeLimitSnapshot(null);
       if (explore) setExplore(false);
 
       console.debug("[useChat] Sending message:", {
@@ -462,7 +478,12 @@ export function useChat(
                 sessionId?: string | null;
                 assistantMessage?: string | null;
                 attachments?: ChatMessageAttachment[];
+                runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
               } | null)
+            : null;
+        const errorData =
+          err instanceof ApiError
+            ? (err.data as { runtimeLimitSnapshot?: RuntimeLimitSnapshot | null } | null)
             : null;
         const isAbortedError = abortData?.code === "aborted";
 
@@ -571,6 +592,9 @@ export function useChat(
             }
           }
           setIsStreaming(false);
+          setChatRuntimeLimitSnapshot(
+            abortData?.runtimeLimitSnapshot ?? errorData?.runtimeLimitSnapshot ?? null,
+          );
           if (isAbortedError) {
             // Abort is surfaced via the banner only — no phantom bubble.
             setChatErrorCode("aborted");
@@ -622,12 +646,14 @@ export function useChat(
   const clearMessages = useCallback(() => {
     setMessages([]);
     setChatErrorCode(null);
+    setChatRuntimeLimitSnapshot(null);
   }, []);
 
   const newSession = useCallback(() => {
     setMessages([]);
     currentSessionIdRef.current = null;
     setChatErrorCode(null);
+    setChatRuntimeLimitSnapshot(null);
   }, []);
 
   return {
@@ -635,6 +661,7 @@ export function useChat(
     isStreaming,
     isLoadingMessages,
     chatErrorCode,
+    chatRuntimeLimitSnapshot,
     explore,
     setExplore,
     sendMessage,

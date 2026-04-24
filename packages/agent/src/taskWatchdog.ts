@@ -3,7 +3,12 @@
  * Extracted from coordinator.ts for single responsibility.
  */
 
-import { listDueBlockedExternalTasks, listStaleInProgressTasks, setTaskFields } from "@aif/data";
+import {
+  clearTaskRuntimeLimitSnapshot,
+  listDueBlockedExternalTasks,
+  listStaleInProgressTasks,
+  setTaskFields,
+} from "@aif/data";
 import { logger, getEnv, type TaskStatus } from "@aif/shared";
 import { logActivity } from "./hooks.js";
 import { notifyTaskBroadcast } from "./notifier.js";
@@ -49,6 +54,7 @@ export function releaseDueBlockedTasks(): void {
       lastHeartbeatAt: nowIso,
       updatedAt: nowIso,
     });
+    clearTaskRuntimeLimitSnapshot(task.id, nowIso);
     void notifyTaskBroadcast(task.id, "task:moved", {
       title: task.title,
       fromStatus: "blocked_external",
@@ -98,6 +104,7 @@ export function recoverStaleInProgressTasks(): void {
         lastHeartbeatAt: nowIso,
         updatedAt: nowIso,
       });
+      clearTaskRuntimeLimitSnapshot(task.id, nowIso);
       void notifyTaskBroadcast(task.id, "task:moved", {
         title: task.title,
         fromStatus: task.status,
@@ -127,6 +134,7 @@ export function recoverStaleInProgressTasks(): void {
       lastHeartbeatAt: nowIso,
       updatedAt: nowIso,
     });
+    clearTaskRuntimeLimitSnapshot(task.id, nowIso);
     void notifyTaskBroadcast(task.id, "task:moved", {
       title: task.title,
       fromStatus: task.status,

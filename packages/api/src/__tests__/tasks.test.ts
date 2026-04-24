@@ -4,11 +4,25 @@ import { eq } from "drizzle-orm";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { tasks, taskComments, projects } from "@aif/shared";
+import { appSettings, projects, runtimeProfiles, taskComments, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 // Mock the shared db module to use test db
 const testDb = { current: createTestDb() };
+const mockInternalBroadcastToken = { value: "" };
+
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  const resolvedEnv = actual.getEnv();
+  return {
+    ...actual,
+    getEnv: () => ({
+      ...resolvedEnv,
+      INTERNAL_BROADCAST_TOKEN: mockInternalBroadcastToken.value,
+    }),
+  };
+});
+
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
   return {
@@ -45,6 +59,7 @@ vi.mock("../services/runtime.js", () => ({
 
 // Import after mocks
 const { tasksRouter } = await import("../routes/tasks.js");
+const { broadcast: mockBroadcast } = await import("../ws.js");
 
 function createApp() {
   const app = new Hono();
@@ -76,6 +91,7 @@ describe("tasks API", () => {
   beforeEach(() => {
     testDb.current = createTestDb();
     app = createApp();
+    mockInternalBroadcastToken.value = "";
     mockRunApiRuntimeOneShot.mockReset();
     mockRunApiRuntimeOneShot.mockResolvedValue({
       result: {
@@ -101,6 +117,52 @@ describe("tasks API", () => {
       const res = await app.request("/tasks");
       const body = await res.json();
       expect(body).toHaveLength(2);
+    });
+
+    it("resolves the app task default for every listed task", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.update(appSettings).set({ defaultTaskRuntimeProfileId: "app-task-default" }).run();
+      db.insert(runtimeProfiles)
+        .values({
+          id: "app-task-default",
+          projectId: null,
+          name: "App Task Default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        })
+        .run();
+      db.insert(tasks)
+        .values([
+          { id: "1", projectId: "test-project", title: "Task 1" },
+          { id: "2", projectId: "test-project", title: "Task 2" },
+        ])
+        .run();
+
+      const res = await app.request("/tasks");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+
+      expect(body).toHaveLength(2);
+      expect(
+        body.map((task: { effectiveRuntime: Record<string, string> }) => task.effectiveRuntime),
+      ).toEqual([
+        {
+          source: "system_default",
+          profileId: "app-task-default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileName: "App Task Default",
+        },
+        {
+          source: "system_default",
+          profileId: "app-task-default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileName: "App Task Default",
+        },
+      ]);
     });
 
     it("should return 400 for invalid projectId format", async () => {
@@ -224,6 +286,66 @@ describe("tasks API", () => {
       expect(body.autoMode).toBe(true);
       expect(body.isFix).toBe(false);
       expect(body.status).toBe("backlog");
+    });
+
+    it("should reject runtime profiles owned by a different project on create", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.insert(runtimeProfiles)
+        .values({
+          id: "foreign-runtime-profile",
+          projectId: "other-project",
+          name: "Foreign Runtime",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        })
+        .run();
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Scoped task",
+          projectId: "test-project",
+          runtimeProfileId: "foreign-runtime-profile",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
+    });
+
+    it("should reject disabled runtime profiles on create", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.insert(runtimeProfiles)
+        .values({
+          id: "disabled-runtime-profile",
+          projectId: null,
+          name: "Disabled Runtime",
+          runtimeId: "codex",
+          providerId: "openai",
+          enabled: false,
+        })
+        .run();
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Disabled runtime task",
+          projectId: "test-project",
+          runtimeProfileId: "disabled-runtime-profile",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
     });
 
     it("should persist planner settings from create payload", async () => {
@@ -471,6 +593,43 @@ describe("tasks API", () => {
       expect(body.title).toBe("Find me");
     });
 
+    it("should expose app-level effective runtime when project defaults are missing", async () => {
+      const db = testDb.current;
+      db.insert(projects)
+        .values({ id: "test-project", name: "Test Project", rootPath: "/tmp/test-project" })
+        .run();
+      db.update(appSettings)
+        .set({
+          defaultTaskRuntimeProfileId: "app-task-default",
+        })
+        .where(eq(appSettings.id, 1))
+        .run();
+      db.insert(runtimeProfiles)
+        .values({
+          id: "app-task-default",
+          projectId: null,
+          name: "App Task Default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        })
+        .run();
+      db.insert(tasks)
+        .values({ id: "task-app-default", projectId: "test-project", title: "Find me" })
+        .run();
+
+      const res = await app.request("/tasks/task-app-default");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.effectiveRuntime).toEqual({
+        source: "system_default",
+        profileId: "app-task-default",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        profileName: "App Task Default",
+      });
+    });
+
     it("should expose manualReviewRequired and autoReviewState in task payload", async () => {
       const db = testDb.current;
       db.insert(tasks)
@@ -514,6 +673,139 @@ describe("tasks API", () => {
     it("should return 404 for non-existent task", async () => {
       const res = await app.request("/tasks/non-existent");
       expect(res.status).toBe(404);
+    });
+
+    it("redacts legacy agent activity and strips task runtime account identifiers", async () => {
+      const db = testDb.current;
+      insertTestProject(db);
+      db.insert(tasks)
+        .values({
+          id: "legacy-task",
+          projectId: "test-project",
+          title: "Legacy",
+          agentActivityLog: "Bearer SECRET\nhttps://internal.local",
+          runtimeLimitSnapshotJson: JSON.stringify({
+            source: "sdk_event",
+            status: "warning",
+            precision: "exact",
+            checkedAt: "2026-04-19T10:00:00.000Z",
+            providerId: "anthropic",
+            runtimeId: "claude",
+            profileId: "profile-1",
+            primaryScope: "time",
+            resetAt: "2026-04-19T11:00:00.000Z",
+            retryAfterSeconds: null,
+            warningThreshold: 10,
+            windows: [
+              {
+                scope: "time",
+                percentRemaining: 4,
+                warningThreshold: 10,
+                resetAt: "2026-04-19T11:00:00.000Z",
+              },
+            ],
+            providerMeta: {
+              providerLabel: "Anthropic",
+              accountLabel: "Shared Account",
+            },
+          }),
+        })
+        .run();
+
+      const res = await app.request("/tasks/legacy-task");
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.agentActivityLog).toContain("[REDACTED]");
+      expect(body.agentActivityLog).not.toContain("SECRET");
+      expect(body.agentActivityLog).not.toContain("internal.local");
+      expect(body.runtimeLimitSnapshot.providerMeta).toEqual({
+        providerLabel: "Anthropic",
+      });
+    });
+  });
+
+  describe("POST /tasks/:id/broadcast", () => {
+    it("returns 401 without the internal broadcast token when auth is configured", async () => {
+      const db = testDb.current;
+      mockInternalBroadcastToken.value = "internal-token";
+      db.insert(tasks)
+        .values({ id: "broadcast-auth-task", projectId: "test-project", title: "Broadcast me" })
+        .run();
+
+      const res = await app.request("/tasks/broadcast-auth-task/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "task:updated" }),
+      });
+
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 401 for an invalid internal broadcast token", async () => {
+      const db = testDb.current;
+      mockInternalBroadcastToken.value = "internal-token";
+      db.insert(tasks)
+        .values({ id: "broadcast-invalid-token", projectId: "test-project", title: "Broadcast me" })
+        .run();
+
+      const res = await app.request("/tasks/broadcast-invalid-token/broadcast", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong-token",
+        },
+        body: JSON.stringify({ type: "task:updated" }),
+      });
+
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 200 with a valid internal broadcast token", async () => {
+      const db = testDb.current;
+      mockInternalBroadcastToken.value = "internal-token";
+      db.insert(tasks)
+        .values({ id: "broadcast-valid-token", projectId: "test-project", title: "Broadcast me" })
+        .run();
+
+      const res = await app.request("/tasks/broadcast-valid-token/broadcast", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Broadcast-Token": "internal-token",
+        },
+        body: JSON.stringify({ type: "task:updated" }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ success: true });
+      expect(vi.mocked(mockBroadcast)).toHaveBeenCalledWith({
+        type: "task:updated",
+        payload: {
+          id: "broadcast-valid-token",
+          title: "Broadcast me",
+          status: "backlog",
+        },
+      });
+    });
+
+    it("rejects event types outside the task broadcast allowlist", async () => {
+      const db = testDb.current;
+      mockInternalBroadcastToken.value = "internal-token";
+      db.insert(tasks)
+        .values({ id: "broadcast-invalid-type", projectId: "test-project", title: "Broadcast me" })
+        .run();
+
+      const res = await app.request("/tasks/broadcast-invalid-type/broadcast", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Broadcast-Token": "internal-token",
+        },
+        body: JSON.stringify({ type: "project:created" }),
+      });
+
+      expect(res.status).toBe(400);
     });
   });
 
@@ -649,6 +941,34 @@ describe("tasks API", () => {
       expect(body.planPath).toBe(".ai-factory/custom.md");
       expect(body.planDocs).toBe(true);
       expect(body.planTests).toBe(true);
+    });
+
+    it("should reject runtime profiles owned by a different project on update", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({ id: "upd-runtime-scope", projectId: "test-project", title: "Scoped task" })
+        .run();
+      db.insert(runtimeProfiles)
+        .values({
+          id: "foreign-runtime-profile",
+          projectId: "other-project",
+          name: "Foreign Runtime",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        })
+        .run();
+
+      const res = await app.request("/tasks/upd-runtime-scope", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runtimeProfileId: "foreign-runtime-profile" }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
     });
 
     it("should apply full-mode flag defaults when PUT sends only plannerMode=full", async () => {

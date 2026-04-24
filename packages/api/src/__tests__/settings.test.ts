@@ -12,6 +12,56 @@ mkdirSync(aiFactoryDir, { recursive: true });
 const fakeHome = mkdtempSync(join(tmpdir(), "settings-home-"));
 
 const TEST_PROJECT_ID = "test-project-id";
+type RuntimeDefaultsState = {
+  id: number;
+  defaultTaskRuntimeProfileId: string | null;
+  defaultPlanRuntimeProfileId: string | null;
+  defaultReviewRuntimeProfileId: string | null;
+  defaultChatRuntimeProfileId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+let appSettingsState: RuntimeDefaultsState = {
+  id: 1,
+  defaultTaskRuntimeProfileId: null,
+  defaultPlanRuntimeProfileId: null,
+  defaultReviewRuntimeProfileId: null,
+  defaultChatRuntimeProfileId: null,
+  createdAt: "2026-04-20T00:00:00.000Z",
+  updatedAt: "2026-04-20T00:00:00.000Z",
+};
+let eligibleAppDefaultProfileIds = new Set<string>();
+
+function resolveMockAppDefaultRuntimeProfileId(
+  mode: "task" | "plan" | "review" | "chat",
+): string | null {
+  const candidates =
+    mode === "chat"
+      ? [appSettingsState.defaultChatRuntimeProfileId]
+      : mode === "plan"
+        ? [
+            appSettingsState.defaultPlanRuntimeProfileId,
+            appSettingsState.defaultTaskRuntimeProfileId,
+          ]
+        : mode === "review"
+          ? [
+              appSettingsState.defaultReviewRuntimeProfileId,
+              appSettingsState.defaultTaskRuntimeProfileId,
+            ]
+          : [appSettingsState.defaultTaskRuntimeProfileId];
+
+  const seenProfileIds = new Set<string>();
+  for (const runtimeProfileId of candidates) {
+    if (!runtimeProfileId || seenProfileIds.has(runtimeProfileId)) continue;
+    seenProfileIds.add(runtimeProfileId);
+    if (eligibleAppDefaultProfileIds.has(runtimeProfileId)) {
+      return runtimeProfileId;
+    }
+  }
+
+  return null;
+}
 
 vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
@@ -24,6 +74,38 @@ vi.mock("@aif/shared", async (importOriginal) => {
 vi.mock("@aif/data", () => ({
   findProjectById: (id: string) =>
     id === TEST_PROJECT_ID ? { id, rootPath: tempRoot } : undefined,
+  findRuntimeProfileById: (runtimeProfileId: string) => {
+    if (eligibleAppDefaultProfileIds.has(runtimeProfileId)) {
+      return {
+        id: runtimeProfileId,
+        projectId: null,
+        enabled: true,
+      };
+    }
+    if (runtimeProfileId === "project-owned-profile") {
+      return {
+        id: runtimeProfileId,
+        projectId: TEST_PROJECT_ID,
+        enabled: true,
+      };
+    }
+    return undefined;
+  },
+  getAppSettings: () => appSettingsState,
+  getAppDefaultRuntimeProfileId: (mode: "task" | "plan" | "review" | "chat") =>
+    resolveMockAppDefaultRuntimeProfileId(mode),
+  updateAppSettings: (
+    input: Partial<Omit<RuntimeDefaultsState, "id" | "createdAt" | "updatedAt">>,
+  ) => {
+    appSettingsState = {
+      ...appSettingsState,
+      ...input,
+      updatedAt: "2026-04-20T12:00:00.000Z",
+    };
+    return appSettingsState;
+  },
+  isRuntimeProfileEligibleForAppDefaults: (runtimeProfileId: string | null) =>
+    runtimeProfileId == null || eligibleAppDefaultProfileIds.has(runtimeProfileId),
   createDbUsageSink: () => ({ record: vi.fn() }),
 }));
 
@@ -49,6 +131,16 @@ describe("settings API — config routes", () => {
 
   beforeEach(() => {
     app = createApp();
+    appSettingsState = {
+      id: 1,
+      defaultTaskRuntimeProfileId: null,
+      defaultPlanRuntimeProfileId: null,
+      defaultReviewRuntimeProfileId: null,
+      defaultChatRuntimeProfileId: null,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+    };
+    eligibleAppDefaultProfileIds = new Set(["global-task", "global-chat"]);
     // Clean up config file between tests
     try {
       rmSync(configPath);
@@ -138,6 +230,92 @@ describe("settings API — config routes", () => {
         body: JSON.stringify({ config: null }),
       });
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe("runtime defaults routes", () => {
+    it("GET /settings/runtime-defaults returns persisted and resolved ids", async () => {
+      appSettingsState = {
+        ...appSettingsState,
+        defaultTaskRuntimeProfileId: "global-task",
+        defaultChatRuntimeProfileId: "global-chat",
+      };
+
+      const res = await app.request("/settings/runtime-defaults");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        defaultTaskRuntimeProfileId: "global-task",
+        defaultPlanRuntimeProfileId: null,
+        defaultReviewRuntimeProfileId: null,
+        defaultChatRuntimeProfileId: "global-chat",
+        resolvedDefaultTaskRuntimeProfileId: "global-task",
+        resolvedDefaultPlanRuntimeProfileId: "global-task",
+        resolvedDefaultReviewRuntimeProfileId: "global-task",
+        resolvedDefaultChatRuntimeProfileId: "global-chat",
+      });
+    });
+
+    it("GET /settings/runtime-defaults skips disabled app defaults in resolved ids", async () => {
+      appSettingsState = {
+        ...appSettingsState,
+        defaultTaskRuntimeProfileId: "global-task",
+        defaultPlanRuntimeProfileId: "disabled-plan",
+        defaultReviewRuntimeProfileId: "disabled-review",
+        defaultChatRuntimeProfileId: "disabled-chat",
+      };
+
+      const res = await app.request("/settings/runtime-defaults");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        defaultTaskRuntimeProfileId: "global-task",
+        defaultPlanRuntimeProfileId: "disabled-plan",
+        defaultReviewRuntimeProfileId: "disabled-review",
+        defaultChatRuntimeProfileId: "disabled-chat",
+        resolvedDefaultTaskRuntimeProfileId: "global-task",
+        resolvedDefaultPlanRuntimeProfileId: "global-task",
+        resolvedDefaultReviewRuntimeProfileId: "global-task",
+        resolvedDefaultChatRuntimeProfileId: null,
+      });
+    });
+
+    it("PUT /settings/runtime-defaults updates app runtime defaults", async () => {
+      const res = await app.request("/settings/runtime-defaults", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          defaultTaskRuntimeProfileId: "global-task",
+          defaultPlanRuntimeProfileId: null,
+          defaultReviewRuntimeProfileId: "global-task",
+          defaultChatRuntimeProfileId: "global-chat",
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        defaultTaskRuntimeProfileId: "global-task",
+        defaultPlanRuntimeProfileId: null,
+        defaultReviewRuntimeProfileId: "global-task",
+        defaultChatRuntimeProfileId: "global-chat",
+        resolvedDefaultTaskRuntimeProfileId: "global-task",
+        resolvedDefaultPlanRuntimeProfileId: "global-task",
+        resolvedDefaultReviewRuntimeProfileId: "global-task",
+        resolvedDefaultChatRuntimeProfileId: "global-chat",
+      });
+    });
+
+    it("PUT /settings/runtime-defaults rejects non-global app defaults", async () => {
+      const res = await app.request("/settings/runtime-defaults", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          defaultTaskRuntimeProfileId: "project-owned-profile",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.defaultTaskRuntimeProfileId).toBeDefined();
     });
   });
 

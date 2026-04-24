@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { RuntimeExecutionError, type RuntimeAdapter, type RuntimeRunInput } from "@aif/runtime";
+import { resetEnvCache } from "@aif/shared";
+
+// Flag defaults to false (opt-in). These tests assert on runtime limit
+// snapshots being emitted to chat responses, which needs the gate open.
+process.env.AIF_USAGE_LIMITS_ENABLED = "true";
+resetEnvCache();
 
 const mockFindProjectById = vi.fn();
 const mockFindTaskById = vi.fn();
@@ -19,6 +25,7 @@ const mockResolveApiRuntimeContext = vi.fn();
 const mockAssertApiRuntimeCapabilities = vi.fn();
 const mockGetApiRuntimeRegistry = vi.fn();
 const mockPersistAttachments = vi.fn();
+const mockRefreshRuntimeProfileLimitState = vi.fn();
 
 const mockAdapterRun = vi.fn();
 const mockAdapterResume = vi.fn();
@@ -68,6 +75,26 @@ vi.mock("../services/runtime.js", () => ({
   resolveApiRuntimeContext: (input: unknown) => mockResolveApiRuntimeContext(input),
   assertApiRuntimeCapabilities: (input: unknown) => mockAssertApiRuntimeCapabilities(input),
   getApiRuntimeRegistry: () => mockGetApiRuntimeRegistry(),
+  observeRuntimeLimitEvent: (
+    event: { type: string; data?: Record<string, unknown> },
+    current: unknown,
+  ) => (event.type === "runtime:limit" ? (event.data?.snapshot ?? current) : current),
+  extractLatestRuntimeLimitSnapshot: (
+    events: Array<{ type: string; data?: Record<string, unknown> }> | null | undefined,
+  ) => {
+    if (!events?.length) return null;
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.type === "runtime:limit") {
+        return event.data?.snapshot ?? null;
+      }
+    }
+    return null;
+  },
+  extractRuntimeLimitSnapshotFromError: (error: unknown) =>
+    error instanceof RuntimeExecutionError ? (error.limitSnapshot ?? null) : null,
+  refreshRuntimeProfileLimitState: (...args: unknown[]) =>
+    mockRefreshRuntimeProfileLimitState(...args),
 }));
 
 vi.mock("../services/attachmentPersistence.js", () => ({
@@ -98,6 +125,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
       AGENT_CHAT_MAX_TURNS: 50,
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
+      AIF_USAGE_LIMITS_ENABLED: true,
     }),
   };
 });
@@ -234,6 +262,21 @@ describe("chat API", () => {
     );
   });
 
+  it("preserves runtime limit state after successful chat runs without snapshots", async () => {
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "plain prompt",
+        clientId: "client-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockRefreshRuntimeProfileLimitState).not.toHaveBeenCalled();
+  });
+
   it("returns assistant text in HTTP response when websocket clientId is absent", async () => {
     mockAdapterRun.mockResolvedValueOnce({
       outputText: "runtime output without ws",
@@ -257,6 +300,77 @@ describe("chat API", () => {
       }),
     );
     expect(mockSendToClient).not.toHaveBeenCalled();
+  });
+
+  it("normalizes runtime limit snapshots before emitting chat:done and HTTP success payloads", async () => {
+    mockAdapterRun.mockImplementationOnce(async (input: RuntimeRunInput) => {
+      const onEvent = input.execution?.onEvent as
+        | ((event: Record<string, unknown>) => void)
+        | undefined;
+      onEvent?.({
+        type: "runtime:limit",
+        data: {
+          snapshot: {
+            source: "provider_api",
+            status: "warning",
+            precision: "exact",
+            checkedAt: "2026-04-19T10:00:00.000Z",
+            providerId: "anthropic",
+            runtimeId: "claude",
+            profileId: "profile-1",
+            primaryScope: "tool_usage",
+            resetAt: "2026-04-19T11:00:00.000Z",
+            retryAfterSeconds: null,
+            warningThreshold: 10,
+            windows: [
+              {
+                scope: "tool_usage",
+                percentRemaining: 7,
+                warningThreshold: 10,
+                resetAt: "2026-04-19T11:00:00.000Z",
+              },
+            ],
+            providerMeta: {
+              providerLabel: "Z.AI GLM Coding Plan",
+              quotaSource: "zai_monitor",
+              accountLabel: "Anton Ageev Pro",
+              usageDetails: [{ token: "sk-SECRET" }],
+              headers: { authorization: "Bearer secret" },
+              accountEmail: "private@example.com",
+            },
+          },
+        },
+      });
+      return { outputText: "runtime output", sessionId: "runtime-session-1" };
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "plain prompt",
+        clientId: "client-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.runtimeLimitSnapshot).toEqual(
+      expect.objectContaining({
+        status: "warning",
+        providerMeta: {
+          providerLabel: "Z.AI GLM Coding Plan",
+          quotaSource: "zai_monitor",
+        },
+      }),
+    );
+    expect(body.runtimeLimitSnapshot.providerMeta).not.toHaveProperty("usageDetails");
+    expect(body.runtimeLimitSnapshot.providerMeta).not.toHaveProperty("headers");
+    expect(body.runtimeLimitSnapshot.providerMeta).not.toHaveProperty("accountEmail");
+
+    const doneCall = mockSendToClient.mock.calls.find((call) => call[1]?.type === "chat:done");
+    expect(doneCall?.[1]?.payload?.runtimeLimitSnapshot).toEqual(body.runtimeLimitSnapshot);
   });
 
   it("uses adapter.resume and prefixes prompt with /aif-explore", async () => {
@@ -291,6 +405,62 @@ describe("chat API", () => {
         sessionId: "session-1",
         role: "assistant",
         content: "resumed output",
+      }),
+    );
+  });
+
+  it("pins resumed chat runs to the saved session runtime profile", async () => {
+    mockFindChatSessionById.mockReturnValue({
+      id: "session-1",
+      projectId: "project-1",
+      title: "Pinned",
+      runtimeProfileId: "profile-pinned",
+      runtimeSessionId: "runtime-session-prev",
+      agentSessionId: null,
+    });
+    mockResolveApiRuntimeContext.mockImplementation(async (input: Record<string, unknown>) => ({
+      project: { id: "project-1", rootPath: "/tmp/project-1" },
+      adapter: runtimeAdapter,
+      resolvedProfile: {
+        source: input.runtimeProfileId ? "profile_id" : "project_default",
+        profileId: (input.runtimeProfileId as string | undefined) ?? "profile-default",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        model: null,
+        baseUrl: null,
+        apiKey: null,
+        apiKeyEnvVar: null,
+        headers: {},
+        options: {},
+      },
+      selectionSource: input.runtimeProfileId ? "profile_id" : "project_default",
+    }));
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "resume pinned session",
+        sessionId: "session-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockResolveApiRuntimeContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "project-1",
+        mode: "chat",
+        runtimeProfileId: "profile-pinned",
+      }),
+    );
+    expect(mockAdapterResume).toHaveBeenCalledTimes(1);
+    expect(mockUpdateChatSession).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        runtimeProfileId: "profile-pinned",
+        runtimeSessionId: "runtime-session-1",
       }),
     );
   });
@@ -335,6 +505,7 @@ describe("chat API", () => {
     expect(res.status).toBe(429);
     const body = await res.json();
     expect(body.code).toBe("CHAT_USAGE_LIMIT");
+    expect(body.error).toBe("Runtime usage limit reached. Try again later.");
     expect(mockSendToClient).toHaveBeenCalledWith(
       "client-1",
       expect.objectContaining({
@@ -342,13 +513,84 @@ describe("chat API", () => {
         payload: expect.objectContaining({
           conversationId: "conv-limit-1",
           code: "CHAT_USAGE_LIMIT",
+          message: "Runtime usage limit reached. Try again later.",
         }),
       }),
     );
   });
 
-  it("returns 500 with original error message for non-limit failures", async () => {
-    mockAdapterRun.mockRejectedValue(new Error("unexpected failure"));
+  it("normalizes runtime limit snapshots before emitting chat:error and HTTP error payloads", async () => {
+    mockAdapterRun.mockRejectedValueOnce(
+      new RuntimeExecutionError("You're out of extra usage", undefined, "rate_limit", {
+        limitSnapshot: {
+          source: "provider_api",
+          status: "blocked",
+          precision: "exact",
+          checkedAt: "2026-04-19T10:00:00.000Z",
+          providerId: "anthropic",
+          runtimeId: "claude",
+          profileId: "profile-1",
+          primaryScope: "tool_usage",
+          resetAt: "2026-04-19T11:00:00.000Z",
+          retryAfterSeconds: null,
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "tool_usage",
+              percentRemaining: 0,
+              warningThreshold: 10,
+              resetAt: "2026-04-19T11:00:00.000Z",
+            },
+          ],
+          providerMeta: {
+            providerLabel: "Z.AI GLM Coding Plan",
+            quotaSource: "zai_monitor",
+            accountLabel: "Anton Ageev Pro",
+            usageDetails: [{ token: "sk-SECRET" }],
+            diagnostics: "Bearer secret",
+          },
+        },
+      }),
+    );
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "hello",
+        clientId: "client-1",
+        conversationId: "conv-limit-sanitized",
+      }),
+    });
+
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body.runtimeLimitSnapshot).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        providerMeta: {
+          providerLabel: "Z.AI GLM Coding Plan",
+          quotaSource: "zai_monitor",
+        },
+      }),
+    );
+    expect(body.runtimeLimitSnapshot.providerMeta).not.toHaveProperty("usageDetails");
+    expect(body.runtimeLimitSnapshot.providerMeta).not.toHaveProperty("diagnostics");
+
+    const errorCall = mockSendToClient.mock.calls.find((call) => call[1]?.type === "chat:error");
+    expect(errorCall?.[1]?.payload).toEqual(
+      expect.objectContaining({
+        conversationId: "conv-limit-sanitized",
+        runtimeLimitSnapshot: body.runtimeLimitSnapshot,
+      }),
+    );
+  });
+
+  it("returns 500 with a sanitized message for non-limit failures", async () => {
+    mockAdapterRun.mockRejectedValue(
+      new Error('upstream body leaked secret "token=abc123" <script>alert(1)</script>'),
+    );
 
     const res = await app.request("/chat", {
       method: "POST",
@@ -362,10 +604,21 @@ describe("chat API", () => {
     });
 
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({
-      error: "unexpected failure",
+    expect(await res.json()).toMatchObject({
+      error: "Chat request failed",
       code: "CHAT_REQUEST_FAILED",
     });
+    expect(mockSendToClient).toHaveBeenCalledWith(
+      "client-1",
+      expect.objectContaining({
+        type: "chat:error",
+        payload: expect.objectContaining({
+          conversationId: "conv-error-1",
+          code: "CHAT_REQUEST_FAILED",
+          message: "Chat request failed",
+        }),
+      }),
+    );
   });
 
   it("falls back to generic message when error has no message", async () => {
@@ -383,7 +636,7 @@ describe("chat API", () => {
     });
 
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({
+    expect(await res.json()).toMatchObject({
       error: "Chat request failed",
       code: "CHAT_REQUEST_FAILED",
     });
@@ -420,6 +673,127 @@ describe("chat API", () => {
     };
     expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("Fix bug");
     expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("implementing");
+  });
+
+  it("redacts legacy agent activity log secrets before injecting task-aware chat context", async () => {
+    mockFindTaskById.mockReturnValue({ id: "task-1", title: "Fix bug", status: "implementing" });
+    mockToTaskResponse.mockReturnValue({
+      id: "task-1",
+      title: "Fix bug",
+      status: "implementing",
+      description: "Bug details",
+      plan: null,
+      implementationLog: null,
+      reviewComments: null,
+      agentActivityLog: "[2026-01-01] Agent: bearer SECRET\n[2026-01-01] Agent: sk-SECRET",
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "what leaked before?",
+        clientId: "client-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const resolveCall = mockResolveApiRuntimeContext.mock.calls[0][0] as {
+      workflow: { promptInput: { systemPromptAppend?: string } };
+    };
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("[REDACTED]");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("SECRET");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("sk-SECRET");
+  });
+
+  it("redacts implementation and review text before injecting task-aware chat context", async () => {
+    mockFindTaskById.mockReturnValue({ id: "task-1", title: "Fix bug", status: "implementing" });
+    mockToTaskResponse.mockReturnValue({
+      id: "task-1",
+      title: "Fix bug",
+      status: "implementing",
+      description: "Internal URL https://internal.local",
+      plan: 'oauth access_token="abc123"',
+      implementationLog: "Bearer SECRET",
+      reviewComments: "client_secret=secret-value",
+      agentActivityLog: null,
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "what leaked before?",
+        clientId: "client-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const resolveCall = mockResolveApiRuntimeContext.mock.calls[0][0] as {
+      workflow: { promptInput: { systemPromptAppend?: string } };
+    };
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).toContain("[REDACTED]");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("SECRET");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("internal.local");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("abc123");
+    expect(resolveCall.workflow.promptInput.systemPromptAppend).not.toContain("secret-value");
+  });
+
+  it("does not persist incidental runtime limit events when a non-limit runtime error follows", async () => {
+    const incidentalSnapshot = {
+      source: "sdk_event",
+      status: "warning",
+      precision: "exact",
+      checkedAt: "2026-04-19T10:00:00.000Z",
+      providerId: "anthropic",
+      runtimeId: "claude",
+      profileId: "profile-1",
+      primaryScope: "time",
+      resetAt: "2026-04-19T11:00:00.000Z",
+      retryAfterSeconds: null,
+      warningThreshold: 10,
+      windows: [
+        {
+          scope: "time",
+          percentRemaining: 4,
+          warningThreshold: 10,
+          resetAt: "2026-04-19T11:00:00.000Z",
+        },
+      ],
+      providerMeta: null,
+    };
+
+    mockAdapterRun.mockImplementationOnce(async (input: RuntimeRunInput) => {
+      input.execution?.onEvent?.({
+        type: "runtime:limit",
+        timestamp: "2026-04-19T10:00:01.000Z",
+        data: { snapshot: incidentalSnapshot },
+      });
+      throw new RuntimeExecutionError("Model missing", undefined, "model_not_found");
+    });
+
+    const res = await app.request("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: "project-1",
+        message: "hello",
+        clientId: "client-1",
+        conversationId: "conv-incidental-limit",
+      }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(mockRefreshRuntimeProfileLimitState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "chat:error",
+        snapshot: null,
+      }),
+    );
   });
 
   it("returns persisted DB messages when linked runtime history is empty", async () => {

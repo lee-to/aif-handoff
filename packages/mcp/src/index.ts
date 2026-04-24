@@ -96,6 +96,20 @@ async function startHttp(env: ReturnType<typeof loadMcpEnv>) {
       "MCP server listening via Streamable HTTP transport",
     );
   });
+
+  // Graceful shutdown so the port is freed on Ctrl+C / tsx-watch reload.
+  // Exit synchronously — tsx watch + turbo race on Ctrl+C and complain
+  // about "Previous process hasn't exited yet" when close is async.
+  let shuttingDown = false;
+  const onShutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info({ signal }, "Shutdown signal received — exiting");
+    httpServer.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => onShutdown("SIGINT"));
+  process.on("SIGTERM", () => onShutdown("SIGTERM"));
 }
 
 async function main() {

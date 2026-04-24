@@ -184,12 +184,9 @@ export function RuntimeProfileForm({
     value: level,
     label: level.toUpperCase(),
   }));
-
-  useEffect(() => {
-    if (!effort.trim()) return;
-    if (effortLevels.includes(effort.trim())) return;
-    setEffort("");
-  }, [defaultModel, effort, effortLevels, runtimeId]);
+  const normalizedEffort = effort.trim();
+  const effectiveEffort =
+    normalizedEffort.length > 0 && effortLevels.includes(normalizedEffort) ? normalizedEffort : "";
 
   const handleRuntimeChange = (nextRuntimeId: string) => {
     modelLoadRequestIdRef.current += 1;
@@ -206,7 +203,7 @@ export function RuntimeProfileForm({
   };
 
   const buildProfileDraft = (): CreateRuntimeProfileInput => {
-    const options = mergeManagedOptions(runtimeId, parseJsonObject(optionsJson), effort);
+    const options = mergeManagedOptions(runtimeId, parseJsonObject(optionsJson), effectiveEffort);
     return {
       projectId,
       name: name.trim() || currentRuntime?.displayName || runtimeId || "Runtime profile",
@@ -263,8 +260,6 @@ export function RuntimeProfileForm({
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const requestId = ++modelLoadRequestIdRef.current;
     if (!supportsModelDiscovery) {
-      setDiscoveredModels([]);
-      setModelsError(null);
       return;
     }
 
@@ -337,6 +332,11 @@ export function RuntimeProfileForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3 border border-border bg-card/40 p-3">
+      <p className="text-[11px] text-muted-foreground">
+        {projectId
+          ? "Project scope: only this project can select this profile by default."
+          : "Global scope: every project can reuse this profile."}
+      </p>
       <div className="grid gap-2 md:grid-cols-2">
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted-foreground">Name</p>
@@ -439,7 +439,7 @@ export function RuntimeProfileForm({
           <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Effort</p>
             <Select
-              value={effort}
+              value={effectiveEffort}
               onChange={(e) => setEffort(e.target.value)}
               placeholder="runtime default"
               options={[{ value: "", label: "Runtime default" }, ...effortOptions]}

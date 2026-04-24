@@ -46,12 +46,19 @@ coverage/
 
 # Playwright
 .playwright-mcp/
+playwright-report/
+test-results/
+/packages/web/playwright-report/
+/packages/web/test-results/
+
+# k6 perf reports
+/packages/api/perf/reports/
 
 # Claude Code
-.claude/
-.claude/settings.local.json
-.claude/projects
-.claude/worktrees
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/pr-review/
 
 # Codex and other agent
 /.codex/

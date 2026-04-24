@@ -1,7 +1,7 @@
 import type { Task, TaskEvent, TaskStatus } from "@aif/shared/browser";
 import { STATUS_CONFIG } from "@aif/shared/browser";
 import { statusColorStyle } from "@/hooks/useStatusColor";
-import { Pause, Play, Clock } from "lucide-react";
+import { Pause, Play, Clock, AlertTriangle } from "lucide-react";
 import { SheetHeader, SheetTitle, SheetClose } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { TaskTagsList } from "@/components/ui/task-tags-list";
@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { formatTokenCount, formatUsd } from "@/lib/formatters";
 import { Tabs } from "@/components/ui/tabs";
 import { AlertBox } from "@/components/ui/alert-box";
+import { getRuntimeLimitDisplay } from "@/lib/runtimeLimits";
+import { useUsageLimitsEnabled } from "@/hooks/useSettings";
 
 export type TaskDetailTab = "implementation" | "review" | "comments" | "activity";
 
@@ -78,6 +80,13 @@ export function TaskDetailHeader({
   const visibleActions = (ACTION_BUTTONS_BY_STATUS[task.status] ?? []).filter(
     (action) => action.visible?.(task) ?? true,
   );
+  const usageLimitsEnabled = useUsageLimitsEnabled();
+  const runtimeLimitDisplay = usageLimitsEnabled
+    ? getRuntimeLimitDisplay(task.runtimeLimitSnapshot, {
+        taskRetryAfter: task.retryAfter ?? null,
+        checkedAt: task.runtimeLimitUpdatedAt ?? null,
+      })
+    : null;
   // Pause is also shown in `backlog` so users can park a task that auto-queue
   // would otherwise advance — paused backlog tasks are skipped by both the
   // scheduler and the auto-queue advancer.
@@ -139,6 +148,23 @@ export function TaskDetailHeader({
         </div>
         <SheetTitle className="tracking-tight">{task.title}</SheetTitle>
       </SheetHeader>
+
+      {task.status === "blocked_external" && runtimeLimitDisplay && (
+        <AlertBox
+          variant={runtimeLimitDisplay.tone}
+          className="mb-3 flex flex-col gap-1 px-3 py-2 text-xs"
+          icon={<AlertTriangle className="h-3.5 w-3.5" />}
+        >
+          <span className="font-medium">
+            {runtimeLimitDisplay.state === "active"
+              ? "Auto-paused by runtime limit."
+              : "Provider runtime signal is not actively gating this task."}
+          </span>
+          <span>{runtimeLimitDisplay.summary}</span>
+          {runtimeLimitDisplay.resetText && <span>{runtimeLimitDisplay.resetText}</span>}
+          {runtimeLimitDisplay.taskRetryText && <span>{runtimeLimitDisplay.taskRetryText}</span>}
+        </AlertBox>
+      )}
 
       {(showPauseButton || visibleActions.length > 0) && (
         <div className="border border-border bg-background/60 p-3">

@@ -1,6 +1,9 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
-import path from "path";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dir = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
@@ -8,7 +11,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/__tests__/setup.ts"],
-    exclude: ["dist/**", "**/node_modules/**", "**/.git/**"],
+    exclude: ["dist/**", "**/node_modules/**", "**/.git/**", "e2e/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "text-summary", "json-summary"],
@@ -34,7 +37,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": resolve(__dir, "./src"),
     },
   },
 });

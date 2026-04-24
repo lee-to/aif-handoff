@@ -4,6 +4,8 @@ import { STATUS_CONFIG, type Task } from "@aif/shared/browser";
 import { Badge } from "@/components/ui/badge";
 import { TaskTagsList } from "@/components/ui/task-tags-list";
 import { timeAgo } from "@/lib/utils";
+import { getRuntimeLimitDisplay } from "@/lib/runtimeLimits";
+import { useUsageLimitsEnabled } from "@/hooks/useSettings";
 
 const PRIORITY_LABELS: Record<number, { label: string; className: string }> = {
   0: { label: "None", className: "hidden" },
@@ -46,6 +48,13 @@ export function TaskCard({
   const showReorder =
     task.status === "backlog" && (onMoveUp !== undefined || onMoveDown !== undefined);
   const showPauseToggle = task.status === "backlog" && onTogglePause !== undefined;
+  const usageLimitsEnabled = useUsageLimitsEnabled();
+  const runtimeLimitDisplay = usageLimitsEnabled
+    ? getRuntimeLimitDisplay(task.runtimeLimitSnapshot, {
+        taskRetryAfter: task.retryAfter ?? null,
+        checkedAt: task.runtimeLimitUpdatedAt ?? null,
+      })
+    : null;
 
   const stop = (e: MouseEvent) => {
     e.stopPropagation();
@@ -189,7 +198,22 @@ export function TaskCard({
         </div>
       )}
 
-      {task.status === "blocked_external" && task.blockedReason && (
+      {task.status === "blocked_external" && runtimeLimitDisplay && (
+        <div className="mt-2 ml-2 border border-red-500/30 bg-red-500/10 px-2 py-1 text-3xs text-red-300">
+          <div className="font-medium">
+            {runtimeLimitDisplay.state === "active" ? "Runtime auto-pause" : "Runtime limit status"}
+          </div>
+          <div className="line-clamp-2">{runtimeLimitDisplay.summary}</div>
+          {runtimeLimitDisplay.resetText && (
+            <div className="line-clamp-1">{runtimeLimitDisplay.resetText}</div>
+          )}
+          {runtimeLimitDisplay.taskRetryText && (
+            <div className="line-clamp-1">{runtimeLimitDisplay.taskRetryText}</div>
+          )}
+        </div>
+      )}
+
+      {task.status === "blocked_external" && !runtimeLimitDisplay && task.blockedReason && (
         <div className="mt-2 ml-2 border border-red-500/30 bg-red-500/10 px-2 py-1 text-3xs text-red-300 line-clamp-2">
           {task.blockedReason}
         </div>

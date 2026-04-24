@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { notifyTaskBroadcast } from "../notifier.js";
+
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  return {
+    ...actual,
+    // Re-parse process env for each call so test-local vi.stubEnv overrides are visible.
+    getEnv: () => actual.validateEnv(process.env),
+  };
+});
+
+const { notifyTaskBroadcast } = await import("../notifier.js");
 
 describe("notifyTaskBroadcast", () => {
   const originalFetch = global.fetch;
@@ -38,6 +48,21 @@ describe("notifyTaskBroadcast", () => {
     const options = fetchMock.mock.calls[0][1];
     expect(typeof options?.body).toBe("string");
     expect(options?.body).toContain("task:updated");
+  });
+
+  it("sends internal auth headers for task broadcasts when INTERNAL_BROADCAST_TOKEN is configured", async () => {
+    vi.stubEnv("INTERNAL_BROADCAST_TOKEN", "internal-token");
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    global.fetch = fetchMock as any;
+
+    await notifyTaskBroadcast("task-auth", "task:updated");
+
+    const options = fetchMock.mock.calls[0][1];
+    expect(options?.headers).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer internal-token",
+      "X-Internal-Broadcast-Token": "internal-token",
+    });
   });
 
   it("does not throw on failed fetch", async () => {

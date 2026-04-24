@@ -1,5 +1,12 @@
 import { spawn, execFileSync } from "node:child_process";
-import type { RuntimeEvent, RuntimeRunInput, RuntimeRunResult, RuntimeUsage } from "../../types.js";
+import type {
+  RuntimeEvent,
+  RuntimeLimitSnapshot,
+  RuntimeRunInput,
+  RuntimeRunResult,
+  RuntimeUsage,
+} from "../../types.js";
+import { buildRuntimeLimitEvent } from "../../limitEvents.js";
 import {
   makeProcessRunTimeoutError,
   makeProcessStartTimeoutError,
@@ -8,9 +15,13 @@ import {
   withProcessTimeouts,
 } from "../../timeouts.js";
 import { classifyClaudeResultSubtype, classifyClaudeRuntimeError } from "./errors.js";
+import { normalizeClaudeLimitSnapshot } from "./limit.js";
 import { normalizeClaudeEffort } from "./options.js";
 import { buildToolUseEvents } from "../../toolEvents.js";
 import { parseClaudeAskUserQuestion } from "./questions.js";
+import type { ClaudeProviderIdentity } from "./providerIdentity.js";
+import { resolveClaudeProviderAuth } from "./providerIdentity.js";
+import { fetchZaiClaudeQuotaSnapshot } from "./zaiQuota.js";
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -236,6 +247,7 @@ interface StreamJsonMessage {
   session_id?: string;
   is_error?: boolean;
   result?: string;
+  rate_limit_info?: unknown;
   total_cost_usd?: number;
   cost_usd?: number;
   duration_ms?: number;
@@ -262,6 +274,7 @@ interface ClaudeCliStreamState {
   outputText: string;
   assistantText: string;
   usage: RuntimeUsage | null;
+  latestLimitSnapshot: RuntimeLimitSnapshot | null;
   events: RuntimeEvent[];
   terminalErrorSubtype: string | null;
   terminalErrorDetail: string | null;
@@ -274,6 +287,7 @@ function createCliStreamState(fallbackSessionId: string | null): ClaudeCliStream
     outputText: "",
     assistantText: "",
     usage: null,
+    latestLimitSnapshot: null,
     events: [],
     terminalErrorSubtype: null,
     terminalErrorDetail: null,
@@ -322,11 +336,25 @@ function emitEvent(
   execution?.onEvent?.(event);
 }
 
+function buildClaudeLimitErrorMetadata(snapshot: RuntimeLimitSnapshot | null) {
+  const retryAfterSeconds = snapshot?.retryAfterSeconds ?? null;
+  return {
+    resetAt: snapshot?.resetAt ?? null,
+    retryAfterSeconds,
+    retryAfterMs: retryAfterSeconds != null ? retryAfterSeconds * 1000 : null,
+    limitSnapshot: snapshot,
+    providerMeta: snapshot?.providerMeta ?? null,
+  };
+}
+
 function processStreamJsonLine(
   line: string,
   state: ClaudeCliStreamState,
-  execution: RuntimeRunInput["execution"],
+  input: RuntimeRunInput,
+  providerIdentity: ClaudeProviderIdentity,
+  logger?: ClaudeCliLogger,
 ): void {
+  const execution = input.execution;
   const trimmed = line.trim();
   if (!trimmed) return;
 
@@ -356,6 +384,45 @@ function processStreamJsonLine(
       message: "Runtime session initialized",
       data: { sessionId: state.sessionId },
     });
+    return;
+  }
+
+  if (message.type === "rate_limit_event") {
+    const snapshot = normalizeClaudeLimitSnapshot({
+      info: message.rate_limit_info,
+      runtimeId: input.runtimeId,
+      providerId: input.providerId ?? "anthropic",
+      profileId: input.profileId ?? null,
+      checkedAt: nowIso,
+      providerIdentity,
+    });
+
+    if (!snapshot) {
+      logger?.warn?.(
+        {
+          runtimeId: input.runtimeId,
+          providerId: input.providerId ?? "anthropic",
+          profileId: input.profileId ?? null,
+        },
+        "Dropped Claude rate_limit_event because it did not contain usable limit metadata",
+      );
+      return;
+    }
+
+    state.latestLimitSnapshot = snapshot;
+    emitEvent(state, execution, buildRuntimeLimitEvent(snapshot, "rate_limit_event"));
+    logger?.debug?.(
+      {
+        runtimeId: input.runtimeId,
+        providerId: snapshot.providerId,
+        profileId: snapshot.profileId ?? null,
+        status: snapshot.status,
+        precision: snapshot.precision,
+        source: snapshot.source,
+        resetAt: snapshot.resetAt ?? null,
+      },
+      "Translated Claude rate_limit_event into runtime limit snapshot",
+    );
     return;
   }
 
@@ -500,6 +567,8 @@ function runCliAttempt(
   cliPath: string,
   args: string[],
   env: Record<string, string>,
+  providerIdentity: ClaudeProviderIdentity,
+  authToken: string | null,
   logger?: ClaudeCliLogger,
 ): Promise<{ result: RuntimeRunResult; startTimedOut: boolean }> {
   const execution = input.execution;
@@ -520,7 +589,7 @@ function runCliAttempt(
     while (newlineIdx !== -1) {
       const line = stdoutBuffer.slice(0, newlineIdx);
       stdoutBuffer = stdoutBuffer.slice(newlineIdx + 1);
-      processStreamJsonLine(line, state, execution);
+      processStreamJsonLine(line, state, input, providerIdentity, logger);
       newlineIdx = stdoutBuffer.indexOf("\n");
     }
   };
@@ -566,7 +635,13 @@ function runCliAttempt(
   return new Promise((resolve, reject) => {
     child.on("error", (error) => {
       timeouts.cleanup();
-      reject(classifyClaudeRuntimeError(error));
+      reject(
+        classifyClaudeRuntimeError(
+          error,
+          undefined,
+          buildClaudeLimitErrorMetadata(state.latestLimitSnapshot),
+        ),
+      );
     });
 
     child.on("close", async (code) => {
@@ -575,7 +650,7 @@ function runCliAttempt(
       // Flush any trailing buffer content as a final line.
       if (stdoutBuffer.length > 0) {
         try {
-          processStreamJsonLine(stdoutBuffer, state, execution);
+          processStreamJsonLine(stdoutBuffer, state, input, providerIdentity, logger);
         } catch {
           /* ignore tail processing errors */
         }
@@ -602,13 +677,62 @@ function runCliAttempt(
 
       if (code !== 0) {
         const message = `Claude CLI exited with code ${code}: ${stderr || state.outputText || state.plainTextFallback || "unknown error"}`;
-        reject(classifyClaudeRuntimeError(message));
+        reject(
+          classifyClaudeRuntimeError(
+            message,
+            undefined,
+            buildClaudeLimitErrorMetadata(state.latestLimitSnapshot),
+          ),
+        );
         return;
       }
 
       if (state.terminalErrorSubtype) {
-        reject(classifyClaudeResultSubtype(state.terminalErrorSubtype, state.terminalErrorDetail));
+        reject(
+          classifyClaudeResultSubtype(
+            state.terminalErrorSubtype,
+            state.terminalErrorDetail,
+            buildClaudeLimitErrorMetadata(state.latestLimitSnapshot),
+          ),
+        );
         return;
+      }
+
+      if (providerIdentity.quotaSource === "zai_monitor" && authToken) {
+        logger?.debug?.(
+          {
+            runtimeId: input.runtimeId,
+            providerId: input.providerId ?? "anthropic",
+            profileId: input.profileId ?? null,
+            quotaAuthEnvVar: providerIdentity.apiKeyEnvVar,
+            providerFamily: providerIdentity.providerFamily,
+          },
+          "Refreshing Z.AI coding quota snapshot with resolved Claude auth identity",
+        );
+        try {
+          const providerSnapshot = await fetchZaiClaudeQuotaSnapshot({
+            runtimeId: input.runtimeId,
+            providerId: input.providerId ?? "anthropic",
+            profileId: input.profileId ?? null,
+            identity: providerIdentity,
+            authToken,
+            logger,
+          });
+          if (providerSnapshot) {
+            state.latestLimitSnapshot = providerSnapshot;
+            emitEvent(state, execution, buildRuntimeLimitEvent(providerSnapshot, "zai_monitor"));
+          }
+        } catch (error) {
+          logger?.warn?.(
+            {
+              runtimeId: input.runtimeId,
+              providerId: input.providerId ?? "anthropic",
+              profileId: input.profileId ?? null,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "Failed to refresh Z.AI coding quota snapshot after Claude CLI run",
+          );
+        }
       }
 
       resolve({
@@ -628,6 +752,13 @@ export async function runClaudeCli(
   const args = buildCliArgs(input);
   const execution = input.execution;
   const options = asRecord(input.options);
+  const { identity: providerIdentity, authToken } = resolveClaudeProviderAuth({
+    providerId: input.providerId ?? "anthropic",
+    transport: "cli",
+    baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : null,
+    apiKeyEnvVar: typeof options.apiKeyEnvVar === "string" ? options.apiKeyEnvVar : null,
+    apiKey: typeof options.apiKey === "string" ? options.apiKey : null,
+  });
   const apiKeyEnvVar =
     typeof options.apiKeyEnvVar === "string" ? options.apiKeyEnvVar : "ANTHROPIC_API_KEY";
   const env = buildCuratedEnv(apiKeyEnvVar, execution?.environment);
@@ -645,7 +776,15 @@ export async function runClaudeCli(
     "Starting Claude CLI run",
   );
 
-  const { result, startTimedOut } = await runCliAttempt(input, cliPath, args, env, logger);
+  const { result, startTimedOut } = await runCliAttempt(
+    input,
+    cliPath,
+    args,
+    env,
+    providerIdentity,
+    authToken,
+    logger,
+  );
 
   if (startTimedOut) {
     // Single retry after start timeout
@@ -656,7 +795,15 @@ export async function runClaudeCli(
     );
     await sleepMs(retryDelayMs);
 
-    const retry = await runCliAttempt(input, cliPath, args, env, logger);
+    const retry = await runCliAttempt(
+      input,
+      cliPath,
+      args,
+      env,
+      providerIdentity,
+      authToken,
+      logger,
+    );
     if (retry.startTimedOut) {
       throw makeProcessStartTimeoutError(execution?.startTimeoutMs ?? 0);
     }

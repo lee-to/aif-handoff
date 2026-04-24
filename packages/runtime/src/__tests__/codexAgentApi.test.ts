@@ -127,6 +127,28 @@ describe("codex api transport (OpenAI Chat Completions)", () => {
     });
   });
 
+  it("redacts raw provider secrets from non-ok response bodies", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('{"error":"Bearer SECRET sk-SECRET"}', { status: 500 }),
+    );
+
+    try {
+      await runCodexAgentApi(
+        createRunInput({
+          options: { baseUrl: "https://api.openai.com/v1", apiRetryCount: 0 },
+        }),
+      );
+    } catch (error) {
+      expect(error).toMatchObject({
+        message: expect.stringContaining("[REDACTED]"),
+      });
+      expect(String(error)).not.toContain("SECRET");
+      return;
+    }
+
+    throw new Error("Expected runCodexAgentApi to throw");
+  });
+
   it("retries non-stream request on retryable 5xx response", async () => {
     fetchMock
       .mockResolvedValueOnce(new Response("temporary failure", { status: 500 }))

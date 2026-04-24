@@ -1,3 +1,5 @@
+import type { RuntimeLimitSnapshot } from "./types.js";
+
 export class RuntimeError extends Error {
   public readonly code: string;
 
@@ -63,13 +65,46 @@ export type RuntimeErrorCategory =
   | "content_filter"
   | "unknown";
 
+export interface RuntimeExecutionErrorMetadata {
+  adapterCode?: string;
+  httpStatus?: number;
+  resetAt?: string | null;
+  retryAfterMs?: number | null;
+  retryAfterSeconds?: number | null;
+  limitSnapshot?: RuntimeLimitSnapshot | null;
+  providerMeta?: Record<string, unknown> | null;
+}
+
 export class RuntimeExecutionError extends RuntimeError {
   public readonly category: RuntimeErrorCategory;
+  public readonly adapterCode?: string;
+  public readonly httpStatus?: number;
+  public readonly resetAt: string | null;
+  public readonly retryAfterMs: number | null;
+  public readonly retryAfterSeconds: number | null;
+  public readonly limitSnapshot: RuntimeLimitSnapshot | null;
+  public readonly providerMeta: Record<string, unknown> | null;
 
-  constructor(message: string, cause?: unknown, category: RuntimeErrorCategory = "unknown") {
+  constructor(
+    message: string,
+    cause?: unknown,
+    category: RuntimeErrorCategory = "unknown",
+    metadata: RuntimeExecutionErrorMetadata = {},
+  ) {
     super(message, "RUNTIME_EXECUTION_ERROR", cause);
     this.name = "RuntimeExecutionError";
     this.category = category;
+    this.adapterCode = metadata.adapterCode;
+    this.httpStatus = metadata.httpStatus;
+    this.resetAt = metadata.resetAt ?? null;
+    this.retryAfterMs = metadata.retryAfterMs ?? null;
+    this.retryAfterSeconds =
+      metadata.retryAfterSeconds ??
+      (typeof metadata.retryAfterMs === "number"
+        ? Math.max(0, Math.ceil(metadata.retryAfterMs / 1000))
+        : null);
+    this.limitSnapshot = metadata.limitSnapshot ?? null;
+    this.providerMeta = metadata.providerMeta ?? null;
   }
 }
 

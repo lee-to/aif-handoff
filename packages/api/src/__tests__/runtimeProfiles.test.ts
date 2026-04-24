@@ -1,19 +1,42 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import { createTestDb } from "@aif/shared/server";
-import { projects, runtimeProfiles, tasks } from "@aif/shared";
+import {
+  appSettings,
+  projects,
+  resetEnvCache,
+  runtimeProfiles,
+  tasks,
+  usageEvents,
+} from "@aif/shared";
 
 const testDb = { current: createTestDb() };
 
 const mockValidateConnection = vi.fn();
 const mockListModels = vi.fn();
 const mockListRuntimes = vi.fn();
+const mockGetCodexAuthIdentity = vi.fn();
+const mockListLatestCodexLimitSnapshots = vi.fn();
+const mockResolveClaudeProviderIdentity = vi.fn();
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
   return {
     ...actual,
     getDb: () => testDb.current,
+  };
+});
+
+vi.mock("@aif/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/runtime")>();
+  return {
+    ...actual,
+    getCodexAuthIdentity: (...args: unknown[]) => mockGetCodexAuthIdentity(...args),
+    listLatestCodexLimitSnapshots: (...args: unknown[]) =>
+      mockListLatestCodexLimitSnapshots(...args),
+    resolveClaudeProviderIdentity: (...args: unknown[]) =>
+      mockResolveClaudeProviderIdentity(...args),
   };
 });
 
@@ -39,13 +62,35 @@ function createApp() {
 
 describe("runtimeProfiles API", () => {
   let app: ReturnType<typeof createApp>;
+  let previousUsageLimitsEnv: string | undefined;
 
   beforeEach(() => {
+    previousUsageLimitsEnv = process.env.AIF_USAGE_LIMITS_ENABLED;
+    // Flag defaults to false (opt-in). Most tests here exercise the live
+    // refresh path, so enable it per-test. Cases that need the disabled
+    // path override and restore this inside the test body.
+    process.env.AIF_USAGE_LIMITS_ENABLED = "true";
+    resetEnvCache();
     testDb.current = createTestDb();
     app = createApp();
     mockValidateConnection.mockReset();
     mockListModels.mockReset();
     mockListRuntimes.mockReset();
+    mockGetCodexAuthIdentity.mockReset();
+    mockListLatestCodexLimitSnapshots.mockReset();
+    mockResolveClaudeProviderIdentity.mockReset();
+    mockGetCodexAuthIdentity.mockResolvedValue(null);
+    mockListLatestCodexLimitSnapshots.mockResolvedValue([]);
+    mockResolveClaudeProviderIdentity.mockResolvedValue({
+      providerFamily: "anthropic-native",
+      providerLabel: "Anthropic",
+      quotaSource: "sdk_event",
+      baseUrl: null,
+      baseOrigin: "https://api.anthropic.com",
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      accountFingerprint: null,
+      accountLabel: null,
+    });
     mockValidateConnection.mockResolvedValue({
       ok: true,
       message: "validation ok",
@@ -69,6 +114,15 @@ describe("runtimeProfiles API", () => {
         },
       },
     ]);
+  });
+
+  afterEach(() => {
+    if (previousUsageLimitsEnv === undefined) {
+      delete process.env.AIF_USAGE_LIMITS_ENABLED;
+    } else {
+      process.env.AIF_USAGE_LIMITS_ENABLED = previousUsageLimitsEnv;
+    }
+    resetEnvCache();
   });
 
   it("lists runtime descriptors", async () => {
@@ -119,6 +173,39 @@ describe("runtimeProfiles API", () => {
 
     const missingRes = await app.request(`/runtime-profiles/${created.id}`);
     expect(missingRes.status).toBe(404);
+  });
+
+  it("skips the Codex session scan when AIF_USAGE_LIMITS_ENABLED=false", async () => {
+    const previous = process.env.AIF_USAGE_LIMITS_ENABLED;
+    process.env.AIF_USAGE_LIMITS_ENABLED = "false";
+    resetEnvCache();
+    try {
+      // Create a Codex profile so the route actually reaches the refresh path.
+      const createRes = await app.request("/runtime-profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Local Codex",
+          runtimeId: "codex",
+          providerId: "openai",
+          transport: "sdk",
+          defaultModel: "gpt-5.4",
+        }),
+      });
+      expect(createRes.status).toBe(201);
+
+      const listRes = await app.request("/runtime-profiles?includeGlobal=true&enabledOnly=false");
+      expect(listRes.status).toBe(200);
+      expect(mockListLatestCodexLimitSnapshots).not.toHaveBeenCalled();
+      expect(mockResolveClaudeProviderIdentity).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AIF_USAGE_LIMITS_ENABLED;
+      } else {
+        process.env.AIF_USAGE_LIMITS_ENABLED = previous;
+      }
+      resetEnvCache();
+    }
   });
 
   it("rejects create/update requests with sensitive-looking header keys", async () => {
@@ -221,6 +308,602 @@ describe("runtimeProfiles API", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toHaveLength(2);
+  });
+
+  it("includes last recorded usage on runtime profile responses", async () => {
+    const db = testDb.current;
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-usage",
+        projectId: "project-1",
+        name: "Codex SDK",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        enabled: true,
+      })
+      .run();
+    db.insert(usageEvents)
+      .values({
+        id: "usage-1",
+        source: "chat",
+        projectId: "project-1",
+        profileId: "profile-usage",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        usageReporting: "full",
+        inputTokens: 120,
+        outputTokens: 45,
+        totalTokens: 165,
+        costUsd: 0.08,
+        createdAt: "2026-04-18T10:00:00.000Z",
+      })
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body[0]).toEqual(
+      expect.objectContaining({
+        id: "profile-usage",
+        lastUsage: {
+          inputTokens: 120,
+          outputTokens: 45,
+          totalTokens: 165,
+          costUsd: 0.08,
+        },
+        lastUsageAt: "2026-04-18T10:00:00.000Z",
+      }),
+    );
+  });
+
+  it("enriches local Codex quota snapshots with auth identity when persisted metadata is stale", async () => {
+    mockGetCodexAuthIdentity.mockResolvedValue({
+      accountId: "account-codex-1",
+      authMode: "chatgpt",
+      accountName: "Anton Ageev",
+      accountEmail: "ichi.chaik@gmail.com",
+      planType: "pro",
+    });
+
+    const db = testDb.current;
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-codex-sdk",
+        projectId: "project-1",
+        name: "gpt-5.4",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "sdk",
+        enabled: true,
+        runtimeLimitSnapshotJson: JSON.stringify({
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T06:24:09.174Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-sdk",
+          primaryScope: "time",
+          resetAt: "2026-04-18T07:02:25.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 96,
+              resetAt: "2026-04-18T07:02:25.000Z",
+            },
+          ],
+          providerMeta: {
+            limitId: "codex",
+            planType: "pro",
+          },
+        }),
+        runtimeLimitUpdatedAt: "2026-04-18T06:24:09.174Z",
+      })
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body[0].runtimeLimitSnapshot.providerMeta).toEqual(
+      expect.objectContaining({
+        accountId: "account-codex-1",
+        accountName: "Anton Ageev",
+        planType: "pro",
+        limitId: "codex",
+      }),
+    );
+    expect(body[0].runtimeLimitSnapshot.providerMeta).not.toHaveProperty("authMode");
+    expect(body[0].runtimeLimitSnapshot.providerMeta).not.toHaveProperty("accountEmail");
+  });
+
+  it("refreshes local Codex quota snapshots from the live session store when newer pool state exists", async () => {
+    mockListLatestCodexLimitSnapshots.mockResolvedValue([
+      {
+        source: "sdk_event",
+        status: "ok",
+        precision: "exact",
+        checkedAt: "2026-04-19T09:26:34.000Z",
+        providerId: "openai",
+        runtimeId: "codex",
+        profileId: "profile-codex-spark",
+        primaryScope: "time",
+        resetAt: "2026-04-19T12:16:40.000Z",
+        retryAfterSeconds: null,
+        warningThreshold: 10,
+        windows: [
+          {
+            scope: "time",
+            name: "5h",
+            percentRemaining: 100,
+            resetAt: "2026-04-19T12:16:40.000Z",
+            warningThreshold: 10,
+          },
+        ],
+        providerMeta: {
+          limitId: "codex",
+          planType: "pro",
+        },
+      },
+    ]);
+
+    const db = testDb.current;
+    db.insert(projects)
+      .values({
+        id: "project-1",
+        name: "Project One",
+        rootPath: "/tmp/project-1",
+      })
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-codex-spark",
+        projectId: "project-1",
+        name: "Spark",
+        runtimeId: "codex",
+        providerId: "openai",
+        transport: "cli",
+        defaultModel: "gpt-5.3-codex-spark",
+        enabled: true,
+        runtimeLimitSnapshotJson: JSON.stringify({
+          source: "sdk_event",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T12:57:46.884Z",
+          providerId: "openai",
+          runtimeId: "codex",
+          profileId: "profile-codex-spark",
+          primaryScope: "time",
+          resetAt: "2026-04-18T17:16:40.000Z",
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "time",
+              name: "5h",
+              percentRemaining: 99,
+              resetAt: "2026-04-18T17:16:40.000Z",
+            },
+          ],
+          providerMeta: {
+            limitId: "stale-codex",
+            planType: "pro",
+          },
+        }),
+        runtimeLimitUpdatedAt: "2026-04-18T12:57:51.489Z",
+      })
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(mockListLatestCodexLimitSnapshots).toHaveBeenNthCalledWith(1, {
+      runtimeId: "codex",
+      providerId: "openai",
+      projectRoot: "/tmp/project-1",
+    });
+    expect(mockListLatestCodexLimitSnapshots).toHaveBeenNthCalledWith(2, {
+      runtimeId: "codex",
+      providerId: "openai",
+      projectRoot: null,
+    });
+    expect(body[0]).toEqual(
+      expect.objectContaining({
+        runtimeLimitUpdatedAt: "2026-04-19T09:26:34.000Z",
+        runtimeLimitSnapshot: expect.objectContaining({
+          checkedAt: "2026-04-19T09:26:34.000Z",
+          profileId: "profile-codex-spark",
+          providerMeta: expect.objectContaining({
+            limitId: "codex",
+          }),
+        }),
+      }),
+    );
+    expect(body[0].runtimeLimitSnapshot.providerMeta).not.toHaveProperty("accountEmail");
+  });
+
+  it("prefers the non-default live Codex pool for Spark profiles when multiple pools are available", async () => {
+    mockListLatestCodexLimitSnapshots.mockResolvedValue([
+      {
+        source: "sdk_event",
+        status: "ok",
+        precision: "exact",
+        checkedAt: "2026-04-19T11:41:50.135Z",
+        providerId: "openai",
+        runtimeId: "codex",
+        profileId: "profile-codex-spark",
+        primaryScope: "time",
+        resetAt: "2026-04-19T13:04:58.000Z",
+        retryAfterSeconds: null,
+        warningThreshold: 10,
+        windows: [
+          {
+            scope: "time",
+            name: "5h",
+            percentRemaining: 94,
+            resetAt: "2026-04-19T13:04:58.000Z",
+            warningThreshold: 10,
+          },
+          {
+            scope: "time",
+            name: "7d",
+            percentRemaining: 91,
+            resetAt: "2026-04-23T16:55:37.000Z",
+            warningThreshold: 10,
+          },
+        ],
+        providerMeta: {
+          limitId: "codex",
+          planType: "pro",
+        },
+      },
+      {
+        source: "sdk_event",
+        status: "ok",
+        precision: "exact",
+        checkedAt: "2026-04-19T11:42:09.849Z",
+        providerId: "openai",
+        runtimeId: "codex",
+        profileId: "profile-codex-spark",
+        primaryScope: "time",
+        resetAt: "2026-04-19T15:09:46.000Z",
+        retryAfterSeconds: null,
+        warningThreshold: 10,
+        windows: [
+          {
+            scope: "time",
+            name: "5h",
+            percentRemaining: 100,
+            resetAt: "2026-04-19T15:09:46.000Z",
+            warningThreshold: 10,
+          },
+          {
+            scope: "time",
+            name: "7d",
+            percentRemaining: 70,
+            resetAt: "2026-04-25T15:57:46.000Z",
+            warningThreshold: 10,
+          },
+        ],
+        providerMeta: {
+          limitId: "codex_bengalfox",
+          planType: "pro",
+        },
+      },
+    ]);
+
+    const db = testDb.current;
+    db.insert(projects)
+      .values({
+        id: "project-1",
+        name: "Project One",
+        rootPath: "/tmp/project-1",
+      })
+      .run();
+    db.insert(runtimeProfiles)
+      .values([
+        {
+          id: "profile-codex-spark",
+          projectId: "project-1",
+          name: "Spark",
+          runtimeId: "codex",
+          providerId: "openai",
+          transport: "cli",
+          defaultModel: "gpt-5.3-codex-spark",
+          enabled: true,
+        },
+        {
+          id: "profile-codex-main",
+          projectId: "project-1",
+          name: "Main",
+          runtimeId: "codex",
+          providerId: "openai",
+          transport: "sdk",
+          defaultModel: "gpt-5.4",
+          enabled: true,
+        },
+      ])
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const sparkProfile = body.find(
+      (profile: { id: string }) => profile.id === "profile-codex-spark",
+    );
+    const mainProfile = body.find((profile: { id: string }) => profile.id === "profile-codex-main");
+    expect(mockListLatestCodexLimitSnapshots).toHaveBeenCalledTimes(2);
+    expect(sparkProfile.runtimeLimitSnapshot.profileId).toBe("profile-codex-spark");
+    expect(sparkProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex_bengalfox");
+    expect(sparkProfile.runtimeLimitSnapshot.windows[0].percentRemaining).toBe(100);
+    expect(sparkProfile.runtimeLimitSnapshot.windows[1].percentRemaining).toBe(70);
+    expect(mainProfile.runtimeLimitSnapshot.profileId).toBe("profile-codex-main");
+    expect(mainProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex");
+    expect(mainProfile.runtimeLimitSnapshot.windows[0].percentRemaining).toBe(94);
+  });
+
+  it("falls back to account-wide live Codex pools when the project root has no matching local sessions", async () => {
+    mockListLatestCodexLimitSnapshots.mockImplementation(
+      async (input: { projectRoot?: string | null; profileId?: string }) => {
+        if (input.projectRoot) {
+          return [];
+        }
+
+        return [
+          {
+            source: "sdk_event",
+            status: "ok",
+            precision: "exact",
+            checkedAt: "2026-04-19T13:19:23.773Z",
+            providerId: "openai",
+            runtimeId: "codex",
+            profileId: input.profileId ?? null,
+            primaryScope: "time",
+            resetAt: "2026-04-19T18:06:04.000Z",
+            retryAfterSeconds: null,
+            warningThreshold: 10,
+            windows: [
+              {
+                scope: "time",
+                name: "5h",
+                percentRemaining: 100,
+                resetAt: "2026-04-19T18:06:04.000Z",
+                warningThreshold: 10,
+              },
+              {
+                scope: "time",
+                name: "7d",
+                percentRemaining: 91,
+                resetAt: "2026-04-23T16:55:37.000Z",
+                warningThreshold: 10,
+              },
+            ],
+            providerMeta: {
+              limitId: "codex",
+              planType: "pro",
+            },
+          },
+          {
+            source: "sdk_event",
+            status: "ok",
+            precision: "exact",
+            checkedAt: "2026-04-19T13:19:58.695Z",
+            providerId: "openai",
+            runtimeId: "codex",
+            profileId: input.profileId ?? null,
+            primaryScope: "time",
+            resetAt: "2026-04-19T15:09:46.000Z",
+            retryAfterSeconds: null,
+            warningThreshold: 10,
+            windows: [
+              {
+                scope: "time",
+                name: "5h",
+                percentRemaining: 100,
+                resetAt: "2026-04-19T15:09:46.000Z",
+                warningThreshold: 10,
+              },
+              {
+                scope: "time",
+                name: "7d",
+                percentRemaining: 70,
+                resetAt: "2026-04-25T12:57:46.000Z",
+                warningThreshold: 10,
+              },
+            ],
+            providerMeta: {
+              limitId: "codex_bengalfox",
+              planType: "pro",
+            },
+          },
+        ];
+      },
+    );
+
+    const db = testDb.current;
+    db.insert(projects)
+      .values({
+        id: "project-1",
+        name: "Project One",
+        rootPath: "C:/projects/other-root",
+      })
+      .run();
+    db.insert(runtimeProfiles)
+      .values([
+        {
+          id: "profile-codex-spark",
+          projectId: "project-1",
+          name: "Spark",
+          runtimeId: "codex",
+          providerId: "openai",
+          transport: "cli",
+          defaultModel: "gpt-5.3-codex-spark",
+          enabled: true,
+        },
+        {
+          id: "profile-codex-main",
+          projectId: "project-1",
+          name: "Main",
+          runtimeId: "codex",
+          providerId: "openai",
+          transport: "sdk",
+          defaultModel: "gpt-5.4",
+          enabled: true,
+        },
+      ])
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const sparkProfile = body.find(
+      (profile: { id: string }) => profile.id === "profile-codex-spark",
+    );
+    const mainProfile = body.find((profile: { id: string }) => profile.id === "profile-codex-main");
+    expect(mockListLatestCodexLimitSnapshots).toHaveBeenCalledTimes(2);
+    expect(sparkProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex_bengalfox");
+    expect(sparkProfile.runtimeLimitSnapshot.windows[1].percentRemaining).toBe(70);
+    expect(mainProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex");
+    expect(mainProfile.runtimeLimitSnapshot.windows[1].percentRemaining).toBe(91);
+  });
+
+  it("enriches Claude quota snapshots with provider-family identity when persisted metadata is stale", async () => {
+    mockResolveClaudeProviderIdentity.mockResolvedValue({
+      providerFamily: "zai-glm-coding",
+      providerLabel: "Z.A.I GLM Coding Plan",
+      quotaSource: "zai_monitor",
+      baseUrl: "https://api.z.ai/api/anthropic",
+      baseOrigin: "https://api.z.ai",
+      apiKeyEnvVar: "ANTHROPIC_AUTH_TOKEN",
+      accountFingerprint: "glm-account-1",
+      accountLabel: null,
+    });
+
+    const db = testDb.current;
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-claude-zai",
+        projectId: "project-1",
+        name: "Claude GLM",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        enabled: true,
+        runtimeLimitSnapshotJson: JSON.stringify({
+          source: "provider_api",
+          status: "ok",
+          precision: "exact",
+          checkedAt: "2026-04-18T09:00:00.000Z",
+          providerId: "anthropic",
+          runtimeId: "claude",
+          profileId: "profile-claude-zai",
+          primaryScope: "tokens",
+          resetAt: null,
+          warningThreshold: 10,
+          windows: [
+            {
+              scope: "tokens",
+              name: "5h",
+              percentRemaining: 100,
+            },
+          ],
+          providerMeta: {
+            planType: "pro",
+          },
+        }),
+        runtimeLimitUpdatedAt: "2026-04-18T09:00:00.000Z",
+      })
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body[0].runtimeLimitSnapshot.providerMeta).toEqual(
+      expect.objectContaining({
+        providerFamily: "zai-glm-coding",
+        providerLabel: "Z.A.I GLM Coding Plan",
+        quotaSource: "zai_monitor",
+        accountFingerprint: "glm-account-1",
+        planType: "pro",
+      }),
+    );
+  });
+
+  it("lists only global profiles when scope=global", async () => {
+    const db = testDb.current;
+    db.insert(runtimeProfiles)
+      .values([
+        {
+          id: "global-only-profile",
+          projectId: null,
+          name: "Global Claude",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "project-only-profile",
+          projectId: "project-1",
+          name: "Project Claude",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+      ])
+      .run();
+
+    const res = await app.request("/runtime-profiles?scope=global&enabledOnly=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveLength(1);
+    expect(body[0].id).toBe("global-only-profile");
+  });
+
+  it("requires projectId when scope=project", async () => {
+    const res = await app.request("/runtime-profiles?scope=project");
+    expect(res.status).toBe(400);
+  });
+
+  it("lists visible profiles when scope=visible", async () => {
+    const db = testDb.current;
+    db.insert(runtimeProfiles)
+      .values([
+        {
+          id: "global-visible-profile",
+          projectId: null,
+          name: "Global Claude",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "project-visible-profile",
+          projectId: "project-1",
+          name: "Project Claude",
+          runtimeId: "codex",
+          providerId: "openai",
+          enabled: true,
+        },
+        {
+          id: "foreign-project-profile",
+          projectId: "project-2",
+          name: "Foreign Claude",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+      ])
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&scope=visible");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.map((profile: { id: string }) => profile.id)).toEqual([
+      "global-visible-profile",
+      "project-visible-profile",
+    ]);
   });
 
   it("applies boolean query sanitization for includeGlobal/enabledOnly flags", async () => {
@@ -327,6 +1010,29 @@ describe("runtimeProfiles API", () => {
           runtimeId: "claude",
           providerId: "anthropic",
           enabled: true,
+          runtimeLimitSnapshotJson: JSON.stringify({
+            source: "api_headers",
+            status: "warning",
+            precision: "exact",
+            checkedAt: "2026-04-17T00:00:00.000Z",
+            providerId: "anthropic",
+            runtimeId: "claude",
+            profileId: "profile-task-default",
+            primaryScope: "requests",
+            resetAt: "2026-04-17T01:00:00.000Z",
+            retryAfterSeconds: null,
+            warningThreshold: 10,
+            windows: [
+              {
+                scope: "requests",
+                percentRemaining: 8,
+                warningThreshold: 10,
+                resetAt: "2026-04-17T01:00:00.000Z",
+              },
+            ],
+            providerMeta: null,
+          }),
+          runtimeLimitUpdatedAt: "2026-04-17T00:00:00.000Z",
         },
         {
           id: "profile-chat-default",
@@ -366,6 +1072,80 @@ describe("runtimeProfiles API", () => {
     const chatBody = await chatRes.json();
     expect(chatBody.source).toBe("project_default");
     expect(chatBody.profile.id).toBe("profile-chat-default");
+
+    const listRes = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(listRes.status).toBe(200);
+    const listed = await listRes.json();
+    const taskDefault = listed.find(
+      (profile: { id: string }) => profile.id === "profile-task-default",
+    );
+    expect(taskDefault.runtimeLimitSnapshot).toEqual(
+      expect.objectContaining({
+        status: "warning",
+        precision: "exact",
+        profileId: "profile-task-default",
+      }),
+    );
+    expect(taskDefault.runtimeLimitUpdatedAt).toBe("2026-04-17T00:00:00.000Z");
+  });
+
+  it("falls back to app-level runtime defaults for task and chat effective endpoints", async () => {
+    const db = testDb.current;
+    db.insert(projects)
+      .values({
+        id: "project-global-default",
+        name: "Global Default Project",
+        rootPath: "/tmp/project-global-default",
+      })
+      .run();
+    db.update(appSettings)
+      .set({
+        defaultTaskRuntimeProfileId: "profile-app-task-default",
+        defaultChatRuntimeProfileId: "profile-app-chat-default",
+      })
+      .where(eq(appSettings.id, 1))
+      .run();
+    db.insert(runtimeProfiles)
+      .values([
+        {
+          id: "profile-app-task-default",
+          projectId: null,
+          name: "App Task Default",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "profile-app-chat-default",
+          projectId: null,
+          name: "App Chat Default",
+          runtimeId: "codex",
+          providerId: "openai",
+          enabled: true,
+        },
+      ])
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-app-default",
+        projectId: "project-global-default",
+        title: "Task",
+      })
+      .run();
+
+    const taskRes = await app.request("/runtime-profiles/effective/task/task-app-default");
+    expect(taskRes.status).toBe(200);
+    const taskBody = await taskRes.json();
+    expect(taskBody.source).toBe("system_default");
+    expect(taskBody.profile.id).toBe("profile-app-task-default");
+    expect(taskBody.systemRuntimeProfileId).toBe("profile-app-task-default");
+
+    const chatRes = await app.request("/runtime-profiles/effective/chat/project-global-default");
+    expect(chatRes.status).toBe(200);
+    const chatBody = await chatRes.json();
+    expect(chatBody.source).toBe("system_default");
+    expect(chatBody.profile.id).toBe("profile-app-chat-default");
+    expect(chatBody.systemRuntimeProfileId).toBe("profile-app-chat-default");
   });
 
   it("returns 404 for missing runtime profile/task resources", async () => {

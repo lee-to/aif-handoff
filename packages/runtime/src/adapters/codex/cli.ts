@@ -1,5 +1,6 @@
 import { spawn, execFileSync } from "node:child_process";
 import type { RuntimeEvent, RuntimeRunInput, RuntimeRunResult, RuntimeUsage } from "../../types.js";
+import { buildRuntimeLimitEvent } from "../../limitEvents.js";
 import {
   makeProcessRunTimeoutError,
   makeProcessStartTimeoutError,
@@ -8,6 +9,7 @@ import {
   withProcessTimeouts,
 } from "../../timeouts.js";
 import { classifyCodexRuntimeError } from "./errors.js";
+import { getCodexSessionLimitSnapshot } from "./sessions.js";
 import {
   normalizeCodexApprovalPolicy,
   normalizeCodexSandboxMode,
@@ -24,6 +26,8 @@ export interface CodexCliLogger {
   warn?(context: Record<string, unknown>, message: string): void;
   error?(context: Record<string, unknown>, message: string): void;
 }
+
+const CODEX_SESSION_LIMIT_POLL_INTERVAL_MS = 1_000;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -646,6 +650,109 @@ function finalizeCodexResult(
   };
 }
 
+function hasRuntimeLimitSnapshotSignature(
+  events: RuntimeEvent[] | null | undefined,
+  signature: string,
+): boolean {
+  return (
+    events?.some((event) => {
+      if (event.type !== "runtime:limit") {
+        return false;
+      }
+      return JSON.stringify(event.data?.snapshot ?? null) === signature;
+    }) ?? false
+  );
+}
+
+async function appendCodexSessionLimitEvent(input: RuntimeRunInput, result: RuntimeRunResult) {
+  const sessionId = result.sessionId ?? null;
+  if (!sessionId) {
+    return result;
+  }
+
+  const snapshot = await getCodexSessionLimitSnapshot({
+    sessionId,
+    runtimeId: input.runtimeId,
+    providerId: input.providerId ?? "openai",
+    profileId: input.profileId ?? null,
+  });
+  if (!snapshot) {
+    return result;
+  }
+
+  const signature = JSON.stringify(snapshot);
+  if (hasRuntimeLimitSnapshotSignature(result.events, signature)) {
+    return result;
+  }
+
+  const limitEvent = buildRuntimeLimitEvent(snapshot, "token_count");
+  const nextEvents = [...(result.events ?? []), limitEvent];
+  input.execution?.onEvent?.(limitEvent);
+
+  return {
+    ...result,
+    events: nextEvents,
+  };
+}
+
+interface CodexSessionLimitObserverState {
+  lastCheckedAtMs: number;
+  lastSignature: string | null;
+}
+
+async function maybeEmitCodexSessionLimitEvent(input: {
+  runtimeInput: RuntimeRunInput;
+  sessionId: string | null;
+  state: CodexCliStreamState;
+  observerState: CodexSessionLimitObserverState;
+  logger?: CodexCliLogger;
+  force?: boolean;
+}): Promise<void> {
+  const sessionId = input.sessionId;
+  if (!sessionId) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  if (
+    input.force !== true &&
+    input.observerState.lastCheckedAtMs > 0 &&
+    nowMs - input.observerState.lastCheckedAtMs < CODEX_SESSION_LIMIT_POLL_INTERVAL_MS
+  ) {
+    return;
+  }
+  input.observerState.lastCheckedAtMs = nowMs;
+
+  const snapshot = await getCodexSessionLimitSnapshot({
+    sessionId,
+    runtimeId: input.runtimeInput.runtimeId,
+    providerId: input.runtimeInput.providerId ?? "openai",
+    profileId: input.runtimeInput.profileId ?? null,
+  });
+  if (!snapshot) {
+    return;
+  }
+
+  const signature = JSON.stringify(snapshot);
+  if (input.observerState.lastSignature === signature) {
+    return;
+  }
+  input.observerState.lastSignature = signature;
+
+  const limitEvent = buildRuntimeLimitEvent(snapshot, "token_count");
+  emitCodexEvent(input.state, input.runtimeInput.execution, limitEvent);
+  input.logger?.debug?.(
+    {
+      runtimeId: input.runtimeInput.runtimeId,
+      transport: "cli",
+      sessionId,
+      status: snapshot.status,
+      checkedAt: snapshot.checkedAt,
+    },
+    "Observed Codex session token_count rate limits during CLI run",
+  );
+}
+
 /**
  * Compose the prompt that actually reaches the model: `systemPromptAppend`
  * (registry-injected language directive + any other cross-cutting appends)
@@ -709,8 +816,38 @@ function runCodexCliAttempt(
   });
 
   const state = createCodexStreamState(input.sessionId ?? null);
+  const limitObserverState: CodexSessionLimitObserverState = {
+    lastCheckedAtMs: 0,
+    lastSignature: null,
+  };
   let stdoutBuffer = "";
   let stderr = "";
+  let limitPollChain = Promise.resolve();
+
+  const scheduleLimitPoll = (force = false): void => {
+    limitPollChain = limitPollChain
+      .then(() =>
+        maybeEmitCodexSessionLimitEvent({
+          runtimeInput: input,
+          sessionId: state.sessionId,
+          state,
+          observerState: limitObserverState,
+          logger,
+          force,
+        }),
+      )
+      .catch((err) => {
+        logger?.warn?.(
+          {
+            runtimeId: input.runtimeId,
+            transport: "cli",
+            sessionId: state.sessionId,
+            err,
+          },
+          "Failed to inspect Codex session token_count rate limits during CLI run",
+        );
+      });
+  };
 
   const flushCompleteLines = (): void => {
     let newlineIdx = stdoutBuffer.indexOf("\n");
@@ -718,6 +855,7 @@ function runCodexCliAttempt(
       const line = stdoutBuffer.slice(0, newlineIdx);
       stdoutBuffer = stdoutBuffer.slice(newlineIdx + 1);
       processCodexJsonLine(line, state, execution);
+      scheduleLimitPoll();
       newlineIdx = stdoutBuffer.indexOf("\n");
     }
   };
@@ -777,11 +915,15 @@ function runCodexCliAttempt(
       if (stdoutBuffer.length > 0) {
         try {
           processCodexJsonLine(stdoutBuffer, state, execution);
+          scheduleLimitPoll();
         } catch {
           /* ignore tail processing errors */
         }
         stdoutBuffer = "";
       }
+
+      scheduleLimitPoll(true);
+      await limitPollChain;
 
       const startTimedOut = await timeouts.startTimedOut;
 
@@ -899,8 +1041,8 @@ export async function runCodexCli(
     if (retry.startTimedOut) {
       throw makeProcessStartTimeoutError(input.execution?.startTimeoutMs ?? 0);
     }
-    return retry.result;
+    return appendCodexSessionLimitEvent(input, retry.result);
   }
 
-  return result;
+  return appendCodexSessionLimitEvent(input, result);
 }

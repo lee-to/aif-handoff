@@ -1,10 +1,30 @@
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, like, lte, min, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lte,
+  max,
+  min,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   AUTO_REVIEW_FINDING_SOURCES,
   AUTO_REVIEW_STRATEGIES,
+  buildRuntimeLimitSignature,
+  appSettings,
   generatePlanPath,
   getProjectConfig,
   logger as createLogger,
+  normalizeRuntimeLimitSnapshot,
+  redactProviderText,
   parseAttachments,
   parseTaskTokenUsage,
   persistTaskPlan,
@@ -15,12 +35,21 @@ import {
   chatSessions,
   chatMessages,
   usageEvents,
+  type AppSettings,
   type CreateRuntimeProfileInput,
   type EffectiveRuntimeProfileSelection,
   type RuntimeProfile,
+  type RuntimeProfileUsage,
+  type RuntimeLimitSnapshot,
+  type RuntimeLimitWindow,
+  type RuntimeLimitFutureHint,
+  type UpdateAppSettingsInput,
   type UpdateRuntimeProfileInput,
   type Task,
   type TaskStatus,
+  resolveRuntimeLimitFutureHint,
+  sanitizeRuntimeLimitSnapshotForExposure,
+  selectViolatedWindowForExactThreshold,
   type AutoReviewState,
   type ChatSession,
   type ChatSessionMessage,
@@ -33,12 +62,17 @@ import { getDb } from "@aif/shared/server";
 const log = createLogger("data");
 const AUTO_REVIEW_STRATEGY_SET = new Set<string>(AUTO_REVIEW_STRATEGIES);
 const AUTO_REVIEW_FINDING_SOURCE_SET = new Set<string>(AUTO_REVIEW_FINDING_SOURCES);
+const APP_SETTINGS_ID = 1;
 
 export type TaskRow = typeof tasks.$inferSelect;
 export type CommentRow = typeof taskComments.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
+export type AppSettingsRow = typeof appSettings.$inferSelect;
 export type RuntimeProfileRow = typeof runtimeProfiles.$inferSelect;
-export type HydratedTaskRow = TaskRow & { autoReviewState?: AutoReviewState | null };
+export type HydratedTaskRow = TaskRow & {
+  autoReviewState?: AutoReviewState | null;
+  runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
+};
 
 export type CoordinatorStage = "planner" | "plan-checker" | "implementer" | "reviewer";
 
@@ -88,15 +122,41 @@ export type TaskFieldsUpdate = {
   scheduledAt?: string | null;
 };
 
+function redactTaskTextForExternalUse(text: string | null | undefined): string | null {
+  if (typeof text !== "string") {
+    return text ?? null;
+  }
+  return text
+    .split(/\r?\n/)
+    .map((line) => redactProviderText(line))
+    .join("\n");
+}
+
+function parseTaskRuntimeLimitSnapshot(
+  raw: string | null | undefined,
+  taskId: string,
+): RuntimeLimitSnapshot | null {
+  const snapshot = parseRuntimeLimitSnapshot(raw, "task", taskId);
+  return snapshot ? sanitizeRuntimeLimitSnapshotForExposure(snapshot, "task") : null;
+}
 
 export function toTaskResponse(task: TaskRow): Task {
-  const { attachments, tags, runtimeOptionsJson, autoReviewStateJson, ...rest } = task;
+  const {
+    attachments,
+    tags,
+    runtimeOptionsJson,
+    autoReviewStateJson,
+    runtimeLimitSnapshotJson,
+    ...rest
+  } = task;
   return {
     ...rest,
     attachments: parseAttachments(attachments),
     tags: parseTags(tags),
     autoReviewState: parseAutoReviewState(autoReviewStateJson),
     runtimeOptions: parseRuntimeObject(runtimeOptionsJson),
+    agentActivityLog: redactTaskTextForExternalUse(task.agentActivityLog),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(runtimeLimitSnapshotJson, task.id),
   };
 }
 
@@ -122,12 +182,193 @@ function parseRuntimeObject(raw: string | null | undefined): Record<string, unkn
   }
 }
 
+interface RuntimeProfileUsageState {
+  lastUsage: RuntimeProfileUsage;
+  lastUsageAt: string;
+}
+
+function toRuntimeProfileUsage(row: {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number | null;
+}): RuntimeProfileUsage {
+  return {
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    totalTokens: row.totalTokens,
+    costUsd: row.costUsd,
+  };
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOwnProperty(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function readStoredOptionalFiniteNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | null | undefined {
+  if (!hasOwnProperty(record, key)) return undefined;
+  const value = record[key];
+  if (value == null) return null;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readStoredOptionalString(
+  record: Record<string, unknown>,
+  key: string,
+): string | null | undefined {
+  if (!hasOwnProperty(record, key)) return undefined;
+  const value = record[key];
+  if (value == null) return null;
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseRuntimeLimitWindow(
+  value: unknown,
+  entity: "task" | "runtime_profile",
+  entityId: string,
+  index: number,
+  rawLength: number,
+): RuntimeLimitWindow | null {
+  if (!isObjectRecord(value) || typeof value.scope !== "string") {
+    log.warn(
+      { entity, entityId, index, rawLength },
+      "Malformed persisted runtime-limit window",
+    );
+    return null;
+  }
+
+  const name = readStoredOptionalString(value, "name");
+  const unit = readStoredOptionalString(value, "unit");
+  const limit = readStoredOptionalFiniteNumber(value, "limit");
+  const remaining = readStoredOptionalFiniteNumber(value, "remaining");
+  const used = readStoredOptionalFiniteNumber(value, "used");
+  const percentUsed = readStoredOptionalFiniteNumber(value, "percentUsed");
+  const percentRemaining = readStoredOptionalFiniteNumber(value, "percentRemaining");
+  const resetAt = readStoredOptionalString(value, "resetAt");
+  const retryAfterSeconds = readStoredOptionalFiniteNumber(value, "retryAfterSeconds");
+  const warningThreshold = readStoredOptionalFiniteNumber(value, "warningThreshold");
+
+  return {
+    scope: value.scope as RuntimeLimitWindow["scope"],
+    ...(name !== undefined ? { name } : {}),
+    ...(unit !== undefined ? { unit } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(remaining !== undefined ? { remaining } : {}),
+    ...(used !== undefined ? { used } : {}),
+    ...(percentUsed !== undefined ? { percentUsed } : {}),
+    ...(percentRemaining !== undefined ? { percentRemaining } : {}),
+    ...(resetAt !== undefined ? { resetAt } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+    ...(warningThreshold !== undefined ? { warningThreshold } : {}),
+  };
+}
+
+function parseRuntimeLimitSnapshot(
+  raw: string | null | undefined,
+  entity: "task" | "runtime_profile",
+  entityId: string,
+): RuntimeLimitSnapshot | null {
+  if (!raw) return null;
+
+  const warnMalformed = (reason: string, extra: Record<string, unknown> = {}) => {
+    log.warn(
+      { entity, entityId, reason, rawLength: raw.length, ...extra },
+      "Malformed persisted runtime-limit snapshot",
+    );
+  };
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isObjectRecord(parsed)) {
+      warnMalformed("root_not_object");
+      return null;
+    }
+
+    if (
+      typeof parsed.source !== "string" ||
+      typeof parsed.status !== "string" ||
+      typeof parsed.precision !== "string" ||
+      typeof parsed.checkedAt !== "string" ||
+      typeof parsed.providerId !== "string" ||
+      !Array.isArray(parsed.windows)
+    ) {
+      warnMalformed("missing_required_fields", {
+        hasSource: typeof parsed.source === "string",
+        hasStatus: typeof parsed.status === "string",
+        hasPrecision: typeof parsed.precision === "string",
+        hasCheckedAt: typeof parsed.checkedAt === "string",
+        hasProviderId: typeof parsed.providerId === "string",
+        hasWindows: Array.isArray(parsed.windows),
+      });
+      return null;
+    }
+
+    const windows: RuntimeLimitWindow[] = [];
+    for (const [index, window] of parsed.windows.entries()) {
+      const normalized = parseRuntimeLimitWindow(window, entity, entityId, index, raw.length);
+      if (!normalized) {
+        return null;
+      }
+      windows.push(normalized);
+    }
+
+    const runtimeId = readStoredOptionalString(parsed, "runtimeId");
+    const profileId = readStoredOptionalString(parsed, "profileId");
+    const primaryScope = readStoredOptionalString(parsed, "primaryScope");
+    const resetAt = readStoredOptionalString(parsed, "resetAt");
+    const retryAfterSeconds = readStoredOptionalFiniteNumber(parsed, "retryAfterSeconds");
+    const warningThreshold = readStoredOptionalFiniteNumber(parsed, "warningThreshold");
+    const providerMeta = hasOwnProperty(parsed, "providerMeta")
+      ? isObjectRecord(parsed.providerMeta)
+        ? parsed.providerMeta
+        : parsed.providerMeta == null
+          ? null
+          : undefined
+      : undefined;
+
+    return normalizeRuntimeLimitSnapshot({
+      source: parsed.source as RuntimeLimitSnapshot["source"],
+      status: parsed.status as RuntimeLimitSnapshot["status"],
+      precision: parsed.precision as RuntimeLimitSnapshot["precision"],
+      checkedAt: parsed.checkedAt,
+      providerId: parsed.providerId,
+      ...(runtimeId !== undefined ? { runtimeId } : {}),
+      ...(profileId !== undefined ? { profileId } : {}),
+      ...(primaryScope !== undefined
+        ? { primaryScope: primaryScope as RuntimeLimitSnapshot["primaryScope"] }
+        : {}),
+      ...(resetAt !== undefined ? { resetAt } : {}),
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+      ...(warningThreshold !== undefined ? { warningThreshold } : {}),
+      windows,
+      ...(providerMeta !== undefined ? { providerMeta } : {}),
+    });
+  } catch (error) {
+    warnMalformed("json_parse_failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+function serializeRuntimeLimitSnapshot(
+  snapshot: RuntimeLimitSnapshot | null | undefined,
+): string | null {
+  return snapshot == null ? null : JSON.stringify(snapshot);
+}
+
 function parseAutoReviewState(raw: string | null | undefined): AutoReviewState | null {
   if (!raw) return null;
 
-  const preview = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
   const warnMalformed = (reason: string, extra: Record<string, unknown> = {}) => {
-    log.warn({ reason, raw: preview, ...extra }, "Malformed persisted auto-review payload");
+    log.warn({ reason, rawLength: raw.length, ...extra }, "Malformed persisted auto-review payload");
   };
 
   try {
@@ -249,6 +490,7 @@ export function findTaskById(id: string): HydratedTaskRow | undefined {
   return {
     ...row,
     autoReviewState: parseAutoReviewState(row.autoReviewStateJson),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(row.runtimeLimitSnapshotJson, row.id),
   };
 }
 
@@ -270,8 +512,9 @@ export type TaskSummaryRow = Pick<TaskRow,
   | "id" | "projectId" | "title" | "status" | "priority" | "position"
   | "autoMode" | "isFix" | "paused" | "roadmapAlias" | "tags"
   | "runtimeProfileId" | "modelOverride"
-  | "blockedReason" | "blockedFromStatus" | "retryCount"
+  | "blockedReason" | "blockedFromStatus" | "retryAfter" | "retryCount"
   | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations" | "manualReviewRequired"
+  | "runtimeLimitSnapshotJson" | "runtimeLimitUpdatedAt"
   | "tokenTotal" | "costUsd" | "lastSyncedAt" | "createdAt" | "updatedAt"
 >;
 
@@ -291,11 +534,14 @@ const SUMMARY_COLUMNS = {
   modelOverride: tasks.modelOverride,
   blockedReason: tasks.blockedReason,
   blockedFromStatus: tasks.blockedFromStatus,
+  retryAfter: tasks.retryAfter,
   retryCount: tasks.retryCount,
   reworkRequested: tasks.reworkRequested,
   reviewIterationCount: tasks.reviewIterationCount,
   maxReviewIterations: tasks.maxReviewIterations,
   manualReviewRequired: tasks.manualReviewRequired,
+  runtimeLimitSnapshotJson: tasks.runtimeLimitSnapshotJson,
+  runtimeLimitUpdatedAt: tasks.runtimeLimitUpdatedAt,
   tokenTotal: tasks.tokenTotal,
   costUsd: tasks.costUsd,
   lastSyncedAt: tasks.lastSyncedAt,
@@ -389,10 +635,11 @@ export function searchTasksPaginated(options: {
 
 /** Convert a TaskSummaryRow to a JSON-safe object (parse tags). */
 export function toTaskSummary(row: TaskSummaryRow) {
-  const { tags, ...rest } = row;
+  const { tags, runtimeLimitSnapshotJson, ...rest } = row;
   return {
     ...rest,
     tags: parseTags(tags),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(runtimeLimitSnapshotJson, row.id),
   };
 }
 
@@ -533,6 +780,50 @@ export function setTaskFields(id: string, fields: TaskFieldsPatch): void {
   getDb().update(tasks).set(patch).where(eq(tasks.id, id)).run();
 }
 
+export function persistTaskRuntimeLimitSnapshot(
+  taskId: string,
+  snapshot: RuntimeLimitSnapshot,
+  persistedAt = new Date().toISOString(),
+): TaskRow | undefined {
+  const normalizedSnapshot = normalizeRuntimeLimitSnapshot(snapshot);
+  log.info(
+    {
+      taskId,
+      status: normalizedSnapshot.status,
+      source: normalizedSnapshot.source,
+      precision: normalizedSnapshot.precision,
+      resetAt: normalizedSnapshot.resetAt ?? null,
+      persistedAt,
+    },
+    "Persisting task runtime limit snapshot",
+  );
+  getDb()
+    .update(tasks)
+    .set({
+      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
+      runtimeLimitUpdatedAt: persistedAt,
+    })
+    .where(eq(tasks.id, taskId))
+    .run();
+  return findTaskById(taskId);
+}
+
+export function clearTaskRuntimeLimitSnapshot(
+  taskId: string,
+  persistedAt = new Date().toISOString(),
+): TaskRow | undefined {
+  log.debug({ taskId, persistedAt }, "Clearing task runtime limit snapshot");
+  getDb()
+    .update(tasks)
+    .set({
+      runtimeLimitSnapshotJson: null,
+      runtimeLimitUpdatedAt: persistedAt,
+    })
+    .where(eq(tasks.id, taskId))
+    .run();
+  return findTaskById(taskId);
+}
+
 export function deleteTask(id: string): void {
   const db = getDb();
   db.delete(tasks).where(eq(tasks.id, id)).run();
@@ -596,6 +887,146 @@ export function getLatestReworkComment(taskId: string): CommentRow | undefined {
   return listTaskComments(taskId).at(-1);
 }
 
+export function toAppSettingsResponse(row: AppSettingsRow): AppSettings {
+  return {
+    id: row.id,
+    defaultTaskRuntimeProfileId: row.defaultTaskRuntimeProfileId,
+    defaultPlanRuntimeProfileId: row.defaultPlanRuntimeProfileId,
+    defaultReviewRuntimeProfileId: row.defaultReviewRuntimeProfileId,
+    defaultChatRuntimeProfileId: row.defaultChatRuntimeProfileId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function ensureAppSettingsRow(): AppSettingsRow {
+  const db = getDb();
+  // Migration 13 seeds row id=1. Keep this fallback for legacy/test databases
+  // so read paths stay resilient even when they start from an empty schema.
+  const existing = db.select().from(appSettings).where(eq(appSettings.id, APP_SETTINGS_ID)).get();
+  if (existing) {
+    return existing;
+  }
+
+  const now = new Date().toISOString();
+  log.debug({ appSettingsId: APP_SETTINGS_ID }, "Seeding missing singleton app settings row");
+  db
+    .insert(appSettings)
+    .values({
+      id: APP_SETTINGS_ID,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing()
+    .run();
+
+  return db.select().from(appSettings).where(eq(appSettings.id, APP_SETTINGS_ID)).get()!;
+}
+
+export function getAppSettings(): AppSettingsRow {
+  const settings = ensureAppSettingsRow();
+  log.debug({ appSettingsId: settings.id }, "Loaded app settings");
+  return settings;
+}
+
+export function updateAppSettings(input: UpdateAppSettingsInput): AppSettingsRow {
+  ensureAppSettingsRow();
+
+  const patch: Partial<AppSettingsRow> = {
+    updatedAt: new Date().toISOString(),
+  };
+  if (input.defaultTaskRuntimeProfileId !== undefined) {
+    patch.defaultTaskRuntimeProfileId = input.defaultTaskRuntimeProfileId;
+  }
+  if (input.defaultPlanRuntimeProfileId !== undefined) {
+    patch.defaultPlanRuntimeProfileId = input.defaultPlanRuntimeProfileId;
+  }
+  if (input.defaultReviewRuntimeProfileId !== undefined) {
+    patch.defaultReviewRuntimeProfileId = input.defaultReviewRuntimeProfileId;
+  }
+  if (input.defaultChatRuntimeProfileId !== undefined) {
+    patch.defaultChatRuntimeProfileId = input.defaultChatRuntimeProfileId;
+  }
+
+  log.debug(
+    {
+      appSettingsId: APP_SETTINGS_ID,
+      defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
+      defaultPlanRuntimeProfileId: input.defaultPlanRuntimeProfileId ?? null,
+      defaultReviewRuntimeProfileId: input.defaultReviewRuntimeProfileId ?? null,
+      defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
+    },
+    "Updating app settings runtime defaults",
+  );
+
+  getDb()
+    .update(appSettings)
+    .set(patch)
+    .where(eq(appSettings.id, APP_SETTINGS_ID))
+    .run();
+
+  return ensureAppSettingsRow();
+}
+
+export function getAppDefaultRuntimeProfileId(
+  mode: "task" | "plan" | "review" | "chat",
+): string | null {
+  const settings = getAppSettings();
+  const candidates =
+    mode === "chat"
+      ? [{ slot: "chat", profileId: settings.defaultChatRuntimeProfileId }]
+      : mode === "plan"
+        ? [
+            { slot: "plan", profileId: settings.defaultPlanRuntimeProfileId },
+            { slot: "task", profileId: settings.defaultTaskRuntimeProfileId },
+          ]
+        : mode === "review"
+          ? [
+              { slot: "review", profileId: settings.defaultReviewRuntimeProfileId },
+              { slot: "task", profileId: settings.defaultTaskRuntimeProfileId },
+            ]
+          : [{ slot: "task", profileId: settings.defaultTaskRuntimeProfileId }];
+
+  const seenProfileIds = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!candidate.profileId || seenProfileIds.has(candidate.profileId)) continue;
+    seenProfileIds.add(candidate.profileId);
+
+    const profile = findRuntimeProfileById(candidate.profileId);
+    if (!profile) {
+      log.warn(
+        { mode, appDefaultSlot: candidate.slot, runtimeProfileId: candidate.profileId },
+        "App runtime default points to a missing profile",
+      );
+      continue;
+    }
+    if (profile.projectId != null) {
+      log.warn(
+        {
+          mode,
+          appDefaultSlot: candidate.slot,
+          runtimeProfileId: candidate.profileId,
+          ownerProjectId: profile.projectId,
+        },
+        "App runtime default points to a project-scoped profile",
+      );
+      continue;
+    }
+    if (!profile.enabled) {
+      log.warn(
+        { mode, appDefaultSlot: candidate.slot, runtimeProfileId: candidate.profileId },
+        "App runtime default points to a disabled profile",
+      );
+      continue;
+    }
+
+    return profile.id;
+  }
+
+  return null;
+}
+
 export function listProjects(): ProjectRow[] {
   return getDb().select().from(projects).all();
 }
@@ -613,6 +1044,8 @@ export function createProject(input: {
   reviewSidecarMaxBudgetUsd?: number | null;
   parallelEnabled?: boolean;
   defaultTaskRuntimeProfileId?: string | null;
+  defaultPlanRuntimeProfileId?: string | null;
+  defaultReviewRuntimeProfileId?: string | null;
   defaultChatRuntimeProfileId?: string | null;
 }): ProjectRow | undefined {
   const id = crypto.randomUUID();
@@ -621,6 +1054,8 @@ export function createProject(input: {
     {
       projectId: id,
       defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
+      defaultPlanRuntimeProfileId: input.defaultPlanRuntimeProfileId ?? null,
+      defaultReviewRuntimeProfileId: input.defaultReviewRuntimeProfileId ?? null,
       defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
     },
     "Creating project runtime defaults",
@@ -637,6 +1072,8 @@ export function createProject(input: {
       reviewSidecarMaxBudgetUsd: input.reviewSidecarMaxBudgetUsd ?? null,
       parallelEnabled: input.parallelEnabled ?? false,
       defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
+      defaultPlanRuntimeProfileId: input.defaultPlanRuntimeProfileId ?? null,
+      defaultReviewRuntimeProfileId: input.defaultReviewRuntimeProfileId ?? null,
       defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
       createdAt: now,
       updatedAt: now,
@@ -771,6 +1208,56 @@ export function claimTask(taskId: string, coordinatorId: string, lockDurationMs:
         lte(tasks.lockedUntil, nowIso),
       ),
     ))
+    .run();
+
+  return result.changes > 0;
+}
+
+/**
+ * Conditional proactive runtime gate block (CAS).
+ * Applies the block only if the candidate row is still in the expected state
+ * and remains available (unpaused + unlocked) at write time.
+ */
+export function blockTaskForRuntimeGateIfEligible(input: {
+  taskId: string;
+  expectedProjectId?: string | null;
+  expectedStatus: TaskStatus;
+  expectedAutoMode?: boolean;
+  blockedFromStatus: TaskStatus;
+  blockedReason: string;
+  retryAfter: string | null;
+  retryCount: number;
+  snapshot: RuntimeLimitSnapshot | null;
+  persistedAt?: string;
+}): boolean {
+  const nowIso = input.persistedAt ?? new Date().toISOString();
+  const normalizedSnapshot = input.snapshot ? normalizeRuntimeLimitSnapshot(input.snapshot) : null;
+  const conditions = [
+    eq(tasks.id, input.taskId),
+    eq(tasks.status, input.expectedStatus),
+    eq(tasks.paused, false),
+    or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
+  ];
+  if (input.expectedProjectId != null) {
+    conditions.push(eq(tasks.projectId, input.expectedProjectId));
+  }
+  if (input.expectedAutoMode != null) {
+    conditions.push(eq(tasks.autoMode, input.expectedAutoMode));
+  }
+
+  const result = getDb()
+    .update(tasks)
+    .set({
+      status: "blocked_external",
+      blockedFromStatus: input.blockedFromStatus,
+      blockedReason: input.blockedReason,
+      retryAfter: input.retryAfter,
+      retryCount: input.retryCount,
+      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
+      runtimeLimitUpdatedAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .where(and(...conditions))
     .run();
 
   return result.changes > 0;
@@ -1168,6 +1655,10 @@ export interface DbUsageSink {
   record(event: DbUsageEvent): void;
 }
 
+export interface CreateDbUsageSinkOptions {
+  onRecorded?: (event: DbUsageEvent) => void;
+}
+
 /**
  * Insert a `usage_events` row and roll the usage delta into whichever
  * per-entity aggregate counters the event has scope for (task, project,
@@ -1254,11 +1745,23 @@ export function recordUsageEvent(event: DbUsageEvent): void {
  * `recordUsageEvent`. Sink methods are non-throwing: any DB error is logged
  * and swallowed so a broken sink never breaks the caller mid-run.
  */
-export function createDbUsageSink(): DbUsageSink {
+export function createDbUsageSink(options: CreateDbUsageSinkOptions = {}): DbUsageSink {
   return {
     record(event) {
       try {
         recordUsageEvent(event);
+        try {
+          options.onRecorded?.(event);
+        } catch (callbackError) {
+          log.warn(
+            {
+              err: callbackError,
+              runtimeId: event.runtimeId,
+              source: event.context.source,
+            },
+            "Usage sink onRecorded callback failed",
+          );
+        }
       } catch (err) {
         log.error(
           {
@@ -1321,7 +1824,61 @@ export function findTasksByRoadmapAlias(projectId: string, alias: string): TaskR
 
 // ── Runtime Profiles ──────────────────────────────────────────
 
-export function toRuntimeProfileResponse(row: RuntimeProfileRow): RuntimeProfile {
+function findLatestRuntimeProfileUsageByIds(
+  profileIds: string[],
+): Map<string, RuntimeProfileUsageState> {
+  const uniqueProfileIds = Array.from(new Set(profileIds.filter((value) => value.length > 0)));
+  if (uniqueProfileIds.length === 0) {
+    return new Map();
+  }
+
+  const db = getDb();
+  const latestUsageByProfile = db
+    .select({
+      profileId: usageEvents.profileId,
+      latestCreatedAt: max(usageEvents.createdAt).as("latest_created_at"),
+    })
+    .from(usageEvents)
+    .where(and(isNotNull(usageEvents.profileId), inArray(usageEvents.profileId, uniqueProfileIds)))
+    .groupBy(usageEvents.profileId)
+    .as("latest_usage_by_profile");
+
+  const rows = db
+    .select({
+      profileId: usageEvents.profileId,
+      inputTokens: usageEvents.inputTokens,
+      outputTokens: usageEvents.outputTokens,
+      totalTokens: usageEvents.totalTokens,
+      costUsd: usageEvents.costUsd,
+      createdAt: usageEvents.createdAt,
+    })
+    .from(usageEvents)
+    .innerJoin(
+      latestUsageByProfile,
+      and(
+        eq(usageEvents.profileId, latestUsageByProfile.profileId),
+        eq(usageEvents.createdAt, latestUsageByProfile.latestCreatedAt),
+      ),
+    )
+    .all();
+
+  const usageByProfileId = new Map<string, RuntimeProfileUsageState>();
+  for (const row of rows) {
+    if (!row.profileId) continue;
+    if (usageByProfileId.has(row.profileId)) continue;
+    usageByProfileId.set(row.profileId, {
+      lastUsage: toRuntimeProfileUsage(row),
+      lastUsageAt: row.createdAt,
+    });
+  }
+
+  return usageByProfileId;
+}
+
+export function toRuntimeProfileResponse(
+  row: RuntimeProfileRow,
+  usageState: RuntimeProfileUsageState | null = null,
+): RuntimeProfile {
   return {
     id: row.id,
     projectId: row.projectId,
@@ -1335,6 +1892,14 @@ export function toRuntimeProfileResponse(row: RuntimeProfileRow): RuntimeProfile
     headers: parseRuntimeHeaders(row.headersJson),
     options: parseRuntimeObject(row.optionsJson) ?? {},
     enabled: row.enabled,
+    runtimeLimitSnapshot: parseRuntimeLimitSnapshot(
+      row.runtimeLimitSnapshotJson,
+      "runtime_profile",
+      row.id,
+    ),
+    runtimeLimitUpdatedAt: row.runtimeLimitUpdatedAt ?? null,
+    lastUsage: usageState?.lastUsage ?? null,
+    lastUsageAt: usageState?.lastUsageAt ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -1342,6 +1907,13 @@ export function toRuntimeProfileResponse(row: RuntimeProfileRow): RuntimeProfile
 
 export function findRuntimeProfileById(id: string): RuntimeProfileRow | undefined {
   return getDb().select().from(runtimeProfiles).where(eq(runtimeProfiles.id, id)).get();
+}
+
+export function getRuntimeProfileResponseById(id: string): RuntimeProfile | undefined {
+  const row = findRuntimeProfileById(id);
+  if (!row) return undefined;
+  const usageState = findLatestRuntimeProfileUsageByIds([id]).get(id) ?? null;
+  return toRuntimeProfileResponse(row, usageState);
 }
 
 export function listRuntimeProfiles(input: {
@@ -1376,6 +1948,16 @@ export function listRuntimeProfiles(input: {
     .where(where)
     .orderBy(asc(runtimeProfiles.createdAt))
     .all();
+}
+
+export function listRuntimeProfileResponses(input: {
+  projectId?: string;
+  includeGlobal?: boolean;
+  enabledOnly?: boolean;
+} = {}): RuntimeProfile[] {
+  const rows = listRuntimeProfiles(input);
+  const usageByProfileId = findLatestRuntimeProfileUsageByIds(rows.map((row) => row.id));
+  return rows.map((row) => toRuntimeProfileResponse(row, usageByProfileId.get(row.id) ?? null));
 }
 
 export function createRuntimeProfile(input: CreateRuntimeProfileInput): RuntimeProfileRow | undefined {
@@ -1446,9 +2028,101 @@ export function updateRuntimeProfile(
   return findRuntimeProfileById(id);
 }
 
+export function persistRuntimeProfileLimitSnapshot(
+  runtimeProfileId: string,
+  snapshot: RuntimeLimitSnapshot,
+  persistedAt = new Date().toISOString(),
+): RuntimeProfileRow | undefined {
+  const normalizedSnapshot = normalizeRuntimeLimitSnapshot(snapshot);
+  log.info(
+    {
+      runtimeProfileId,
+      status: normalizedSnapshot.status,
+      source: normalizedSnapshot.source,
+      precision: normalizedSnapshot.precision,
+      resetAt: normalizedSnapshot.resetAt ?? null,
+      persistedAt,
+    },
+    "Persisting runtime profile limit snapshot",
+  );
+  getDb()
+    .update(runtimeProfiles)
+    .set({
+      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
+      runtimeLimitUpdatedAt: persistedAt,
+    })
+    .where(eq(runtimeProfiles.id, runtimeProfileId))
+    .run();
+  return findRuntimeProfileById(runtimeProfileId);
+}
+
+export function clearRuntimeProfileLimitSnapshot(
+  runtimeProfileId: string,
+  persistedAt = new Date().toISOString(),
+): RuntimeProfileRow | undefined {
+  log.debug({ runtimeProfileId, persistedAt }, "Clearing runtime profile limit snapshot");
+  getDb()
+    .update(runtimeProfiles)
+    .set({
+      runtimeLimitSnapshotJson: null,
+      runtimeLimitUpdatedAt: persistedAt,
+    })
+    .where(eq(runtimeProfiles.id, runtimeProfileId))
+    .run();
+  return findRuntimeProfileById(runtimeProfileId);
+}
+
 export function deleteRuntimeProfile(id: string): void {
   log.debug({ runtimeProfileId: id }, "Deleting runtime profile");
   getDb().delete(runtimeProfiles).where(eq(runtimeProfiles.id, id)).run();
+}
+
+export function isRuntimeProfileVisibleToProject(input: {
+  projectId: string;
+  runtimeProfileId: string | null;
+}): boolean {
+  if (input.runtimeProfileId == null) {
+    log.debug({ projectId: input.projectId, runtimeProfileId: null }, "Null runtime profile is visible");
+    return true;
+  }
+
+  const profile = findRuntimeProfileById(input.runtimeProfileId);
+  const isVisible =
+    profile != null && (profile.projectId == null || profile.projectId === input.projectId);
+
+  log.debug(
+    {
+      projectId: input.projectId,
+      runtimeProfileId: input.runtimeProfileId,
+      ownerProjectId: profile?.projectId ?? null,
+      isVisible,
+    },
+    "Checked runtime profile visibility for project",
+  );
+
+  return isVisible;
+}
+
+export function isRuntimeProfileEligibleForAppDefaults(runtimeProfileId: string | null): boolean {
+  if (runtimeProfileId == null) {
+    log.debug({ runtimeProfileId: null }, "Null runtime profile is eligible for app defaults");
+    return true;
+  }
+
+  const profile = findRuntimeProfileById(runtimeProfileId);
+  const isEligible = profile != null && profile.projectId == null && profile.enabled;
+
+  log.debug(
+    {
+      runtimeProfileId,
+      ownerProjectId: profile?.projectId ?? null,
+      enabled: profile?.enabled ?? null,
+      isEligible,
+    },
+    "Checked runtime profile eligibility for app defaults",
+  );
+
+  return isEligible;
 }
 
 export function updateProjectRuntimeDefaults(
@@ -1529,6 +2203,106 @@ export function updateChatSessionRuntime(
   return findChatSessionById(sessionId);
 }
 
+export interface RuntimeLimitGateDecision {
+  blocked: boolean;
+  reason: "none" | "provider_blocked" | "exact_threshold";
+  runtimeProfileId: string | null;
+  snapshot: RuntimeLimitSnapshot | null;
+  futureHint: RuntimeLimitFutureHint;
+  violatedWindow: RuntimeLimitWindow | null;
+  signature: string | null;
+}
+
+export function evaluateRuntimeLimitGate(
+  profile: RuntimeProfile | null | undefined,
+  nowMs = Date.now(),
+): RuntimeLimitGateDecision {
+  const snapshot = profile?.runtimeLimitSnapshot ?? null;
+  const runtimeProfileId = profile?.id ?? null;
+  if (!snapshot) {
+    return {
+      blocked: false,
+      reason: "none",
+      runtimeProfileId,
+      snapshot: null,
+      futureHint: resolveRuntimeLimitFutureHint(null, { nowMs }),
+      violatedWindow: null,
+      signature: null,
+    };
+  }
+
+  const signature = buildRuntimeLimitSignature(snapshot);
+  const providerBlockedHint = resolveRuntimeLimitFutureHint(snapshot, { nowMs });
+
+  if (snapshot.status === "blocked" && providerBlockedHint.source === "none") {
+    log.debug(
+      {
+        runtimeProfileId,
+        status: snapshot.status,
+        precision: snapshot.precision,
+        checkedAt: snapshot.checkedAt,
+        signature,
+      },
+      "Skipping proactive runtime gate because the persisted snapshot has no reset hint",
+    );
+  }
+  if (snapshot.status === "blocked" && providerBlockedHint.isFuture) {
+    return {
+      blocked: true,
+      reason: "provider_blocked",
+      runtimeProfileId,
+      snapshot,
+      futureHint: providerBlockedHint,
+      violatedWindow: null,
+      signature,
+    };
+  }
+
+  const violatedWindow = selectViolatedWindowForExactThreshold(snapshot, null, nowMs);
+  const exactThresholdReached =
+    snapshot.precision === "exact" && snapshot.status === "warning" && violatedWindow != null;
+  const exactThresholdHint = resolveRuntimeLimitFutureHint(snapshot, {
+    nowMs,
+    preferredWindow: violatedWindow,
+    windowFirst: true,
+  });
+
+  if (exactThresholdReached && exactThresholdHint.source === "none") {
+    log.debug(
+      {
+        runtimeProfileId,
+        status: snapshot.status,
+        precision: snapshot.precision,
+        checkedAt: snapshot.checkedAt,
+        signature,
+      },
+      "Skipping proactive exact-threshold gate because the violated window has no reset hint",
+    );
+  }
+
+  if (exactThresholdReached && exactThresholdHint.isFuture) {
+    return {
+      blocked: true,
+      reason: "exact_threshold",
+      runtimeProfileId,
+      snapshot,
+      futureHint: exactThresholdHint,
+      violatedWindow,
+      signature,
+    };
+  }
+
+  return {
+    blocked: false,
+    reason: "none",
+    runtimeProfileId,
+    snapshot,
+    futureHint: providerBlockedHint,
+    violatedWindow: violatedWindow ?? null,
+    signature,
+  };
+}
+
 export function resolveEffectiveRuntimeProfile(input: {
   taskId?: string;
   projectId?: string;
@@ -1590,7 +2364,10 @@ export function resolveEffectiveRuntimeProfile(input: {
 
     return {
       source: candidate.source,
-      profile: toRuntimeProfileResponse(profile),
+      profile: toRuntimeProfileResponse(
+        profile,
+        findLatestRuntimeProfileUsageByIds([profile.id]).get(profile.id) ?? null,
+      ),
       taskRuntimeProfileId,
       projectRuntimeProfileId,
       systemRuntimeProfileId,

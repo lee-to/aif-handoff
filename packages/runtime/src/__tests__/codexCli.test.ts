@@ -4,9 +4,14 @@ import { getCliSpawnInvocation } from "./helpers/cliSpawn.js";
 import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 const spawnMock = vi.fn();
+const mockGetCodexSessionLimitSnapshot = vi.fn();
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
+}));
+
+vi.mock("../adapters/codex/sessions.js", () => ({
+  getCodexSessionLimitSnapshot: (...args: unknown[]) => mockGetCodexSessionLimitSnapshot(...args),
 }));
 
 const { runCodexCli } = await import("../adapters/codex/cli.js");
@@ -56,6 +61,8 @@ function createRunInput(overrides: Record<string, unknown> = {}) {
 describe("codex cli transport", () => {
   beforeEach(() => {
     spawnMock.mockReset();
+    mockGetCodexSessionLimitSnapshot.mockReset();
+    mockGetCodexSessionLimitSnapshot.mockResolvedValue(null);
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });
@@ -699,6 +706,81 @@ describe("codex cli transport", () => {
       .map((c) => c[0] as { type: string })
       .filter((e) => e.type === "system:init");
     expect(initEvents).toHaveLength(1);
+  });
+
+  it("appends a runtime:limit event when the Codex session store reports quota windows", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+    mockGetCodexSessionLimitSnapshot.mockResolvedValue({
+      source: "sdk_event",
+      status: "warning",
+      precision: "exact",
+      checkedAt: "2026-04-18T05:00:00.000Z",
+      providerId: "openai",
+      runtimeId: "codex",
+      profileId: "profile-1",
+      primaryScope: "time",
+      resetAt: "2099-04-18T10:00:00.000Z",
+      retryAfterSeconds: null,
+      warningThreshold: 10,
+      windows: [
+        {
+          scope: "time",
+          name: "5h",
+          percentUsed: 92,
+          percentRemaining: 8,
+          resetAt: "2099-04-18T10:00:00.000Z",
+          warningThreshold: 10,
+        },
+      ],
+      providerMeta: {
+        limitId: "codex",
+        limitName: null,
+        planType: "pro",
+      },
+    });
+
+    const onEvent = vi.fn();
+    const runPromise = runCodexCli(createRunInput({ execution: { onEvent } }));
+
+    child.stdout.emit(
+      "data",
+      JSON.stringify({
+        type: "thread.started",
+        thread_id: "thread-quota-1",
+      }) + "\n",
+    );
+    child.stdout.emit(
+      "data",
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 50, output_tokens: 10 },
+      }) + "\n",
+    );
+    child.emit("close", 0);
+
+    const result = await runPromise;
+    expect(mockGetCodexSessionLimitSnapshot).toHaveBeenCalledWith({
+      sessionId: "thread-quota-1",
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+    });
+    expect(result.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "runtime:limit",
+          message: "Runtime limit state changed: warning",
+        }),
+      ]),
+    );
+    expect(result.events?.filter((event) => event.type === "runtime:limit")).toHaveLength(1);
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "runtime:limit",
+        message: "Runtime limit state changed: warning",
+      }),
+    );
   });
 
   it("emits tool:use and calls onToolUse for command_execution items", async () => {

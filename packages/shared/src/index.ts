@@ -1,6 +1,7 @@
 // Schema
 export {
   projects,
+  appSettings,
   tasks,
   taskComments,
   runtimeProfiles,
@@ -11,6 +12,8 @@ export {
 export type {
   ProjectRow,
   NewProjectRow,
+  AppSettingsRow,
+  NewAppSettingsRow,
   TaskRow,
   NewTaskRow,
   TaskCommentRow,
@@ -37,6 +40,8 @@ export {
   type AutoReviewState,
   type Project,
   type CreateProjectInput,
+  type AppSettings,
+  type UpdateAppSettingsInput,
   type Task,
   type CreateTaskInput,
   type UpdateTaskInput,
@@ -60,11 +65,19 @@ export {
   isRuntimeTransport,
   RUNTIME_TRANSPORTS,
   RuntimeTransport,
+  type RuntimeProfileUsage,
   type RuntimeProfile,
   type CreateRuntimeProfileInput,
   type UpdateRuntimeProfileInput,
   type EffectiveRuntimeProfileSource,
   type EffectiveRuntimeProfileSelection,
+  RuntimeLimitSource,
+  RuntimeLimitStatus,
+  RuntimeLimitPrecision,
+  RuntimeLimitScope,
+  type RuntimeLimitWindow,
+  type RuntimeLimitSnapshot,
+  type RuntimeLimitEventPayload,
   type ChatSessionSource,
   type ChatSession,
   type CreateChatSessionInput,
@@ -76,7 +89,7 @@ export {
 export { getDb, createTestDb, closeDb } from "./db.js";
 
 // Environment
-export { getEnv, validateEnv } from "./env.js";
+export { getEnv, validateEnv, resetEnvCache } from "./env.js";
 export type { Env } from "./env.js";
 
 // Constants
@@ -151,3 +164,21 @@ export type { PlannerMode, PlannerFlagDefaults } from "./plannerDefaults.js";
 // Utilities
 export { withTimeout } from "./withTimeout.js";
 export { parseMcpPortSetting, type ParsedMcpPortSetting } from "./mcpPort.js";
+
+// Runtime-limit shared helpers
+export {
+  buildRuntimeLimitSignature,
+  mapSafeRuntimeErrorReason,
+  normalizeRuntimeLimitSnapshot,
+  redactProviderText,
+  redactProviderTextForLogs,
+  resolveRuntimeLimitFutureHint,
+  sanitizeRuntimeLimitSnapshotForExposure,
+  sanitizeProviderMeta,
+  selectViolatedWindowForExactThreshold,
+  type RuntimeLimitFutureHint,
+  type RuntimeLimitFutureHintSource,
+  type RuntimeLimitSnapshotExposure,
+  type SafeRuntimeErrorCategory,
+  type SafeRuntimeErrorReason,
+} from "./runtimeLimitUtils.js";

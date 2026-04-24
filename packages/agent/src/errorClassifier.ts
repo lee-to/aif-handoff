@@ -24,10 +24,21 @@ function errorText(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).toLowerCase();
 }
 
+export function findRuntimeExecutionError(err: unknown): RuntimeExecutionError | null {
+  if (err instanceof RuntimeExecutionError) {
+    return err;
+  }
+  if (err instanceof Error && "cause" in err && err.cause) {
+    return findRuntimeExecutionError(err.cause);
+  }
+  return null;
+}
+
 export function isExternalFailure(err: unknown): boolean {
   // Primary: structured category from runtime adapter classification
-  if (err instanceof RuntimeExecutionError) {
-    return isExternalFailureCategory(err.category);
+  const runtimeError = findRuntimeExecutionError(err);
+  if (runtimeError) {
+    return isExternalFailureCategory(runtimeError.category);
   }
 
   // Secondary: capability errors (RuntimeCapabilityError, not RuntimeExecutionError)

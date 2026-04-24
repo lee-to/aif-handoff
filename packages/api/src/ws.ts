@@ -85,3 +85,25 @@ export function broadcast(event: WsEvent): void {
     "Broadcast WS event",
   );
 }
+
+/**
+ * Terminate all open WebSocket connections. Called on graceful shutdown so
+ * the HTTP server can `close()` without waiting on long-lived WS clients
+ * (which otherwise keep the event loop alive and block Ctrl+C).
+ */
+export function closeAllWebSocketClients(): void {
+  const count = clients.size;
+  for (const client of clients) {
+    try {
+      client.terminate();
+    } catch {
+      // Best-effort — socket may already be half-closed.
+    }
+  }
+  clients.clear();
+  clientMap.clear();
+  socketToClientId.clear();
+  if (count > 0) {
+    log.info({ closed: count }, "Terminated all WebSocket clients on shutdown");
+  }
+}

@@ -6,3 +6,5 @@ data/
 *.sqlite
 .ai-factory/
 docs-html/
+playwright-report/
+test-results/

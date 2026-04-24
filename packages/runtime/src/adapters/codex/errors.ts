@@ -1,5 +1,6 @@
 import {
   RuntimeExecutionError,
+  type RuntimeExecutionErrorMetadata,
   classifyByHttpStatus,
   classifyByMessageFallback,
   type RuntimeErrorCategory,
@@ -61,6 +62,30 @@ function classify(
   return { adapterCode: CATEGORY_TO_ADAPTER_CODE[category], category };
 }
 
+function mergeMetadata(
+  error: unknown,
+  httpStatus?: number,
+  metadata: RuntimeExecutionErrorMetadata = {},
+): RuntimeExecutionErrorMetadata {
+  const baseMetadata: RuntimeExecutionErrorMetadata =
+    error instanceof RuntimeExecutionError
+      ? {
+          httpStatus: error.httpStatus,
+          resetAt: error.resetAt,
+          retryAfterMs: error.retryAfterMs,
+          retryAfterSeconds: error.retryAfterSeconds,
+          limitSnapshot: error.limitSnapshot,
+          providerMeta: error.providerMeta,
+        }
+      : {};
+
+  return {
+    ...baseMetadata,
+    ...metadata,
+    httpStatus: httpStatus ?? metadata.httpStatus ?? baseMetadata.httpStatus,
+  };
+}
+
 export class CodexRuntimeAdapterError extends RuntimeExecutionError {
   public readonly adapterCode: string;
 
@@ -69,8 +94,9 @@ export class CodexRuntimeAdapterError extends RuntimeExecutionError {
     adapterCode: string,
     category: RuntimeErrorCategory,
     cause?: unknown,
+    metadata: RuntimeExecutionErrorMetadata = {},
   ) {
-    super(message, cause, category);
+    super(message, cause, category, { ...metadata, adapterCode });
     this.name = "CodexRuntimeAdapterError";
     this.adapterCode = adapterCode;
   }
@@ -79,11 +105,24 @@ export class CodexRuntimeAdapterError extends RuntimeExecutionError {
 export function classifyCodexRuntimeError(
   error: unknown,
   httpStatus?: number,
+  metadata: RuntimeExecutionErrorMetadata = {},
 ): CodexRuntimeAdapterError {
   if (error instanceof CodexRuntimeAdapterError) {
     return error;
   }
   const message = messageFromUnknown(error);
-  const { adapterCode, category } = classify(message, httpStatus);
-  return new CodexRuntimeAdapterError(message, adapterCode, category, error);
+  const mergedMetadata = mergeMetadata(error, httpStatus, metadata);
+
+  if (error instanceof RuntimeExecutionError) {
+    return new CodexRuntimeAdapterError(
+      message,
+      CATEGORY_TO_ADAPTER_CODE[error.category],
+      error.category,
+      error,
+      mergedMetadata,
+    );
+  }
+
+  const { adapterCode, category } = classify(message, mergedMetadata.httpStatus);
+  return new CodexRuntimeAdapterError(message, adapterCode, category, error, mergedMetadata);
 }

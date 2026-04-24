@@ -17,10 +17,10 @@ type StartupPhase = "before-ready" | "after-ready";
 
 function formatStartupErrorMessage(error: NodeJS.ErrnoException, port: number): string {
   if (error.code === "EADDRINUSE") {
-    return `[FIX] Failed to start API server: port ${port} is already in use. Stop the existing process or set PORT to a different value.`;
+    return `Failed to start API server: port ${port} is already in use. Stop the existing process or set PORT to a different value.`;
   }
 
-  return "[FIX] Failed to start API server.";
+  return "Failed to start API server.";
 }
 
 export function startServer({
@@ -45,7 +45,7 @@ export function startServer({
       return;
     }
 
-    logger.error({ error, hostname, port, startupPhase }, "[FIX] API server error.");
+    logger.error({ error, hostname, port, startupPhase }, "API server error.");
   });
 
   if (injectWebSocket) {

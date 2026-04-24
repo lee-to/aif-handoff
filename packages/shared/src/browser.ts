@@ -11,6 +11,8 @@ export {
   type AutoReviewState,
   type Project,
   type CreateProjectInput,
+  type AppSettings,
+  type UpdateAppSettingsInput,
   type Task,
   type CreateTaskInput,
   type UpdateTaskInput,
@@ -26,6 +28,7 @@ export {
   type RoadmapCompletePayload,
   type RoadmapErrorPayload,
   type TaskCommitPayload,
+  type RuntimeLimitBroadcastPayload,
   type ChatMessage,
   type ChatMessageAttachment,
   type ChatAttachment,
@@ -39,11 +42,19 @@ export {
   RUNTIME_TRANSPORTS,
   RuntimeTransport,
   type RuntimeDescriptor,
+  type RuntimeProfileUsage,
   type RuntimeProfile,
   type CreateRuntimeProfileInput,
   type UpdateRuntimeProfileInput,
   type EffectiveRuntimeProfileSource,
   type EffectiveRuntimeProfileSelection,
+  RuntimeLimitSource,
+  RuntimeLimitStatus,
+  RuntimeLimitPrecision,
+  RuntimeLimitScope,
+  type RuntimeLimitWindow,
+  type RuntimeLimitSnapshot,
+  type RuntimeLimitEventPayload,
   type ChatSessionSource,
   type ChatSession,
   type CreateChatSessionInput,
@@ -54,6 +65,21 @@ export {
 export { STATUS_CONFIG, ORDERED_STATUSES } from "./constants.js";
 export { HUMAN_ACTIONS_BY_STATUS } from "./stateMachine.js";
 export { withTimeout } from "./withTimeout.js";
+export {
+  buildRuntimeLimitSignature,
+  normalizeRuntimeLimitSnapshot,
+  redactProviderText,
+  redactProviderTextForLogs,
+  resolveRuntimeLimitFutureHint,
+  sanitizeRuntimeLimitSnapshotForExposure,
+  sanitizeProviderMeta,
+  selectViolatedWindowForExactThreshold,
+  type RuntimeLimitFutureHint,
+  type RuntimeLimitFutureHintSource,
+  type RuntimeLimitSnapshotExposure,
+  type SafeRuntimeErrorCategory,
+  type SafeRuntimeErrorReason,
+} from "./runtimeLimitUtils.js";
 
 // Plan path utilities (pure functions, browser-safe — separate module with no Node.js deps)
 export { slugify, generatePlanPath } from "./planPath.js";

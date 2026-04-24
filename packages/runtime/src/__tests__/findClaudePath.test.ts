@@ -18,7 +18,7 @@ const originalEnv = { ...process.env };
 
 async function loadFindClaudePath() {
   const mod = await import("../adapters/claude/findPath.js");
-  return mod.findClaudePath;
+  return mod;
 }
 
 function getPlatformCandidates(env: NodeJS.ProcessEnv): string[] {
@@ -60,7 +60,7 @@ describe("findClaudePath", () => {
     const [firstCandidate] = getPlatformCandidates(process.env);
     existsSyncMock.mockImplementation((path) => path === firstCandidate);
 
-    const findClaudePath = await loadFindClaudePath();
+    const { findClaudePath } = await loadFindClaudePath();
     expect(findClaudePath()).toBe(firstCandidate);
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
@@ -71,7 +71,7 @@ describe("findClaudePath", () => {
     existsSyncMock.mockImplementation((path) => path === discovered);
     execFileSyncMock.mockReturnValue(`"${discovered}"\n`);
 
-    const findClaudePath = await loadFindClaudePath();
+    const { findClaudePath } = await loadFindClaudePath();
     expect(findClaudePath()).toBe(discovered);
   });
 
@@ -82,7 +82,39 @@ describe("findClaudePath", () => {
       throw new Error("not found");
     });
 
-    const findClaudePath = await loadFindClaudePath();
+    const { findClaudePath } = await loadFindClaudePath();
     expect(findClaudePath()).toBeUndefined();
+  });
+
+  it("resolves Windows wrapper path to native Claude executable", async () => {
+    const wrapperPath = "C:\\nvm4w\\nodejs\\claude";
+    const nativeExecutablePath =
+      "C:\\nvm4w\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe";
+    existsSyncMock.mockImplementation((path) => path === nativeExecutablePath);
+
+    const { resolveClaudeSdkExecutablePath } = await loadFindClaudePath();
+    expect(resolveClaudeSdkExecutablePath(wrapperPath, "win32")).toBe(nativeExecutablePath);
+  });
+
+  it("drops Windows wrapper path when native Claude executable is missing", async () => {
+    existsSyncMock.mockReturnValue(false);
+
+    const { resolveClaudeSdkExecutablePath } = await loadFindClaudePath();
+    expect(
+      resolveClaudeSdkExecutablePath("C:\\nvm4w\\nodejs\\claude.cmd", "win32"),
+    ).toBeUndefined();
+  });
+
+  it("keeps explicit native Claude executable paths unchanged", async () => {
+    const nativeExecutablePath =
+      "C:\\nvm4w\\nodejs\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe";
+
+    const { resolveClaudeSdkExecutablePath } = await loadFindClaudePath();
+    expect(resolveClaudeSdkExecutablePath(nativeExecutablePath, "win32")).toBe(
+      nativeExecutablePath,
+    );
+    expect(resolveClaudeSdkExecutablePath("/usr/local/bin/claude", "linux")).toBe(
+      "/usr/local/bin/claude",
+    );
   });
 });

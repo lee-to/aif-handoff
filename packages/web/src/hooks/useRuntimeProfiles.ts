@@ -1,8 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { CreateRuntimeProfileInput, UpdateRuntimeProfileInput } from "@aif/shared/browser";
 import { api } from "@/lib/api";
 
-export function useRuntimeProfiles(projectId: string | null, includeGlobal = true) {
+export function useRuntimeProfiles(projectId: string | null, includeGlobal = true, enabled = true) {
   return useQuery({
     queryKey: ["runtimeProfiles", projectId, includeGlobal],
     queryFn: () =>
@@ -11,16 +11,62 @@ export function useRuntimeProfiles(projectId: string | null, includeGlobal = tru
         includeGlobal,
         enabledOnly: false,
       }),
+    enabled,
     staleTime: 30_000,
   });
 }
 
-export function useRuntimes() {
+export function useProjectRuntimeProfiles(projectId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["runtimeProfiles", "project", projectId],
+    queryFn: () =>
+      api.listRuntimeProfiles({
+        projectId: projectId!,
+        enabledOnly: false,
+        scope: "project",
+      }),
+    enabled: Boolean(projectId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useGlobalRuntimeProfiles(enabled = true) {
+  return useQuery({
+    queryKey: ["runtimeProfiles", "global"],
+    queryFn: () =>
+      api.listRuntimeProfiles({
+        enabledOnly: false,
+        scope: "global",
+      }),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useRuntimes(enabled = true) {
   return useQuery({
     queryKey: ["runtimes"],
     queryFn: api.listRuntimes,
+    enabled,
     staleTime: 60_000,
   });
+}
+
+export function useAppRuntimeDefaults(enabled = true) {
+  return useQuery({
+    queryKey: ["appRuntimeDefaults"],
+    queryFn: api.getAppRuntimeDefaults,
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+function invalidateRuntimeQueries(queryClient: QueryClient) {
+  queryClient.invalidateQueries({ queryKey: ["runtimeProfiles"] });
+  queryClient.invalidateQueries({ queryKey: ["appRuntimeDefaults"] });
+  queryClient.invalidateQueries({ queryKey: ["settings"] });
+  queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
+  queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
 }
 
 export function useCreateRuntimeProfile() {
@@ -28,7 +74,7 @@ export function useCreateRuntimeProfile() {
   return useMutation({
     mutationFn: (input: CreateRuntimeProfileInput) => api.createRuntimeProfile(input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runtimeProfiles"] });
+      invalidateRuntimeQueries(queryClient);
     },
   });
 }
@@ -39,9 +85,7 @@ export function useUpdateRuntimeProfile() {
     mutationFn: ({ id, input }: { id: string; input: UpdateRuntimeProfileInput }) =>
       api.updateRuntimeProfile(id, input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runtimeProfiles"] });
-      queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
-      queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
+      invalidateRuntimeQueries(queryClient);
     },
   });
 }
@@ -51,9 +95,17 @@ export function useDeleteRuntimeProfile() {
   return useMutation({
     mutationFn: (id: string) => api.deleteRuntimeProfile(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runtimeProfiles"] });
-      queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
-      queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
+      invalidateRuntimeQueries(queryClient);
+    },
+  });
+}
+
+export function useUpdateAppRuntimeDefaults() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: api.updateAppRuntimeDefaults,
+    onSuccess: () => {
+      invalidateRuntimeQueries(queryClient);
     },
   });
 }

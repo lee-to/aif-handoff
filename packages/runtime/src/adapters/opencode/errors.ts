@@ -1,5 +1,6 @@
 import {
   RuntimeExecutionError,
+  type RuntimeExecutionErrorMetadata,
   classifyByHttpStatus,
   classifyByMessageFallback,
   type RuntimeErrorCategory,
@@ -50,6 +51,30 @@ function classify(
   return { adapterCode: CATEGORY_TO_ADAPTER_CODE[category], category };
 }
 
+function mergeMetadata(
+  error: unknown,
+  httpStatus?: number,
+  metadata: RuntimeExecutionErrorMetadata = {},
+): RuntimeExecutionErrorMetadata {
+  const baseMetadata: RuntimeExecutionErrorMetadata =
+    error instanceof RuntimeExecutionError
+      ? {
+          httpStatus: error.httpStatus,
+          resetAt: error.resetAt,
+          retryAfterMs: error.retryAfterMs,
+          retryAfterSeconds: error.retryAfterSeconds,
+          limitSnapshot: error.limitSnapshot,
+          providerMeta: error.providerMeta,
+        }
+      : {};
+
+  return {
+    ...baseMetadata,
+    ...metadata,
+    httpStatus: httpStatus ?? metadata.httpStatus ?? baseMetadata.httpStatus,
+  };
+}
+
 export class OpenCodeRuntimeAdapterError extends RuntimeExecutionError {
   public readonly adapterCode: string;
   public readonly httpStatus?: number;
@@ -59,23 +84,36 @@ export class OpenCodeRuntimeAdapterError extends RuntimeExecutionError {
     adapterCode: string,
     category: RuntimeErrorCategory,
     cause?: unknown,
-    httpStatus?: number,
+    metadata: RuntimeExecutionErrorMetadata = {},
   ) {
-    super(message, cause, category);
+    super(message, cause, category, { ...metadata, adapterCode });
     this.name = "OpenCodeRuntimeAdapterError";
     this.adapterCode = adapterCode;
-    this.httpStatus = httpStatus;
+    this.httpStatus = metadata.httpStatus;
   }
 }
 
 export function classifyOpenCodeRuntimeError(
   error: unknown,
   httpStatus?: number,
+  metadata: RuntimeExecutionErrorMetadata = {},
 ): OpenCodeRuntimeAdapterError {
   if (error instanceof OpenCodeRuntimeAdapterError) {
     return error;
   }
   const message = messageFromUnknown(error);
-  const { adapterCode, category } = classify(message, httpStatus);
-  return new OpenCodeRuntimeAdapterError(message, adapterCode, category, error, httpStatus);
+  const mergedMetadata = mergeMetadata(error, httpStatus, metadata);
+
+  if (error instanceof RuntimeExecutionError) {
+    return new OpenCodeRuntimeAdapterError(
+      message,
+      CATEGORY_TO_ADAPTER_CODE[error.category],
+      error.category,
+      error,
+      mergedMetadata,
+    );
+  }
+
+  const { adapterCode, category } = classify(message, mergedMetadata.httpStatus);
+  return new OpenCodeRuntimeAdapterError(message, adapterCode, category, error, mergedMetadata);
 }

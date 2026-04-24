@@ -114,6 +114,16 @@ describe("releaseDueBlockedTasks", () => {
       blockedFromStatus: "planning",
       retryAfter: pastTime,
       retryCount: 1,
+      runtimeLimitSnapshotJson: JSON.stringify({
+        source: "sdk_event",
+        status: "blocked",
+        precision: "heuristic",
+        checkedAt: "2026-04-17T00:00:00.000Z",
+        providerId: "anthropic",
+        runtimeId: "claude",
+        profileId: "profile-1",
+        windows: [{ scope: "time" }],
+      }),
     });
 
     releaseDueBlockedTasks();
@@ -122,6 +132,7 @@ describe("releaseDueBlockedTasks", () => {
     expect(task?.status).toBe("planning");
     expect(task?.blockedReason).toBeNull();
     expect(task?.retryCount).toBe(0);
+    expect(task?.runtimeLimitSnapshotJson).toBeNull();
   });
 
   it("does not release blocked task when retryAfter is in the future", () => {

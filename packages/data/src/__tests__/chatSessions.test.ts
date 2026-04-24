@@ -53,6 +53,18 @@ describe("chat sessions data layer", () => {
       expect(session).toBeDefined();
       expect(session!.title).toBe("My Chat");
     });
+
+    it("persists runtime profile and session metadata from the create payload", () => {
+      const session = createChatSession({
+        projectId: "proj-1",
+        runtimeProfileId: "runtime-profile-1",
+        runtimeSessionId: "runtime-session-1",
+      });
+
+      expect(session).toBeDefined();
+      expect(session!.runtimeProfileId).toBe("runtime-profile-1");
+      expect(session!.runtimeSessionId).toBe("runtime-session-1");
+    });
   });
 
   describe("findChatSessionById", () => {

@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeLimitSnapshot } from "@aif/runtime";
+import { resetEnvCache } from "@aif/shared";
+
+// Flag defaults to false (opt-in). These tests exercise the runtime limit
+// observation + broadcast pipeline which is fully gated, so enable it.
+process.env.AIF_USAGE_LIMITS_ENABLED = "true";
+resetEnvCache();
 
 const mockLog = {
   debug: vi.fn(),
@@ -12,12 +19,28 @@ const mockGetEnv = vi.fn(() => ({
   AIF_RUNTIME_MODULES: [] as string[],
   AIF_DEFAULT_RUNTIME_ID: "claude",
   AIF_DEFAULT_PROVIDER_ID: "anthropic",
+  AIF_USAGE_LIMITS_ENABLED: true,
   API_RUNTIME_START_TIMEOUT_MS: 60_000,
   API_RUNTIME_RUN_TIMEOUT_MS: 120_000,
 }));
 
 const mockCheckRuntimeCapabilities = vi.fn(() => ({ ok: true, missing: [] as string[] }));
-const mockCreateRuntimeMemoryCache = vi.fn((options: unknown) => ({ options }));
+const mockCreateRuntimeMemoryCache = vi.fn((options: unknown) => {
+  const store = new Map<string, unknown>();
+  return {
+    options,
+    get: (key: string) => (store.has(key) ? (store.get(key) as string) : null),
+    set: (key: string, value: unknown) => {
+      store.set(key, value);
+    },
+    delete: (key: string) => {
+      store.delete(key);
+    },
+    clear: () => {
+      store.clear();
+    },
+  };
+});
 const mockCreateRuntimeModelDiscoveryService = vi.fn(() => ({ kind: "discovery" }));
 const mockRegistryResolveRuntime = vi.fn();
 const mockRegistryRegisterRuntimeModule = vi.fn();
@@ -44,39 +67,61 @@ const mockCreateRuntimeWorkflowSpec = vi.fn(
 );
 const mockRedactResolvedRuntimeProfile = vi.fn((profile: Record<string, unknown>) => profile);
 const mockResolveRuntimeProfile = vi.fn();
+const mockNormalizeRuntimeLimitSnapshot = vi.fn((snapshot: unknown) => snapshot);
+const mockPersistRuntimeProfileLimitSnapshot = vi.fn();
+const mockClearRuntimeProfileLimitSnapshot = vi.fn();
+const mockBroadcast = vi.fn();
 
 const mockFindProjectById = vi.fn();
 const mockFindRuntimeProfileById = vi.fn();
 const mockFindTaskById = vi.fn();
+const mockGetAppDefaultRuntimeProfileId = vi.fn();
 const mockResolveEffectiveRuntimeProfile = vi.fn();
 const mockToRuntimeProfileResponse = vi.fn((row: unknown) => row);
 
-vi.mock("@aif/shared", () => ({
-  logger: vi.fn(() => mockLog),
-  getEnv: () => mockGetEnv(),
-}));
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  return {
+    ...actual,
+    logger: vi.fn(() => mockLog),
+    getEnv: () => mockGetEnv(),
+  };
+});
 
-vi.mock("@aif/runtime", () => ({
-  bootstrapRuntimeRegistry: mockBootstrapRuntimeRegistry,
-  checkRuntimeCapabilities: mockCheckRuntimeCapabilities,
-  createRuntimeMemoryCache: mockCreateRuntimeMemoryCache,
-  createRuntimeModelDiscoveryService: mockCreateRuntimeModelDiscoveryService,
-  createRuntimeWorkflowSpec: mockCreateRuntimeWorkflowSpec,
-  redactResolvedRuntimeProfile: mockRedactResolvedRuntimeProfile,
-  resolveAdapterCapabilities: (adapter: { descriptor: { capabilities: unknown } }) =>
-    adapter.descriptor.capabilities,
-  resolveRuntimeProfile: mockResolveRuntimeProfile,
-  RUNTIME_TRUST_TOKEN: Symbol.for("aif.runtime.trust"),
-}));
+vi.mock("@aif/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/runtime")>();
+  return {
+    ...actual,
+    bootstrapRuntimeRegistry: mockBootstrapRuntimeRegistry,
+    checkRuntimeCapabilities: mockCheckRuntimeCapabilities,
+    createRuntimeMemoryCache: mockCreateRuntimeMemoryCache,
+    createRuntimeModelDiscoveryService: mockCreateRuntimeModelDiscoveryService,
+    createRuntimeWorkflowSpec: mockCreateRuntimeWorkflowSpec,
+    normalizeRuntimeLimitSnapshot: mockNormalizeRuntimeLimitSnapshot,
+    redactResolvedRuntimeProfile: mockRedactResolvedRuntimeProfile,
+    resolveAdapterCapabilities: (adapter: { descriptor: { capabilities: unknown } }) =>
+      adapter.descriptor.capabilities,
+    resolveRuntimeProfile: mockResolveRuntimeProfile,
+  };
+});
 
 vi.mock("@aif/data", () => ({
+  clearRuntimeProfileLimitSnapshot: mockClearRuntimeProfileLimitSnapshot,
   findProjectById: mockFindProjectById,
   findRuntimeProfileById: mockFindRuntimeProfileById,
   findTaskById: mockFindTaskById,
+  persistRuntimeProfileLimitSnapshot: mockPersistRuntimeProfileLimitSnapshot,
+  getAppDefaultRuntimeProfileId: mockGetAppDefaultRuntimeProfileId,
   resolveEffectiveRuntimeProfile: mockResolveEffectiveRuntimeProfile,
   toRuntimeProfileResponse: mockToRuntimeProfileResponse,
   createDbUsageSink: () => ({ record: vi.fn() }),
 }));
+
+vi.mock("../ws.js", () => ({
+  broadcast: (...args: unknown[]) => mockBroadcast(...args),
+}));
+
+const { RuntimeExecutionError } = await import("@aif/runtime");
 
 function createAdapter() {
   return {
@@ -116,6 +161,33 @@ function createResolvedProfile(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createLimitSnapshot(overrides: Partial<RuntimeLimitSnapshot> = {}): RuntimeLimitSnapshot {
+  return {
+    source: "sdk_event",
+    status: "warning",
+    precision: "heuristic",
+    checkedAt: "2026-04-17T00:00:00.000Z",
+    providerId: "anthropic",
+    runtimeId: "claude",
+    profileId: "profile-1",
+    primaryScope: "time",
+    resetAt: "2026-04-17T01:00:00.000Z",
+    retryAfterSeconds: null,
+    warningThreshold: null,
+    windows: [
+      {
+        scope: "time",
+        name: "five_hour",
+        percentUsed: 96,
+        percentRemaining: 4,
+        resetAt: "2026-04-17T01:00:00.000Z",
+      },
+    ],
+    providerMeta: { status: "allowed_warning" },
+    ...overrides,
+  };
+}
+
 async function loadRuntimeService() {
   return import("../services/runtime.js");
 }
@@ -129,6 +201,7 @@ describe("runtime service", () => {
     mockRegistryResolveRuntime.mockReturnValue(adapter);
 
     mockFindProjectById.mockReturnValue({ id: "proj-1", rootPath: "/tmp/project" });
+    mockGetAppDefaultRuntimeProfileId.mockReturnValue(null);
     mockResolveEffectiveRuntimeProfile.mockReturnValue({
       source: "project_default",
       profile: {
@@ -145,11 +218,15 @@ describe("runtime service", () => {
       providerId: "anthropic",
     });
     mockResolveRuntimeProfile.mockReturnValue(createResolvedProfile());
+    mockPersistRuntimeProfileLimitSnapshot.mockReset();
+    mockClearRuntimeProfileLimitSnapshot.mockReset();
+    mockBroadcast.mockReset();
     mockGetEnv.mockReturnValue({
       AGENT_BYPASS_PERMISSIONS: false,
       AIF_RUNTIME_MODULES: [],
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
+      AIF_USAGE_LIMITS_ENABLED: true,
       API_RUNTIME_START_TIMEOUT_MS: 60_000,
       API_RUNTIME_RUN_TIMEOUT_MS: 120_000,
     });
@@ -173,6 +250,7 @@ describe("runtime service", () => {
       AIF_RUNTIME_MODULES: ["@org/runtime-a", "file:///runtime-b.mjs"],
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
+      AIF_USAGE_LIMITS_ENABLED: true,
       API_RUNTIME_START_TIMEOUT_MS: 60_000,
       API_RUNTIME_RUN_TIMEOUT_MS: 120_000,
     });
@@ -195,8 +273,8 @@ describe("runtime service", () => {
 
     expect(serviceA).toBe(serviceB);
     expect(mockCreateRuntimeModelDiscoveryService).toHaveBeenCalledTimes(1);
-    expect(mockCreateRuntimeMemoryCache).toHaveBeenNthCalledWith(1, { defaultTtlMs: 30000 });
-    expect(mockCreateRuntimeMemoryCache).toHaveBeenNthCalledWith(2, { defaultTtlMs: 15000 });
+    expect(mockCreateRuntimeMemoryCache).toHaveBeenCalledWith({ defaultTtlMs: 30000 });
+    expect(mockCreateRuntimeMemoryCache).toHaveBeenCalledWith({ defaultTtlMs: 15000 });
   });
 
   it("throws when project id cannot be resolved", async () => {
@@ -247,6 +325,81 @@ describe("runtime service", () => {
       }),
     );
     expect(mockRegistryResolveRuntime).toHaveBeenCalledWith("claude");
+  });
+
+  it("passes app-level task defaults into effective runtime resolution", async () => {
+    const runtimeService = await loadRuntimeService();
+    mockGetAppDefaultRuntimeProfileId.mockReturnValue("app-task-default");
+
+    await runtimeService.resolveApiRuntimeContext({
+      projectId: "proj-1",
+      mode: "task",
+      workflow: { workflowKind: "implementer", requiredCapabilities: [] } as never,
+    });
+
+    expect(mockGetAppDefaultRuntimeProfileId).toHaveBeenCalledWith("task");
+    expect(mockResolveEffectiveRuntimeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "proj-1",
+        mode: "task",
+        systemDefaultRuntimeProfileId: "app-task-default",
+      }),
+    );
+  });
+
+  it("passes app-level chat defaults into effective runtime resolution", async () => {
+    const runtimeService = await loadRuntimeService();
+    mockGetAppDefaultRuntimeProfileId.mockReturnValue("app-chat-default");
+
+    await runtimeService.resolveApiRuntimeContext({
+      projectId: "proj-1",
+      mode: "chat",
+      workflow: { workflowKind: "chat", requiredCapabilities: [] } as never,
+    });
+
+    expect(mockGetAppDefaultRuntimeProfileId).toHaveBeenCalledWith("chat");
+    expect(mockResolveEffectiveRuntimeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "proj-1",
+        mode: "chat",
+        systemDefaultRuntimeProfileId: "app-chat-default",
+      }),
+    );
+  });
+
+  it("prefers an explicit runtime profile id over effective chat defaults", async () => {
+    const runtimeService = await loadRuntimeService();
+    mockFindRuntimeProfileById.mockImplementation((id: string) =>
+      id === "profile-pinned"
+        ? {
+            id,
+            runtimeId: "codex",
+            providerId: "openai",
+            defaultModel: "gpt-5.4",
+            enabled: true,
+          }
+        : null,
+    );
+
+    const context = await runtimeService.resolveApiRuntimeContext({
+      projectId: "proj-1",
+      mode: "chat",
+      runtimeProfileId: "profile-pinned",
+      workflow: { workflowKind: "chat", requiredCapabilities: [] } as never,
+    });
+
+    expect(context.selectionSource).toBe("profile_id");
+    expect(mockResolveEffectiveRuntimeProfile).not.toHaveBeenCalled();
+    expect(mockResolveRuntimeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "profile_id",
+        profile: expect.objectContaining({
+          id: "profile-pinned",
+          runtimeId: "codex",
+          providerId: "openai",
+        }),
+      }),
+    );
   });
 
   it("prefers explicit model/runtime options overrides over task values", async () => {
@@ -412,6 +565,22 @@ describe("runtime service", () => {
     );
   });
 
+  it("uses app-level task defaults when resolving the light model", async () => {
+    const runtimeService = await loadRuntimeService();
+    mockGetAppDefaultRuntimeProfileId.mockReturnValue("app-task-default");
+
+    await runtimeService.resolveApiLightModel("proj-1");
+
+    expect(mockGetAppDefaultRuntimeProfileId).toHaveBeenCalledWith("task");
+    expect(mockResolveEffectiveRuntimeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "proj-1",
+        mode: "task",
+        systemDefaultRuntimeProfileId: "app-task-default",
+      }),
+    );
+  });
+
   it("passes transport and headers from resolved profile to adapter.run()", async () => {
     const runtimeService = await loadRuntimeService();
     const adapter = createAdapter();
@@ -448,6 +617,7 @@ describe("runtime service", () => {
       AIF_RUNTIME_MODULES: [],
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
+      AIF_USAGE_LIMITS_ENABLED: true,
       API_RUNTIME_START_TIMEOUT_MS: 90_000,
       API_RUNTIME_RUN_TIMEOUT_MS: 240_000,
     });
@@ -500,5 +670,195 @@ describe("runtime service", () => {
         }),
       }),
     );
+  });
+
+  it("persists runtime limit snapshots observed during one-shot execution", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    const snapshot = createLimitSnapshot();
+    adapter.run = vi
+      .fn()
+      .mockImplementation(async (input: { execution?: { onEvent?: (event: unknown) => void } }) => {
+        input.execution?.onEvent?.({
+          type: "runtime:limit",
+          timestamp: "2026-04-17T00:00:01.000Z",
+          data: { snapshot },
+        });
+        return { outputText: "ok", events: [], usage: null };
+      });
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      prompt: "do work",
+      workflowKind: "commit",
+      usageContext: { source: "test" },
+    });
+
+    expect(mockPersistRuntimeProfileLimitSnapshot).toHaveBeenCalledWith(
+      "profile-1",
+      snapshot,
+      expect.any(String),
+    );
+    expect(mockClearRuntimeProfileLimitSnapshot).not.toHaveBeenCalled();
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-1",
+        runtimeProfileId: "profile-1",
+        taskId: null,
+      },
+    });
+  });
+
+  it("preserves persisted runtime limit state after successful runs without snapshots", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      prompt: "do work",
+      workflowKind: "commit",
+      usageContext: { source: "test" },
+    });
+
+    expect(mockClearRuntimeProfileLimitSnapshot).not.toHaveBeenCalled();
+    expect(mockPersistRuntimeProfileLimitSnapshot).not.toHaveBeenCalled();
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("persists runtime limit snapshots from structured execution errors", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    const snapshot = createLimitSnapshot({ status: "blocked" });
+    adapter.run = vi.fn().mockRejectedValue(
+      new RuntimeExecutionError("rate limited", undefined, "rate_limit", {
+        limitSnapshot: snapshot,
+      }),
+    );
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+
+    await expect(
+      runtimeService.runApiRuntimeOneShot({
+        projectId: "proj-1",
+        projectRoot: "/tmp/project",
+        prompt: "do work",
+        workflowKind: "commit",
+        usageContext: { source: "test" },
+      }),
+    ).rejects.toThrow("rate limited");
+
+    expect(mockPersistRuntimeProfileLimitSnapshot).toHaveBeenCalledWith(
+      "profile-1",
+      snapshot,
+      expect.any(String),
+    );
+    expect(mockClearRuntimeProfileLimitSnapshot).not.toHaveBeenCalled();
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-1",
+        runtimeProfileId: "profile-1",
+        taskId: null,
+      },
+    });
+  });
+
+  it("dedupes identical runtime limit writes within the TTL cache window", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    const snapshot = createLimitSnapshot();
+    adapter.run = vi.fn().mockResolvedValue({
+      outputText: "ok",
+      events: [
+        {
+          type: "runtime:limit",
+          timestamp: "2026-04-17T00:00:01.000Z",
+          data: { snapshot },
+        },
+      ],
+      usage: null,
+    });
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      prompt: "first",
+      workflowKind: "commit",
+      usageContext: { source: "test" },
+    });
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      prompt: "second",
+      workflowKind: "commit",
+      usageContext: { source: "test" },
+    });
+
+    expect(mockPersistRuntimeProfileLimitSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebroadcasts identical runtime limit state for a different project context", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    const snapshot = createLimitSnapshot({ profileId: "profile-global" });
+    adapter.run = vi.fn().mockResolvedValue({
+      outputText: "ok",
+      events: [
+        {
+          type: "runtime:limit",
+          timestamp: "2026-04-17T00:00:01.000Z",
+          data: { snapshot },
+        },
+      ],
+      usage: null,
+    });
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+    mockResolveRuntimeProfile.mockReturnValue(
+      createResolvedProfile({ profileId: "profile-global" }),
+    );
+    mockFindProjectById.mockImplementation((projectId: string) => ({
+      id: projectId,
+      rootPath: `/tmp/${projectId}`,
+    }));
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/proj-1",
+      prompt: "first",
+      workflowKind: "commit",
+      usageContext: { source: "test" },
+    });
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-2",
+      projectRoot: "/tmp/proj-2",
+      prompt: "second",
+      workflowKind: "commit",
+      usageContext: { source: "test" },
+    });
+
+    expect(mockPersistRuntimeProfileLimitSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).toHaveBeenCalledTimes(2);
+    expect(mockBroadcast).toHaveBeenNthCalledWith(1, {
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-1",
+        runtimeProfileId: "profile-global",
+        taskId: null,
+      },
+    });
+    expect(mockBroadcast).toHaveBeenNthCalledWith(2, {
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-2",
+        runtimeProfileId: "profile-global",
+        taskId: null,
+      },
+    });
   });
 });

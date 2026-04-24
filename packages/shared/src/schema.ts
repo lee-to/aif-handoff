@@ -33,6 +33,23 @@ export const projects = sqliteTable("projects", {
 export type ProjectRow = typeof projects.$inferSelect;
 export type NewProjectRow = typeof projects.$inferInsert;
 
+export const appSettings = sqliteTable("app_settings", {
+  id: integer("id").primaryKey().notNull().default(1),
+  defaultTaskRuntimeProfileId: text("default_task_runtime_profile_id"),
+  defaultPlanRuntimeProfileId: text("default_plan_runtime_profile_id"),
+  defaultReviewRuntimeProfileId: text("default_review_runtime_profile_id"),
+  defaultChatRuntimeProfileId: text("default_chat_runtime_profile_id"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type AppSettingsRow = typeof appSettings.$inferSelect;
+export type NewAppSettingsRow = typeof appSettings.$inferInsert;
+
 export const tasks = sqliteTable("tasks", {
   id: text("id")
     .primaryKey()
@@ -80,6 +97,8 @@ export const tasks = sqliteTable("tasks", {
   modelOverride: text("model_override"),
   runtimeOptionsJson: text("runtime_options_json"),
   sessionId: text("session_id"),
+  runtimeLimitSnapshotJson: text("runtime_limit_snapshot_json"),
+  runtimeLimitUpdatedAt: text("runtime_limit_updated_at"),
   lockedBy: text("locked_by"),
   lockedUntil: text("locked_until"),
   scheduledAt: text("scheduled_at"),
@@ -125,6 +144,8 @@ export const runtimeProfiles = sqliteTable("runtime_profiles", {
   headersJson: text("headers_json").notNull().default("{}"),
   optionsJson: text("options_json").notNull().default("{}"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  runtimeLimitSnapshotJson: text("runtime_limit_snapshot_json"),
+  runtimeLimitUpdatedAt: text("runtime_limit_updated_at"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),

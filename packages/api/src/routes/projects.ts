@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { jsonValidator } from "../middleware/zodValidator.js";
+import { internalBroadcastAuth } from "../middleware/internalBroadcastAuth.js";
 import { logger, getProjectConfig } from "@aif/shared";
-import { findTaskById } from "@aif/data";
+import { findRuntimeProfileById, findTaskById } from "@aif/data";
 import {
   createProjectSchema,
   roadmapImportSchema,
@@ -21,13 +22,14 @@ import {
   deleteProject,
   getProjectMcpServers,
 } from "../repositories/projects.js";
-import { toTaskResponse } from "@aif/data";
+import { toTaskBroadcastPayload } from "../repositories/tasks.js";
 import {
   generateRoadmapFile,
   generateRoadmapTasks,
   importGeneratedTasks,
   RoadmapGenerationError,
 } from "../services/roadmapGeneration.js";
+import { validateProjectScopedRuntimeProfileSelections } from "../services/runtimeProfileScope.js";
 
 const log = logger("projects-route");
 
@@ -43,6 +45,19 @@ projectsRouter.get("/", (c) => {
 // POST /projects
 projectsRouter.post("/", jsonValidator(createProjectSchema), async (c) => {
   const body = c.req.valid("json");
+  const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
+    projectId: null,
+    selections: {
+      defaultTaskRuntimeProfileId: body.defaultTaskRuntimeProfileId,
+      defaultPlanRuntimeProfileId: body.defaultPlanRuntimeProfileId,
+      defaultReviewRuntimeProfileId: body.defaultReviewRuntimeProfileId,
+      defaultChatRuntimeProfileId: body.defaultChatRuntimeProfileId,
+    },
+  });
+  if (runtimeValidation) {
+    log.warn({ fieldErrors: runtimeValidation.fieldErrors }, "Rejected invalid project defaults");
+    return c.json(runtimeValidation, 400);
+  }
   const { project: created, pathError, initError } = await createProject(body);
   if (pathError) return c.json({ error: pathError }, 400);
   if (initError) return c.json({ error: initError }, 500);
@@ -61,6 +76,23 @@ projectsRouter.put("/:id", jsonValidator(createProjectSchema), async (c) => {
   const existing = findProjectById(id);
   if (!existing) {
     return c.json({ error: "Project not found" }, 404);
+  }
+
+  const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
+    projectId: id,
+    selections: {
+      defaultTaskRuntimeProfileId: body.defaultTaskRuntimeProfileId,
+      defaultPlanRuntimeProfileId: body.defaultPlanRuntimeProfileId,
+      defaultReviewRuntimeProfileId: body.defaultReviewRuntimeProfileId,
+      defaultChatRuntimeProfileId: body.defaultChatRuntimeProfileId,
+    },
+  });
+  if (runtimeValidation) {
+    log.warn(
+      { projectId: id, fieldErrors: runtimeValidation.fieldErrors },
+      "Rejected invalid project defaults",
+    );
+    return c.json(runtimeValidation, 400);
   }
 
   const { project: updated, pathError } = updateProject(id, body);
@@ -158,7 +190,7 @@ projectsRouter.post("/:id/roadmap/import", jsonValidator(roadmapImportSchema), a
     for (const taskId of result.taskIds) {
       const task = findTaskById(taskId);
       if (task) {
-        broadcast({ type: "task:created", payload: toTaskResponse(task) });
+        broadcast({ type: "task:created", payload: toTaskBroadcastPayload(task) });
       }
     }
 
@@ -220,20 +252,63 @@ projectsRouter.patch("/:id/auto-queue-mode", jsonValidator(autoQueueModeSchema),
 });
 
 // POST /projects/:id/broadcast — emit project-scoped WS event (used by agent coordinator)
-projectsRouter.post("/:id/broadcast", jsonValidator(broadcastProjectSchema), async (c) => {
-  const { id } = c.req.param();
-  const { type, taskId } = c.req.valid("json");
-  const project = findProjectById(id);
-  if (!project) return c.json({ error: "Project not found" }, 404);
+projectsRouter.post(
+  "/:id/broadcast",
+  internalBroadcastAuth,
+  jsonValidator(broadcastProjectSchema),
+  async (c) => {
+    const { id } = c.req.param();
+    const { type, taskId, runtimeProfileId } = c.req.valid("json");
+    const project = findProjectById(id);
+    if (!project) return c.json({ error: "Project not found" }, 404);
 
-  if (type === "project:auto_queue_advanced" && taskId) {
-    broadcast({ type, payload: { id: taskId } });
-  } else {
-    broadcast({ type, payload: project });
-  }
-  log.debug({ projectId: id, type, taskId }, "Project WS broadcast triggered");
-  return c.json({ success: true });
-});
+    if (type === "project:auto_queue_advanced" && taskId) {
+      const task = findTaskById(taskId);
+      if (!task || task.projectId !== id) {
+        return c.json({ error: "taskId does not belong to the target project" }, 400);
+      }
+    }
+
+    if (type === "project:runtime_limit_updated" && !runtimeProfileId) {
+      return c.json(
+        { error: "runtimeProfileId is required for project:runtime_limit_updated" },
+        400,
+      );
+    }
+
+    if (type === "project:runtime_limit_updated" && runtimeProfileId) {
+      const runtimeProfile = findRuntimeProfileById(runtimeProfileId);
+      const belongsToProject =
+        runtimeProfile?.projectId === id || runtimeProfile?.projectId == null;
+      if (!runtimeProfile || !belongsToProject) {
+        return c.json(
+          { error: "runtimeProfileId must belong to the target project or be global" },
+          400,
+        );
+      }
+    }
+
+    if (type === "project:auto_queue_advanced" && taskId) {
+      broadcast({ type, payload: { id: taskId } });
+    } else if (type === "project:runtime_limit_updated") {
+      broadcast({
+        type,
+        payload: {
+          projectId: id,
+          runtimeProfileId: runtimeProfileId ?? null,
+          taskId: taskId ?? null,
+        },
+      });
+    } else {
+      broadcast({ type, payload: project });
+    }
+    log.debug(
+      { projectId: id, type, taskId: taskId ?? null, runtimeProfileId: runtimeProfileId ?? null },
+      "Project WS broadcast triggered",
+    );
+    return c.json({ success: true });
+  },
+);
 
 // DELETE /projects/:id
 projectsRouter.delete("/:id", (c) => {
@@ -270,7 +345,7 @@ async function runRoadmapGenerationJob(
     for (const taskId of result.taskIds) {
       const task = findTaskById(taskId);
       if (task) {
-        broadcast({ type: "task:created", payload: toTaskResponse(task) });
+        broadcast({ type: "task:created", payload: toTaskBroadcastPayload(task) });
       }
     }
 

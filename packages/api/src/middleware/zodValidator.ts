@@ -10,3 +10,11 @@ import { z } from "zod";
 export function jsonValidator<T extends z.ZodTypeAny>(schema: T) {
   return zValidator("json", schema as any);
 }
+
+/**
+ * Typed query validator for Hono routes.
+ * Wraps @hono/zod-validator's zValidator with "query" target.
+ */
+export function queryValidator<T extends z.ZodTypeAny>(schema: T) {
+  return zValidator("query", schema as any);
+}

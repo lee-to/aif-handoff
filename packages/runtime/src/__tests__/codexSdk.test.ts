@@ -11,6 +11,7 @@ const mockThread = {
 const mockCodexConstructor = vi.fn();
 const mockStartThread = vi.fn().mockReturnValue(mockThread);
 const mockResumeThread = vi.fn().mockReturnValue(mockThread);
+const mockGetCodexSessionLimitSnapshot = vi.fn();
 
 class MockCodex {
   constructor(options: unknown) {
@@ -23,6 +24,10 @@ class MockCodex {
 
 vi.mock("@openai/codex-sdk", () => ({
   Codex: MockCodex,
+}));
+
+vi.mock("../adapters/codex/sessions.js", () => ({
+  getCodexSessionLimitSnapshot: (...args: unknown[]) => mockGetCodexSessionLimitSnapshot(...args),
 }));
 
 const { runCodexSdk } = await import("../adapters/codex/sdk.js");
@@ -52,6 +57,7 @@ describe("runCodexSdk", () => {
     vi.unstubAllEnvs();
     mockStartThread.mockReturnValue(mockThread);
     mockResumeThread.mockReturnValue(mockThread);
+    mockGetCodexSessionLimitSnapshot.mockResolvedValue(null);
   });
 
   it("starts a new thread and returns output text", async () => {
@@ -81,6 +87,83 @@ describe("runCodexSdk", () => {
       outputTokens: 50,
       totalTokens: 150,
     });
+  });
+
+  it("appends a runtime:limit event when the session store exposes Codex quota data", async () => {
+    const onEvent = vi.fn();
+    mockGetCodexSessionLimitSnapshot.mockResolvedValue({
+      source: "sdk_event",
+      status: "warning",
+      precision: "exact",
+      checkedAt: "2026-04-18T05:00:00.000Z",
+      providerId: "openai",
+      runtimeId: "codex",
+      profileId: "profile-1",
+      primaryScope: "time",
+      resetAt: "2099-04-18T10:00:00.000Z",
+      retryAfterSeconds: null,
+      warningThreshold: 10,
+      windows: [
+        {
+          scope: "time",
+          name: "5h",
+          percentUsed: 92,
+          percentRemaining: 8,
+          resetAt: "2099-04-18T10:00:00.000Z",
+          warningThreshold: 10,
+        },
+      ],
+      providerMeta: {
+        limitId: "codex",
+        limitName: null,
+        planType: "pro",
+      },
+    });
+    mockRunStreamed.mockResolvedValue({
+      events: createMockEvents([
+        { type: "thread.started", thread_id: "thread-new" },
+        {
+          type: "item.completed",
+          item: { id: "msg-1", type: "agent_message", text: "Streaming checkpoint" },
+        },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 100, output_tokens: 50, cached_input_tokens: 0 },
+        },
+      ]),
+    });
+
+    const result = await runCodexSdk(
+      createRunInput({ profileId: "profile-1", execution: { onEvent } }),
+    );
+
+    expect(mockGetCodexSessionLimitSnapshot).toHaveBeenCalledWith({
+      sessionId: "thread-new",
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+    });
+    expect(result.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "runtime:limit",
+          message: "Runtime limit state changed: warning",
+        }),
+      ]),
+    );
+    expect(result.events?.filter((event) => event.type === "runtime:limit")).toHaveLength(1);
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "runtime:limit",
+        message: "Runtime limit state changed: warning",
+      }),
+    );
+    const emittedTypes = onEvent.mock.calls.map((call) => call[0]?.type);
+    expect(emittedTypes.indexOf("runtime:limit")).toBeGreaterThanOrEqual(0);
+    expect(emittedTypes.indexOf("result:success")).toBeGreaterThanOrEqual(0);
+    expect(emittedTypes.indexOf("runtime:limit")).toBeLessThan(
+      emittedTypes.indexOf("result:success"),
+    );
   });
 
   it("resumes an existing thread when sessionId and resume are set", async () => {

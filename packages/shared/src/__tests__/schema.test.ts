@@ -160,4 +160,30 @@ describe("tasks schema", () => {
     expect(result!.tokenTotal).toBe(0);
     expect(result!.costUsd).toBe(0);
   });
+
+  it("should persist runtime limit snapshot columns on tasks", () => {
+    const id = crypto.randomUUID();
+    const snapshotJson = JSON.stringify({
+      source: "sdk_event",
+      status: "warning",
+      precision: "heuristic",
+      checkedAt: "2026-04-17T10:00:00.000Z",
+      providerId: "anthropic",
+      windows: [{ scope: "time", percentUsed: 92 }],
+    });
+
+    db.insert(tasks)
+      .values({
+        id,
+        projectId: "test-project",
+        title: "Runtime limit task",
+        runtimeLimitSnapshotJson: snapshotJson,
+        runtimeLimitUpdatedAt: "2026-04-17T10:00:05.000Z",
+      })
+      .run();
+
+    const result = db.select().from(tasks).where(eq(tasks.id, id)).get();
+    expect(result?.runtimeLimitSnapshotJson).toBe(snapshotJson);
+    expect(result?.runtimeLimitUpdatedAt).toBe("2026-04-17T10:00:05.000Z");
+  });
 });

@@ -13,6 +13,14 @@ export {
   type RuntimeMcpStatus,
   type RuntimeEvent,
   type RuntimeExecutionIntent,
+  type RuntimeLimitEventPayload,
+  RuntimeLimitPrecision,
+  RuntimeLimitScope,
+  type RuntimeLimitSnapshot,
+  RuntimeLimitSource,
+  RuntimeLimitStatus,
+  type RuntimeLimitWindow,
+  RUNTIME_LIMIT_EVENT_TYPE,
   type RuntimeSubagentStartCallback,
   type RuntimeToolQuestionPayload,
   type RuntimeToolUseCallback,
@@ -60,6 +68,7 @@ export {
   classifyByMessageFallback,
   isExternalFailureCategory,
   isRuntimeErrorCategory,
+  type RuntimeExecutionErrorMetadata,
   type RuntimeErrorCategory,
 } from "./errors.js";
 
@@ -80,6 +89,15 @@ export {
 } from "./capabilities.js";
 
 export { createRuntimeMemoryCache, type RuntimeCache, type RuntimeCacheOptions } from "./cache.js";
+
+export {
+  buildRuntimeLimitBroadcastCacheKey,
+  buildRuntimeLimitCacheSignature,
+  extractLatestRuntimeLimitSnapshot,
+  extractRuntimeLimitSnapshotFromError,
+  extractRuntimeLimitSnapshotFromEvent,
+  observeRuntimeLimitEvent,
+} from "./limitState.js";
 
 export {
   createRuntimeModelDiscoveryService,
@@ -142,6 +160,19 @@ export {
   withStreamTimeouts,
 } from "./timeouts.js";
 
+export {
+  buildRuntimeLimitSignature,
+  mapSafeRuntimeErrorReason,
+  normalizeRuntimeLimitSnapshot,
+  resolveRuntimeLimitFutureHint,
+  sanitizeProviderMeta,
+  selectViolatedWindowForExactThreshold,
+  type RuntimeLimitFutureHint,
+  type RuntimeLimitFutureHintSource,
+  type SafeRuntimeErrorCategory,
+  type SafeRuntimeErrorReason,
+} from "@aif/shared";
+
 /**
  * Adapter factories are intentionally NOT re-exported from the package root.
  *
@@ -170,6 +201,23 @@ export {
   resolveCodexSubagentStrategy,
   type CodexSubagentStrategy,
 } from "./adapters/codex/subagentStrategy.js";
+
+export {
+  getCodexAuthIdentity,
+  listLatestCodexLimitSnapshots,
+  getLatestCodexModelLimitSnapshot,
+  selectPreferredCodexLimitSnapshot,
+  type CodexAuthIdentity,
+} from "./adapters/codex/sessions.js";
+export {
+  ClaudeProviderFamily,
+  resolveClaudeProviderAuth,
+  resolveClaudeProviderIdentity,
+  type ClaudeLocalSettingsIdentity,
+  type ClaudeProviderFamily as ClaudeProviderFamilyType,
+  type ClaudeProviderIdentity,
+  type ResolveClaudeProviderIdentityInput,
+} from "./adapters/claude/providerIdentity.js";
 
 export type {
   CreateOpenCodeRuntimeAdapterOptions,

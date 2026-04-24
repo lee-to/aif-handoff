@@ -11,6 +11,7 @@ import { useKeyboardShortcut } from "@/hooks/useKeyboardShortcut";
 import { useProjects } from "@/hooks/useProjects";
 import { useSettings, useProjectDefaults } from "@/hooks/useSettings";
 import { useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
+import { formatRuntimeProfileOptionLabel } from "@/lib/runtimeProfiles";
 import { generatePlanPath, defaultsForMode } from "@aif/shared/browser";
 import { PlannerSettings } from "./PlannerSettings";
 
@@ -53,6 +54,14 @@ export function AddTaskForm({ projectId }: Props) {
   const currentProject = projectsList?.find((p) => p.id === projectId);
   const isParallel = currentProject?.parallelEnabled ?? false;
   const projectTaskRuntimeDefaultId = currentProject?.defaultTaskRuntimeProfileId ?? "";
+  const appTaskRuntimeDefaultId =
+    settings?.runtimeDefaults?.app?.resolvedDefaultTaskRuntimeProfileId ?? "";
+  const runtimeDefaultDescription = projectTaskRuntimeDefaultId
+    ? "the project default runtime profile"
+    : appTaskRuntimeDefaultId
+      ? "the app default runtime profile"
+      : "the environment fallback runtime";
+  const selectableRuntimeProfiles = runtimeProfiles.filter((profile) => profile.enabled !== false);
   const selectedRuntimeProfile =
     runtimeProfiles.find((profile) => profile.id === runtimeProfileId) ?? null;
   const selectedRuntimeDescriptor = selectedRuntimeProfile
@@ -65,23 +74,7 @@ export function AddTaskForm({ projectId }: Props) {
   const defaultPlanPath = defaults?.paths?.plan ?? DEFAULT_PLAN_PATH;
   const plansDir = defaults?.paths?.plans ?? ".ai-factory/plans/";
 
-  // A generation counter that triggers sync of server defaults into local form state.
-  // Bumped when the form opens; the sync effect reacts to it.
-  const [syncGen, setSyncGen] = useState(0);
-
-  // Listen for global task:create event (Ctrl+N)
-  useEffect(() => {
-    const handleCreateTask = () => {
-      setSyncGen((g) => g + 1);
-      setIsOpen(true);
-    };
-    window.addEventListener("task:create", handleCreateTask);
-    return () => window.removeEventListener("task:create", handleCreateTask);
-  }, []);
-
-  // Sync local form state with server defaults when form opens (syncGen changes)
-  useEffect(() => {
-    if (syncGen === 0) return;
+  const syncServerDefaultsIntoForm = useCallback(() => {
     setUseSubagents(useSubagentsDefault);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setPlanPath(defaultPlanPath);
@@ -94,8 +87,39 @@ export function AddTaskForm({ projectId }: Props) {
     setSkipReview(flags.skipReview);
     setPlanDocs(flags.planDocs);
     setPlanTests(flags.planTests);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncGen]);
+  }, [defaultPlanPath, isParallel, maxReviewIterationsDefault, plannerMode, useSubagentsDefault]);
+
+  const resetAndCloseForm = useCallback(() => {
+    setIsOpen(false);
+    setTitle("");
+    setDescription("");
+    setAutoMode(true);
+    setIsFix(false);
+    setShowAdvanced(false);
+    setPlannerMode("fast");
+    setPlanPath(defaultPlanPath);
+    const resetFlags = defaultsForMode("fast");
+    setPlanDocs(resetFlags.planDocs);
+    setPlanTests(resetFlags.planTests);
+    setSkipReview(resetFlags.skipReview);
+    setUseSubagents(useSubagentsDefault);
+    setMaxReviewIterations(maxReviewIterationsDefault);
+    setRuntimeProfileId("");
+    setModelOverride("");
+    setPriority(0);
+    userOverride.current = false;
+  }, [defaultPlanPath, maxReviewIterationsDefault, useSubagentsDefault]);
+
+  const openForm = useCallback(() => {
+    syncServerDefaultsIntoForm();
+    setIsOpen(true);
+  }, [syncServerDefaultsIntoForm]);
+
+  // Listen for global task:create event (Ctrl+N)
+  useEffect(() => {
+    window.addEventListener("task:create", openForm);
+    return () => window.removeEventListener("task:create", openForm);
+  }, [openForm]);
 
   // Close form on Escape key
   const closeForm = useCallback(() => setIsOpen(false), []);
@@ -160,26 +184,7 @@ export function AddTaskForm({ projectId }: Props) {
       },
       {
         onSuccess: () => {
-          setTitle("");
-          setDescription("");
-          setAutoMode(true);
-          setIsFix(false);
-          setShowAdvanced(false);
-          setPlannerMode("fast");
-          setPlanPath(defaultPlanPath);
-          {
-            const resetFlags = defaultsForMode("fast");
-            setPlanDocs(resetFlags.planDocs);
-            setPlanTests(resetFlags.planTests);
-            setSkipReview(resetFlags.skipReview);
-          }
-          setUseSubagents(useSubagentsDefault);
-          setMaxReviewIterations(maxReviewIterationsDefault);
-          setRuntimeProfileId("");
-          setModelOverride("");
-          setPriority(0);
-          userOverride.current = false;
-          setIsOpen(false);
+          resetAndCloseForm();
         },
         onError: (error) => {
           console.error("[kanban] Failed to create task", error);
@@ -194,10 +199,7 @@ export function AddTaskForm({ projectId }: Props) {
         variant="ghost"
         size="sm"
         className="w-full justify-center gap-1 border border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-        onClick={() => {
-          setSyncGen((g) => g + 1);
-          setIsOpen(true);
-        }}
+        onClick={openForm}
         type="button"
       >
         <Plus className="h-4 w-4" />
@@ -372,12 +374,17 @@ export function AddTaskForm({ projectId }: Props) {
                     ? "(project default)"
                     : "(none — runtime resolved by system defaults)"}
                 </option>
-                {runtimeProfiles.map((profile) => (
+                {selectableRuntimeProfiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
-                    {profile.name} ({profile.runtimeId}/{profile.providerId})
+                    {formatRuntimeProfileOptionLabel(profile)}
                   </option>
                 ))}
               </select>
+              {!runtimeProfileId && (
+                <p className="text-[10px] text-muted-foreground">
+                  No override uses {runtimeDefaultDescription}.
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -403,33 +410,7 @@ export function AddTaskForm({ projectId }: Props) {
         <Button type="submit" size="sm" disabled={!title.trim() || createTask.isPending}>
           {createTask.isPending ? "Adding..." : "Add"}
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setIsOpen(false);
-            setTitle("");
-            setDescription("");
-            setAutoMode(true);
-            setIsFix(false);
-            setShowAdvanced(false);
-            setPlannerMode("fast");
-            setPlanPath(defaultPlanPath);
-            {
-              const resetFlags = defaultsForMode("fast");
-              setPlanDocs(resetFlags.planDocs);
-              setPlanTests(resetFlags.planTests);
-              setSkipReview(resetFlags.skipReview);
-            }
-            setUseSubagents(useSubagentsDefault);
-            setMaxReviewIterations(maxReviewIterationsDefault);
-            setRuntimeProfileId("");
-            setModelOverride("");
-            setPriority(0);
-            userOverride.current = false;
-          }}
-        >
+        <Button type="button" variant="ghost" size="sm" onClick={resetAndCloseForm}>
           <X className="h-4 w-4" />
         </Button>
       </div>

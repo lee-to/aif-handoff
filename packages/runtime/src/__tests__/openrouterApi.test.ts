@@ -173,6 +173,24 @@ describe("OpenRouter API transport", () => {
       ).rejects.toBeInstanceOf(OpenRouterRuntimeAdapterError);
     });
 
+    it("redacts raw provider secrets from non-OK error messages", async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response('{"error":"Bearer SECRET sk-SECRET"}', { status: 500 }),
+      );
+
+      try {
+        await runOpenRouterApi(createRunInput({ options: { apiKey: "bad-key" } }));
+      } catch (error) {
+        expect(error).toMatchObject({
+          message: expect.stringContaining("[REDACTED]"),
+        });
+        expect(String(error)).not.toContain("SECRET");
+        return;
+      }
+
+      throw new Error("Expected runOpenRouterApi to throw");
+    });
+
     it("throws timeout error when run exceeds runTimeoutMs", async () => {
       fetchMock.mockRejectedValueOnce(
         new DOMException("The operation was aborted", "TimeoutError"),
@@ -373,6 +391,12 @@ describe("OpenRouter API transport", () => {
 
       expect(result.outputText).toBe("ok");
       expect(logger.debug).toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rawLine: "data: {not-json}",
+        }),
+        "Failed to parse SSE chunk, skipping",
+      );
     });
   });
 
@@ -469,6 +493,19 @@ describe("OpenRouter API transport", () => {
           options: { apiKey: "sk-test" },
         }),
       ).rejects.toBeInstanceOf(OpenRouterRuntimeAdapterError);
+    });
+
+    it("redacts raw provider secrets from model listing failures", async () => {
+      fetchMock.mockResolvedValueOnce(new Response('{"error":"Bearer SECRET"}', { status: 500 }));
+
+      await expect(
+        listOpenRouterApiModels({
+          runtimeId: "openrouter",
+          options: { apiKey: "sk-test" },
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("[REDACTED]"),
+      });
     });
 
     it("throws classified error on network failure", async () => {

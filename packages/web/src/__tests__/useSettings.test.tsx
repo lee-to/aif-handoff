@@ -14,7 +14,12 @@ vi.mock("../lib/api.js", () => ({
   },
 }));
 
-import { useSettings, useProjectDefaults } from "../hooks/useSettings.js";
+import {
+  useSettings,
+  useProjectDefaults,
+  useUsageLimitsEnabled,
+  __resetUsageLimitsFlagCacheForTests,
+} from "../hooks/useSettings.js";
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -80,5 +85,35 @@ describe("useProjectDefaults", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(result.current.isFetching).toBe(false);
     expect(mockGetProjectDefaults).not.toHaveBeenCalled();
+  });
+});
+
+describe("useUsageLimitsEnabled", () => {
+  beforeEach(() => {
+    __resetUsageLimitsFlagCacheForTests();
+    mockGetSettings.mockReset();
+  });
+
+  it("returns the flag from /settings and works without a QueryClient provider", async () => {
+    mockGetSettings.mockResolvedValue({
+      useSubagents: false,
+      maxReviewIterations: 3,
+      autoReviewStrategy: "full_re_review",
+      usageLimitsEnabled: false,
+    });
+
+    const { result } = renderHook(() => useUsageLimitsEnabled());
+    // Initial render is the optimistic default so UI does not flicker on first paint.
+    expect(result.current).toBe(true);
+    await waitFor(() => expect(result.current).toBe(false));
+    expect(mockGetSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays optimistic (true) when /settings is unreachable", async () => {
+    mockGetSettings.mockRejectedValue(new Error("network"));
+
+    const { result } = renderHook(() => useUsageLimitsEnabled());
+    await waitFor(() => expect(mockGetSettings).toHaveBeenCalled());
+    expect(result.current).toBe(true);
   });
 });

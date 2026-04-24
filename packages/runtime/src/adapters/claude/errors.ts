@@ -1,5 +1,6 @@
 import {
   RuntimeExecutionError,
+  type RuntimeExecutionErrorMetadata,
   classifyByHttpStatus,
   classifyByMessageFallback,
   type RuntimeErrorCategory,
@@ -40,6 +41,30 @@ function classify(
   return { adapterCode: CATEGORY_TO_ADAPTER_CODE[category], category };
 }
 
+function mergeMetadata(
+  error: unknown,
+  httpStatus?: number,
+  metadata: RuntimeExecutionErrorMetadata = {},
+): RuntimeExecutionErrorMetadata {
+  const baseMetadata: RuntimeExecutionErrorMetadata =
+    error instanceof RuntimeExecutionError
+      ? {
+          httpStatus: error.httpStatus,
+          resetAt: error.resetAt,
+          retryAfterMs: error.retryAfterMs,
+          retryAfterSeconds: error.retryAfterSeconds,
+          limitSnapshot: error.limitSnapshot,
+          providerMeta: error.providerMeta,
+        }
+      : {};
+
+  return {
+    ...baseMetadata,
+    ...metadata,
+    httpStatus: httpStatus ?? metadata.httpStatus ?? baseMetadata.httpStatus,
+  };
+}
+
 export class ClaudeRuntimeAdapterError extends RuntimeExecutionError {
   public readonly adapterCode: string;
 
@@ -48,8 +73,9 @@ export class ClaudeRuntimeAdapterError extends RuntimeExecutionError {
     adapterCode: string,
     category: RuntimeErrorCategory,
     cause?: unknown,
+    metadata: RuntimeExecutionErrorMetadata = {},
   ) {
-    super(message, cause, category);
+    super(message, cause, category, { ...metadata, adapterCode });
     this.name = "ClaudeRuntimeAdapterError";
     this.adapterCode = adapterCode;
   }
@@ -58,13 +84,26 @@ export class ClaudeRuntimeAdapterError extends RuntimeExecutionError {
 export function classifyClaudeRuntimeError(
   error: unknown,
   httpStatus?: number,
+  metadata: RuntimeExecutionErrorMetadata = {},
 ): ClaudeRuntimeAdapterError {
   if (error instanceof ClaudeRuntimeAdapterError) {
     return error;
   }
   const message = messageFromUnknown(error);
-  const { adapterCode, category } = classify(message, httpStatus);
-  return new ClaudeRuntimeAdapterError(message, adapterCode, category, error);
+  const mergedMetadata = mergeMetadata(error, httpStatus, metadata);
+
+  if (error instanceof RuntimeExecutionError) {
+    return new ClaudeRuntimeAdapterError(
+      message,
+      CATEGORY_TO_ADAPTER_CODE[error.category],
+      error.category,
+      error,
+      mergedMetadata,
+    );
+  }
+
+  const { adapterCode, category } = classify(message, mergedMetadata.httpStatus);
+  return new ClaudeRuntimeAdapterError(message, adapterCode, category, error, mergedMetadata);
 }
 
 function normalizeDetail(detail: string | null | undefined): string | null {
@@ -77,9 +116,10 @@ function normalizeDetail(detail: string | null | undefined): string | null {
 export function classifyClaudeResultSubtype(
   subtype: string,
   detail?: string | null,
+  metadata: RuntimeExecutionErrorMetadata = {},
 ): ClaudeRuntimeAdapterError {
   const normalizedDetail = normalizeDetail(detail);
   const base = `Claude query failed: ${subtype}`;
   const message = normalizedDetail ? `${base}: ${normalizedDetail}` : base;
-  return classifyClaudeRuntimeError(message);
+  return classifyClaudeRuntimeError(message, metadata.httpStatus, metadata);
 }

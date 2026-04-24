@@ -17,19 +17,21 @@ This guide describes the runtime/provider model introduced by `@aif/runtime`.
 
 Runtime profiles are persisted in `runtime_profiles` and reference only non-secret configuration.
 
-| Field          | Purpose                                                    |
-| -------------- | ---------------------------------------------------------- |
-| `projectId`    | Scope profile to one project, or `null` for global profile |
-| `name`         | Display name shown in UI                                   |
-| `runtimeId`    | Adapter id (for example `claude`, `codex`)                 |
-| `providerId`   | Provider namespace (for example `anthropic`, `openai`)     |
-| `transport`    | Adapter transport (`sdk`, `cli`, `api`)                    |
-| `baseUrl`      | Optional custom endpoint                                   |
-| `apiKeyEnvVar` | Env var name containing API key                            |
-| `defaultModel` | Optional default model alias/id                            |
-| `headers`      | Optional non-secret header map                             |
-| `options`      | Adapter-specific options object                            |
-| `enabled`      | Toggle profile availability without deleting it            |
+| Field                   | Purpose                                                    |
+| ----------------------- | ---------------------------------------------------------- |
+| `projectId`             | Scope profile to one project, or `null` for global profile |
+| `name`                  | Display name shown in UI                                   |
+| `runtimeId`             | Adapter id (for example `claude`, `codex`)                 |
+| `providerId`            | Provider namespace (for example `anthropic`, `openai`)     |
+| `transport`             | Adapter transport (`sdk`, `cli`, `api`)                    |
+| `baseUrl`               | Optional custom endpoint                                   |
+| `apiKeyEnvVar`          | Env var name containing API key                            |
+| `defaultModel`          | Optional default model alias/id                            |
+| `headers`               | Optional non-secret header map                             |
+| `options`               | Adapter-specific options object                            |
+| `enabled`               | Toggle profile availability without deleting it            |
+| `runtimeLimitSnapshot`  | Latest persisted normalized limit state for this profile   |
+| `runtimeLimitUpdatedAt` | ISO timestamp of the last persisted limit-state write      |
 
 Secrets are never written to SQLite. Use environment variables or temporary validation payloads.
 
@@ -39,9 +41,16 @@ Task mode fallback order:
 
 1. `tasks.runtime_profile_id`
 2. `projects.default_task_runtime_profile_id`
-3. optional system default
+3. `app_settings.default_task_runtime_profile_id`
+4. environment fallback
 
-Chat mode uses `default_chat_runtime_profile_id` for step 2.
+Planning and review use the same chain, but `default_plan_runtime_profile_id` / `default_review_runtime_profile_id` fall back to the task default at the same scope when unset. Chat uses `default_chat_runtime_profile_id` for the project/app steps.
+
+Scope rules:
+
+- app defaults may point only to enabled global profiles (`runtime_profiles.project_id = null`)
+- project defaults and task/chat overrides may point to either a same-project profile or a global profile
+- project-owned profiles from another project are rejected at the API layer
 
 The API exposes effective selection endpoints:
 
@@ -59,6 +68,51 @@ The API exposes effective selection endpoints:
 | Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Configurable     | Configurable      | Must declare                  | Configurable        | Via `AIF_RUNTIME_MODULES` |
 
 Capabilities are **transport-aware**: the same adapter may expose different capabilities depending on the selected transport. For example, the Codex adapter supports resume/sessions via SDK transport but not via CLI. Use `resolveAdapterCapabilities(adapter, transport)` to get the effective set.
+
+### Runtime-limit observability
+
+Runtime-limit auto-pause depends on what each provider/transport can actually surface. The runtime layer normalizes these inputs into the shared `runtimeLimitSnapshot` contract and marks each snapshot as either `exact` or `heuristic`.
+
+| Runtime / transport | Limit source                            | Precision   | Notes                                                                                                                                          |
+| ------------------- | --------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude SDK / CLI    | Claude `rate_limit_event`               | `heuristic` | Structured qualitative status with reset timestamps (`status`, `resetsAt`, `overageStatus`, `isUsingOverage`, ...)                             |
+| Claude API          | Anthropic rate-limit headers            | `exact`     | Exact request/token limits and reset times from `anthropic-ratelimit-*` + `retry-after`                                                        |
+| Codex API           | OpenAI-compatible rate-limit headers    | `exact`     | Exact request/token limits and reset times from `x-ratelimit-*` + `retry-after`                                                                |
+| Codex SDK / CLI     | Codex session `token_count.rate_limits` | `exact`     | Reads the persisted Codex session log (`~/.codex/sessions/...jsonl`) and normalizes the latest `5h` / `7d` percentage windows plus reset times |
+| OpenRouter API      | OpenAI-compatible rate-limit headers    | `exact`     | Uses `x-ratelimit-*` / `retry-after` when the upstream provides them                                                                           |
+| OpenCode API        | structured error metadata               | `heuristic` | Preserves `resetAt` / retry hints on rate-limit errors, but no proactive normalized snapshot is emitted today                                  |
+
+Auto-pause semantics follow the precision:
+
+- `exact` snapshots can proactively gate new work when the remaining quota has already crossed the configured safety threshold.
+- `heuristic` snapshots only proactively gate when the provider reports the runtime as blocked.
+- When a provider exposes `resetAt` / `retryAfterSeconds`, the agent uses those values instead of random quota backoff.
+
+### Provider metadata sanitization
+
+Runtime-limit `providerMeta` is sanitized before it is persisted or exposed outside the runtime layer.
+
+- Only provider-specific allow-listed top-level keys survive sanitization.
+- String values are redacted before storage.
+- Nested structured objects stay typed only when the key is registered in `PROVIDER_META_NESTED_SCHEMAS` (currently `modelUsageSummary` and `toolUsageSummary`).
+- Any new allow-listed key that emits a nested object/array must add a schema entry, otherwise that nested container is collapsed to a redacted opaque JSON string.
+
+Redaction helpers have distinct contracts:
+
+- `redactProviderText()` is the strict client-safe helper. Use it for anything returned to clients or persisted in user-visible payloads.
+- `redactProviderTextForLogs()` is the server-log helper. It still scrubs secrets, but preserves URLs and emails so diagnostics remain useful.
+
+For Claude-family profiles, the runtime now distinguishes the backend by resolved endpoint identity, not just `runtimeId/providerId/model`:
+
+- Native Anthropic uses SDK `rate_limit_event` (SDK/CLI) or Anthropic headers (API).
+- Z.AI / GLM Coding Plan is detected from Anthropic-compatible endpoints such as `https://api.z.ai/api/anthropic` and refreshes quota from the provider monitor endpoints when headers are insufficient:
+  - `/api/monitor/usage/quota/limit` for live quota windows
+  - `/api/monitor/usage/model-usage` for recent model/token usage summaries
+  - `/api/monitor/usage/tool-usage` for recent MCP/tool usage summaries
+- Alibaba Coding Plan Anthropic-compatible endpoints are tracked as a separate family, but remain `partial` for quota visibility because no official provider-side polling API is integrated yet.
+- Other Anthropic-compatible endpoints fall back to headers for API transport and SDK events for SDK/CLI transport when available.
+
+UI grouping for Claude runtime usage should use the normalized backend family plus the server-side account fingerprint (derived from endpoint origin + resolved auth secret), so native Anthropic, Z.AI GLM, and other compatible backends do not collapse into one card.
 
 ### Usage reporting contract
 

@@ -93,6 +93,8 @@ vi.mock("@aif/shared", async (importOriginal) => {
     ...actual,
     getEnv: () => ({
       AGENT_BYPASS_PERMISSIONS: false,
+      AIF_DEFAULT_RUNTIME_ID: "claude",
+      AIF_DEFAULT_PROVIDER_ID: "anthropic",
     }),
   };
 });
@@ -149,7 +151,9 @@ describe("chat session API", () => {
     mockListSessions.mockResolvedValue([]);
     mockGetSession.mockResolvedValue(null);
     mockListSessionEvents.mockResolvedValue([]);
-    mockFindRuntimeProfileById.mockReturnValue(null);
+    mockFindRuntimeProfileById.mockImplementation((id: string) =>
+      id === "profile-1" ? { id, projectId: "proj-1" } : null,
+    );
   });
 
   describe("GET /chat/sessions", () => {
@@ -216,13 +220,69 @@ describe("chat session API", () => {
       const res = await app.request("/chat/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: "proj-1", title: "New Chat" }),
+        body: JSON.stringify({
+          projectId: "proj-1",
+          title: "New Chat",
+          runtimeProfileId: "profile-1",
+          runtimeSessionId: "runtime-session-1",
+        }),
       });
 
       expect(res.status).toBe(201);
+      expect(mockCreateChatSession).toHaveBeenCalledWith({
+        projectId: "proj-1",
+        title: "New Chat",
+        runtimeProfileId: "profile-1",
+        runtimeSessionId: "runtime-session-1",
+      });
       expect(mockBroadcast).toHaveBeenCalledWith(
         expect.objectContaining({ type: "chat:session_created" }),
       );
+    });
+
+    it("rejects runtime profiles owned by a different project", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "foreign-profile",
+        projectId: "other-project",
+      });
+
+      const res = await app.request("/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          title: "New Chat",
+          runtimeProfileId: "foreign-profile",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
+    });
+
+    it("rejects disabled runtime profiles on create", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "disabled-profile",
+        projectId: null,
+        enabled: false,
+      });
+
+      const res = await app.request("/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          title: "New Chat",
+          runtimeProfileId: "disabled-profile",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
     });
   });
 
@@ -249,6 +309,53 @@ describe("chat session API", () => {
       const body = await res.json();
       expect(body.id).toBe("sdk:abc-123");
       expect(body.title).toBe("Runtime Session");
+    });
+
+    it("passes runtime profile context to virtual session lookup", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "profile-claude",
+        projectId: null,
+        name: "Claude Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        baseUrl: "https://api.example.test",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "claude-sonnet",
+        headersJson: JSON.stringify({ "x-profile": "1" }),
+        optionsJson: JSON.stringify({ region: "us" }),
+        enabled: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      mockGetSession.mockResolvedValue({
+        id: "abc-123",
+        title: "Runtime Session",
+        createdAt: "2026-04-01T00:00:00Z",
+        updatedAt: "2026-04-01T12:00:00Z",
+      });
+
+      const res = await app.request(
+        "/chat/sessions/sdk:abc-123?projectId=proj-1&runtimeProfileId=profile-claude",
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockGetSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileId: "profile-claude",
+          sessionId: "abc-123",
+          options: expect.objectContaining({
+            region: "us",
+            baseUrl: "https://api.example.test",
+            apiKeyEnvVar: "OPENAI_API_KEY",
+          }),
+          headers: { "x-profile": "1" },
+        }),
+      );
+      const body = await res.json();
+      expect(body.runtimeProfileId).toBe("profile-claude");
     });
   });
 
@@ -294,6 +401,45 @@ describe("chat session API", () => {
       expect(body).toHaveLength(2);
       expect(body[0].role).toBe("user");
       expect(body[1].role).toBe("assistant");
+    });
+
+    it("passes runtime profile context to virtual session event listing", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "profile-claude",
+        projectId: null,
+        name: "Claude Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        transport: "sdk",
+        baseUrl: "https://api.example.test",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        defaultModel: "claude-sonnet",
+        headersJson: JSON.stringify({ "x-profile": "1" }),
+        optionsJson: JSON.stringify({ region: "us" }),
+        enabled: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      mockListSessionEvents.mockResolvedValue([]);
+
+      const res = await app.request(
+        "/chat/sessions/sdk:abc-123/messages?projectId=proj-1&runtimeProfileId=profile-claude",
+      );
+      expect(res.status).toBe(200);
+      expect(mockListSessionEvents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeId: "claude",
+          providerId: "anthropic",
+          profileId: "profile-claude",
+          sessionId: "abc-123",
+          options: expect.objectContaining({
+            region: "us",
+            baseUrl: "https://api.example.test",
+            apiKeyEnvVar: "OPENAI_API_KEY",
+          }),
+          headers: { "x-profile": "1" },
+        }),
+      );
     });
 
     it("deduplicates a mixed text+question turn on reload of a linked DB session", async () => {
@@ -454,18 +600,71 @@ describe("chat session API", () => {
   });
 
   describe("PUT /chat/sessions/:id", () => {
-    it("updates title", async () => {
+    it("updates title and runtime profile fields", async () => {
       mockFindChatSessionById.mockReturnValue(SESSION_ROW);
-      mockUpdateChatSession.mockReturnValue({ ...SESSION_ROW, title: "Renamed" });
+      mockUpdateChatSession.mockReturnValue({
+        ...SESSION_ROW,
+        title: "Renamed",
+        runtimeProfileId: "profile-1",
+        runtimeSessionId: "runtime-session-2",
+      });
 
       const res = await app.request("/chat/sessions/session-1", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "Renamed" }),
+        body: JSON.stringify({
+          title: "Renamed",
+          runtimeProfileId: "profile-1",
+          runtimeSessionId: "runtime-session-2",
+        }),
       });
       expect(res.status).toBe(200);
+      expect(mockUpdateChatSession).toHaveBeenCalledWith("session-1", {
+        title: "Renamed",
+        runtimeProfileId: "profile-1",
+        runtimeSessionId: "runtime-session-2",
+      });
       const body = await res.json();
       expect(body.title).toBe("Renamed");
+    });
+
+    it("rejects runtime profiles owned by a different project on update", async () => {
+      mockFindChatSessionById.mockReturnValue(SESSION_ROW);
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "foreign-profile",
+        projectId: "other-project",
+      });
+
+      const res = await app.request("/chat/sessions/session-1", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runtimeProfileId: "foreign-profile" }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
+    });
+
+    it("rejects disabled runtime profiles on update", async () => {
+      mockFindChatSessionById.mockReturnValue(SESSION_ROW);
+      mockFindRuntimeProfileById.mockReturnValue({
+        id: "disabled-profile",
+        projectId: null,
+        enabled: false,
+      });
+
+      const res = await app.request("/chat/sessions/session-1", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runtimeProfileId: "disabled-profile" }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBeTruthy();
+      expect(body.fieldErrors.runtimeProfileId).toBeDefined();
     });
   });
 

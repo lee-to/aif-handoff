@@ -11,12 +11,16 @@ import {
   UsageSource,
   type RuntimeAdapter,
   type RuntimeEvent,
+  type RuntimeLimitSnapshot,
   type RuntimeRunInput,
   type RuntimeToolQuestionPayload,
 } from "@aif/runtime";
 import {
   logger,
   getEnv,
+  redactProviderText,
+  redactProviderTextForLogs,
+  sanitizeRuntimeLimitSnapshotForExposure,
   type ChatMessageAttachment,
   type ChatSession,
   type ChatSessionMessage,
@@ -52,9 +56,14 @@ import {
 } from "../services/sessionCache.js";
 import {
   assertApiRuntimeCapabilities,
+  extractLatestRuntimeLimitSnapshot,
+  extractRuntimeLimitSnapshotFromError,
   getApiRuntimeRegistry,
+  observeRuntimeLimitEvent,
+  refreshRuntimeProfileLimitState,
   resolveApiRuntimeContext,
 } from "../services/runtime.js";
+import { validateProjectScopedRuntimeProfileSelections } from "../services/runtimeProfileScope.js";
 
 const PROJECT_SCOPE_SYSTEM_APPEND =
   "Project scope rule: work strictly inside the current working directory (project root). " +
@@ -165,6 +174,13 @@ interface VirtualRuntimeSessionRef {
   sessionId: string;
 }
 
+function redactTaskContextForRuntimePrompt(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => redactProviderText(line))
+    .join("\n");
+}
+
 function buildContextAppend(
   projectName: string,
   task: Task | null,
@@ -178,14 +194,26 @@ function buildContextAppend(
   if (task) {
     const lines = [
       `\nCurrently open task [${task.id}]:`,
-      `  Title: ${task.title}`,
+      `  Title: ${redactTaskContextForRuntimePrompt(task.title)}`,
       `  Status: ${task.status}`,
     ];
-    if (task.description) lines.push(`  Description: ${task.description}`);
-    if (task.plan) lines.push(`  Plan:\n${task.plan}`);
-    if (task.implementationLog) lines.push(`  Implementation log:\n${task.implementationLog}`);
-    if (task.reviewComments) lines.push(`  Review comments:\n${task.reviewComments}`);
-    if (task.agentActivityLog) lines.push(`  Agent activity log:\n${task.agentActivityLog}`);
+    if (task.description) {
+      lines.push(`  Description: ${redactTaskContextForRuntimePrompt(task.description)}`);
+    }
+    if (task.plan) lines.push(`  Plan:\n${redactTaskContextForRuntimePrompt(task.plan)}`);
+    if (task.implementationLog) {
+      lines.push(
+        `  Implementation log:\n${redactTaskContextForRuntimePrompt(task.implementationLog)}`,
+      );
+    }
+    if (task.reviewComments) {
+      lines.push(`  Review comments:\n${redactTaskContextForRuntimePrompt(task.reviewComments)}`);
+    }
+    if (task.agentActivityLog) {
+      lines.push(
+        `  Agent activity log:\n${redactTaskContextForRuntimePrompt(task.agentActivityLog)}`,
+      );
+    }
     parts.push(lines.join("\n"));
   } else {
     parts.push("No task is currently open.");
@@ -254,22 +282,56 @@ function classifyChatError(err: unknown): {
   message: string;
 } {
   const rawMessage = err instanceof Error ? err.message : String(err);
-  const message = rawMessage?.trim() ? rawMessage.trim() : "Chat request failed";
+  const normalizedRawMessage = rawMessage?.trim()
+    ? redactProviderTextForLogs(rawMessage.trim())
+    : null;
+
+  const redactForClient = (message: string, code: string, status: 429 | 500) => {
+    if (normalizedRawMessage && normalizedRawMessage !== message) {
+      log.warn(
+        {
+          code,
+          status,
+          rawMessage: normalizedRawMessage,
+        },
+        "Redacted runtime error details before sending chat failure to the client",
+      );
+    }
+    return { status, code, message };
+  };
 
   if (isRuntimeErrorCategory(err, "rate_limit")) {
-    return { status: 429, code: "CHAT_USAGE_LIMIT", message };
+    return redactForClient(
+      "Runtime usage limit reached. Try again later.",
+      "CHAT_USAGE_LIMIT",
+      429,
+    );
   }
 
   if (isRuntimeErrorCategory(err, "auth")) {
-    return { status: 500, code: "CHAT_AUTH_ERROR", message };
+    return redactForClient(
+      "Runtime authentication failed. Check the configured runtime profile.",
+      "CHAT_AUTH_ERROR",
+      500,
+    );
   }
 
-  return { status: 500, code: "CHAT_REQUEST_FAILED", message };
+  return redactForClient("Chat request failed", "CHAT_REQUEST_FAILED", 500);
 }
 
 /** Runtime-aware input sanitization. Uses adapter.sanitizeInput if available, otherwise passthrough. */
 function sanitizeRuntimeInput(text: string, adapter?: RuntimeAdapter): string {
   return adapter?.sanitizeInput ? adapter.sanitizeInput(text) : text.trim();
+}
+
+function normalizeOptionalRuntimeLimitSnapshot(
+  snapshot: RuntimeLimitSnapshot | null | undefined,
+): RuntimeLimitSnapshot | null {
+  // Skip exposure entirely when usage-limits feature is disabled — the
+  // client UI surfaces are gated on the same flag, so forwarding a snapshot
+  // just wastes bytes and risks stale UI in disabled deployments.
+  if (!getEnv().AIF_USAGE_LIMITS_ENABLED) return null;
+  return snapshot ? sanitizeRuntimeLimitSnapshotForExposure(snapshot, "chat") : null;
 }
 
 /**
@@ -469,12 +531,18 @@ function buildChatRuntimeWorkflow(prompt: string, systemPromptAppend: string) {
   });
 }
 
-async function resolveChatRuntimeAdapter(projectId: string, prompt: string, systemAppend: string) {
+async function resolveChatRuntimeAdapter(
+  projectId: string,
+  prompt: string,
+  systemAppend: string,
+  options: { runtimeProfileId?: string | null } = {},
+) {
   const workflow = buildChatRuntimeWorkflow(prompt, systemAppend);
   const context = await resolveApiRuntimeContext({
     projectId,
     mode: "chat",
     workflow,
+    runtimeProfileId: options.runtimeProfileId,
   });
   assertApiRuntimeCapabilities({
     adapter: context.adapter,
@@ -487,6 +555,105 @@ async function resolveChatRuntimeAdapter(projectId: string, prompt: string, syst
 async function getAdapterForRuntimeId(runtimeId: string): Promise<RuntimeAdapter> {
   const registry = await getApiRuntimeRegistry();
   return registry.resolveRuntime(runtimeId);
+}
+
+interface RuntimeSessionLookupContext {
+  providerId: string;
+  profileId: string | null;
+  runtimeProfileId: string | null;
+  projectRoot?: string;
+  options?: Record<string, unknown>;
+  headers?: Record<string, string>;
+}
+
+function parseOptionalQueryParam(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildSessionLookupOptions(input: {
+  options?: Record<string, unknown> | null;
+  baseUrl?: string | null;
+  apiKey?: string | null;
+  apiKeyEnvVar?: string | null;
+}): Record<string, unknown> | undefined {
+  const options: Record<string, unknown> = {
+    ...(input.options ?? {}),
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+    ...(input.apiKeyEnvVar ? { apiKeyEnvVar: input.apiKeyEnvVar } : {}),
+  };
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
+async function resolveVirtualSessionLookupContext(input: {
+  runtimeId: string;
+  adapter: RuntimeAdapter;
+  projectId: string | null;
+  runtimeProfileId: string | null;
+}): Promise<RuntimeSessionLookupContext> {
+  if (input.runtimeProfileId) {
+    const profileRow = findRuntimeProfileById(input.runtimeProfileId);
+    const profile = profileRow ? toRuntimeProfileResponse(profileRow) : null;
+    if (profile && profile.runtimeId === input.runtimeId) {
+      return {
+        providerId: profile.providerId,
+        profileId: profile.id,
+        runtimeProfileId: profile.id,
+        options: buildSessionLookupOptions({
+          options: profile.options ?? {},
+          baseUrl: profile.baseUrl ?? null,
+          apiKeyEnvVar: profile.apiKeyEnvVar ?? null,
+        }),
+        headers: profile.headers ?? {},
+      };
+    }
+  }
+
+  if (input.projectId) {
+    const project = findProjectById(input.projectId);
+    if (project) {
+      try {
+        const systemAppend = buildContextAppend(project.name, null);
+        const { context } = await resolveChatRuntimeAdapter(
+          input.projectId,
+          "session-lookup",
+          systemAppend,
+        );
+        if (context.resolvedProfile.runtimeId === input.runtimeId) {
+          return {
+            providerId: context.resolvedProfile.providerId,
+            profileId: context.resolvedProfile.profileId ?? null,
+            runtimeProfileId: context.resolvedProfile.profileId ?? null,
+            projectRoot: project.rootPath,
+            options: buildSessionLookupOptions({
+              options: context.resolvedProfile.options ?? {},
+              baseUrl: context.resolvedProfile.baseUrl ?? null,
+              apiKey: context.resolvedProfile.apiKey ?? null,
+              apiKeyEnvVar: context.resolvedProfile.apiKeyEnvVar ?? null,
+            }),
+            headers: context.resolvedProfile.headers,
+          };
+        }
+      } catch (err) {
+        log.debug(
+          {
+            err,
+            projectId: input.projectId,
+            runtimeId: input.runtimeId,
+          },
+          "Unable to resolve project runtime context for virtual session lookup",
+        );
+      }
+    }
+  }
+
+  return {
+    providerId: input.adapter.descriptor.providerId,
+    profileId: null,
+    runtimeProfileId: null,
+  };
 }
 
 export const chatRouter = new Hono();
@@ -620,7 +787,20 @@ chatRouter.get("/sessions", async (c) => {
 chatRouter.post("/sessions", jsonValidator(createChatSessionSchema), async (c) => {
   const body = c.req.valid("json") as CreateChatSessionPayload;
   log.debug("POST /chat/sessions projectId=%s title=%s", body.projectId, body.title);
-  const row = createChatSession({ projectId: body.projectId, title: body.title });
+  const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
+    projectId: body.projectId,
+    selections: { runtimeProfileId: body.runtimeProfileId },
+  });
+  if (runtimeValidation) {
+    return c.json(runtimeValidation, 400);
+  }
+
+  const row = createChatSession({
+    projectId: body.projectId,
+    title: body.title,
+    runtimeProfileId: body.runtimeProfileId,
+    runtimeSessionId: body.runtimeSessionId,
+  });
   if (!row) {
     return c.json({ error: "Failed to create chat session" }, 500);
   }
@@ -641,11 +821,20 @@ chatRouter.get("/sessions/:id", async (c) => {
       if (!adapter.getSession) {
         return c.json({ error: "Runtime does not support session details" }, 404);
       }
+      const lookupContext = await resolveVirtualSessionLookupContext({
+        runtimeId: virtual.runtimeId,
+        adapter,
+        projectId: parseOptionalQueryParam(c.req.query("projectId")),
+        runtimeProfileId: parseOptionalQueryParam(c.req.query("runtimeProfileId")),
+      });
       const info = await adapter.getSession({
         runtimeId: virtual.runtimeId,
-        providerId: adapter.descriptor.providerId,
-        profileId: null,
+        providerId: lookupContext.providerId,
+        profileId: lookupContext.profileId,
+        projectRoot: lookupContext.projectRoot,
         sessionId: virtual.sessionId,
+        options: lookupContext.options,
+        headers: lookupContext.headers,
       });
       if (!info) {
         return c.json({ error: "Chat session not found" }, 404);
@@ -655,7 +844,7 @@ chatRouter.get("/sessions/:id", async (c) => {
         projectId: "",
         title: info.title || "Untitled",
         agentSessionId: null,
-        runtimeProfileId: null,
+        runtimeProfileId: lookupContext.runtimeProfileId,
         runtimeSessionId: info.id,
         source: "agent",
         createdAt: info.createdAt,
@@ -687,12 +876,21 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
       if (!adapter.listSessionEvents) {
         return c.json({ error: "Runtime does not support session message listing" }, 404);
       }
+      const lookupContext = await resolveVirtualSessionLookupContext({
+        runtimeId: virtual.runtimeId,
+        adapter,
+        projectId: parseOptionalQueryParam(c.req.query("projectId")),
+        runtimeProfileId: parseOptionalQueryParam(c.req.query("runtimeProfileId")),
+      });
 
       const runtimeEvents = await adapter.listSessionEvents({
         runtimeId: virtual.runtimeId,
-        providerId: adapter.descriptor.providerId,
-        profileId: null,
+        providerId: lookupContext.providerId,
+        profileId: lookupContext.profileId,
+        projectRoot: lookupContext.projectRoot,
         sessionId: virtual.sessionId,
+        options: lookupContext.options,
+        headers: lookupContext.headers,
       });
 
       const messages: ChatSessionMessage[] = runtimeEvents
@@ -843,7 +1041,20 @@ chatRouter.put("/sessions/:id", jsonValidator(updateChatSessionSchema), async (c
   if (!existing) {
     return c.json({ error: "Chat session not found" }, 404);
   }
-  const row = updateChatSession(id, { title: body.title });
+
+  const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
+    projectId: existing.projectId,
+    selections: { runtimeProfileId: body.runtimeProfileId },
+  });
+  if (runtimeValidation) {
+    return c.json(runtimeValidation, 400);
+  }
+
+  const row = updateChatSession(id, {
+    title: body.title,
+    runtimeProfileId: body.runtimeProfileId,
+    runtimeSessionId: body.runtimeSessionId,
+  });
   return c.json(row ? toChatSessionResponse(row) : null);
 });
 
@@ -936,6 +1147,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
   // completed. Without this, aborting the first turn of a fresh chat would
   // break runtime continuity — the next turn would have no resume context.
   let runtimeSessionIdFromEvents: string | null = null;
+  let latestLimitSnapshot: RuntimeLimitSnapshot | null = null;
   // Hoisted so the abort branch can surface server-resolved attachment paths
   // to the client — without this, an aborted run with uploads would leave the
   // user bubble with a path-less chip until the session is reopened.
@@ -954,8 +1166,24 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       if (row) currentTask = toTaskResponse(row);
     }
 
+    chatSessionId = inputSessionId ?? null;
+    const incomingVirtual = chatSessionId ? parseVirtualRuntimeSessionId(chatSessionId) : null;
+    let existingSession =
+      chatSessionId && !incomingVirtual ? (findChatSessionById(chatSessionId) ?? null) : null;
+    if (chatSessionId && !incomingVirtual && !existingSession) {
+      log.debug("Provided sessionId=%s not found, will auto-create", chatSessionId);
+      chatSessionId = null;
+    }
+
     const baseSystemAppend = buildContextAppend(project.name, currentTask);
-    const runtimeResolution = await resolveChatRuntimeAdapter(projectId, message, baseSystemAppend);
+    const runtimeResolution = await resolveChatRuntimeAdapter(
+      projectId,
+      message,
+      baseSystemAppend,
+      {
+        runtimeProfileId: existingSession?.runtimeProfileId ?? null,
+      },
+    );
     const runtimeContext = runtimeResolution.context;
     const adapter = runtimeContext.adapter;
     runtimeId = runtimeContext.resolvedProfile.runtimeId;
@@ -969,9 +1197,8 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       interactiveQuestions: chatRuntimeCaps.supportsInteractiveQuestions === true,
     });
 
-    // Resolve or auto-create a chat session
-    chatSessionId = inputSessionId ?? null;
-    const incomingVirtual = chatSessionId ? parseVirtualRuntimeSessionId(chatSessionId) : null;
+    // Resolve or auto-create a chat session. Existing DB sessions are loaded
+    // before runtime resolution so their saved runtimeProfileId stays pinned.
 
     // External runtime sessions are virtual — create a DB session linked to the runtime session
     if (incomingVirtual) {
@@ -990,12 +1217,6 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         });
         broadcast({ type: "chat:session_created", payload: toChatSessionResponse(session) });
       } else {
-        chatSessionId = null;
-      }
-    } else if (chatSessionId) {
-      const existing = findChatSessionById(chatSessionId);
-      if (!existing) {
-        log.debug("Provided sessionId=%s not found, will auto-create", chatSessionId);
         chatSessionId = null;
       }
     }
@@ -1029,7 +1250,9 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       "INFO [api-runtime] Chat request started",
     );
 
-    const dbSession = chatSessionId ? findChatSessionById(chatSessionId) : null;
+    const dbSession = chatSessionId
+      ? (existingSession ?? findChatSessionById(chatSessionId))
+      : null;
     const resumeRuntimeSessionId =
       dbSession?.runtimeSessionId ?? dbSession?.agentSessionId ?? undefined;
 
@@ -1104,6 +1327,19 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
     };
 
     const onRuntimeEvent = (event: RuntimeEvent) => {
+      latestLimitSnapshot = observeRuntimeLimitEvent(event, latestLimitSnapshot, {
+        logger: log,
+        observedMessage: "Observed runtime limit event during chat execution",
+        malformedMessage: "Dropped runtime limit event with malformed snapshot payload",
+        logContext: {
+          conversationId: chatConversationId,
+          projectId,
+          taskId: taskId ?? null,
+          runtimeId,
+          runtimeProfileId,
+        },
+      });
+
       if (event.type === "stream:text" && event.message) {
         flushPendingQuestionBlocks();
         streamedTextLength += event.message.length;
@@ -1267,6 +1503,33 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       );
     }
 
+    latestLimitSnapshot = extractLatestRuntimeLimitSnapshot(result.events) ?? latestLimitSnapshot;
+    if (latestLimitSnapshot) {
+      refreshRuntimeProfileLimitState({
+        runtimeProfileId,
+        runtimeId,
+        providerId: runtimeProviderId,
+        snapshot: latestLimitSnapshot,
+        taskId: taskId ?? null,
+        projectId,
+        conversationId: chatConversationId,
+        workflowKind: "chat",
+        reason: "chat:success",
+      });
+    } else {
+      log.debug(
+        {
+          conversationId: chatConversationId,
+          projectId,
+          taskId: taskId ?? null,
+          runtimeProfileId,
+          runtimeId,
+          providerId: runtimeProviderId,
+        },
+        "Preserving runtime limit state after successful chat execution without an authoritative recovery signal",
+      );
+    }
+
     // Recover assistant text that never arrived as `stream:text` deltas.
     // Claude CLI partial-messages can emit a mix where only part of assistant
     // text arrives as deltas and the rest remains in `result.outputText`.
@@ -1305,10 +1568,16 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       updateChatSessionTimestamp(chatSessionId);
     }
 
+    const normalizedLatestLimitSnapshot =
+      normalizeOptionalRuntimeLimitSnapshot(latestLimitSnapshot);
     const doneEvent: WsEvent = {
       type: "chat:done",
       payload: {
         conversationId: chatConversationId,
+        projectId,
+        taskId: taskId ?? null,
+        runtimeProfileId: runtimeProfileId ?? null,
+        runtimeLimitSnapshot: normalizedLatestLimitSnapshot,
         // Expose per-turn usage so the frontend can show token/cost spend
         // without a round-trip to the usage_events table. Recording of the
         // usage itself already happened inside the registry wrapper via the
@@ -1330,9 +1599,12 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         profileId: runtimeProfileId,
         providerId: runtimeProviderId,
       },
+      runtimeLimitSnapshot: normalizedLatestLimitSnapshot,
       ...(savedAttachments?.length ? { attachments: savedAttachments } : {}),
     });
   } catch (err) {
+    const errorLimitSnapshot = extractRuntimeLimitSnapshotFromError(err);
+    const normalizedErrorLimitSnapshot = normalizeOptionalRuntimeLimitSnapshot(errorLimitSnapshot);
     const aborted = abortController.signal.aborted || isAbortError(err);
     if (aborted) {
       // Persist any tokens streamed before the abort so the partial assistant
@@ -1352,6 +1624,18 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
           runtimeSessionId: runtimeSessionIdFromEvents,
         });
       }
+      refreshRuntimeProfileLimitState({
+        runtimeProfileId,
+        runtimeId,
+        providerId: runtimeProviderId,
+        snapshot: errorLimitSnapshot,
+        clearOnMissing: false,
+        taskId: taskId ?? null,
+        projectId,
+        conversationId: chatConversationId,
+        workflowKind: "chat",
+        reason: "chat:aborted",
+      });
       log.info(
         {
           runtimeId,
@@ -1366,13 +1650,23 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
         type: "chat:error",
         payload: {
           conversationId: chatConversationId,
+          projectId,
+          taskId: taskId ?? null,
+          runtimeProfileId: runtimeProfileId ?? null,
+          runtimeLimitSnapshot: normalizedErrorLimitSnapshot,
           message: "Chat run aborted by user",
           code: "aborted",
         },
       };
       const doneEvent: WsEvent = {
         type: "chat:done",
-        payload: { conversationId: chatConversationId },
+        payload: {
+          conversationId: chatConversationId,
+          projectId,
+          taskId: taskId ?? null,
+          runtimeProfileId: runtimeProfileId ?? null,
+          runtimeLimitSnapshot: normalizedErrorLimitSnapshot,
+        },
       };
       if (clientId) {
         sendToClient(clientId, abortedEvent);
@@ -1384,6 +1678,7 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
           code: "aborted",
           conversationId: chatConversationId,
           sessionId: chatSessionId,
+          runtimeLimitSnapshot: normalizedErrorLimitSnapshot,
           // Expose the partial assistant reply so clients without an active
           // WebSocket can render what was saved server-side. Mirrors the
           // success path's `assistantMessage`.
@@ -1396,8 +1691,31 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       );
     }
 
+    refreshRuntimeProfileLimitState({
+      runtimeProfileId,
+      runtimeId,
+      providerId: runtimeProviderId,
+      snapshot: errorLimitSnapshot,
+      clearOnMissing: false,
+      taskId: taskId ?? null,
+      projectId,
+      conversationId: chatConversationId,
+      workflowKind: "chat",
+      reason: "chat:error",
+    });
+    const scrubbedErrorMessage =
+      err instanceof Error
+        ? redactProviderTextForLogs(err.message)
+        : redactProviderTextForLogs(String(err));
     log.error(
-      { err, runtimeId, runtimeProfileId, runtimeProviderId, conversationId: chatConversationId },
+      {
+        runtimeId,
+        runtimeProfileId,
+        runtimeProviderId,
+        conversationId: chatConversationId,
+        errorName: err instanceof Error ? err.name : typeof err,
+        errorMessage: scrubbedErrorMessage,
+      },
       "Chat request failed",
     );
     const classified = classifyChatError(err);
@@ -1406,6 +1724,10 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
       type: "chat:error",
       payload: {
         conversationId: chatConversationId,
+        projectId,
+        taskId: taskId ?? null,
+        runtimeProfileId: runtimeProfileId ?? null,
+        runtimeLimitSnapshot: normalizedErrorLimitSnapshot,
         message: classified.message,
         code: classified.code,
       },
@@ -1416,13 +1738,26 @@ chatRouter.post("/", jsonValidator(chatRequestSchema), async (c) => {
 
     const doneEvent: WsEvent = {
       type: "chat:done",
-      payload: { conversationId: chatConversationId },
+      payload: {
+        conversationId: chatConversationId,
+        projectId,
+        taskId: taskId ?? null,
+        runtimeProfileId: runtimeProfileId ?? null,
+        runtimeLimitSnapshot: normalizedErrorLimitSnapshot,
+      },
     };
     if (clientId) {
       sendToClient(clientId, doneEvent);
     }
 
-    return c.json({ error: classified.message, code: classified.code }, classified.status);
+    return c.json(
+      {
+        error: classified.message,
+        code: classified.code,
+        runtimeLimitSnapshot: normalizedErrorLimitSnapshot,
+      },
+      classified.status,
+    );
   } finally {
     activeChatRuns.delete(chatConversationId);
   }

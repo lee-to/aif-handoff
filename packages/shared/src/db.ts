@@ -59,6 +59,17 @@ function ensureTables(sqlite: Database.Database): void {
     )
   `);
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id INTEGER PRIMARY KEY NOT NULL DEFAULT 1,
+      default_task_runtime_profile_id TEXT,
+      default_plan_runtime_profile_id TEXT,
+      default_review_runtime_profile_id TEXT,
+      default_chat_runtime_profile_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -102,6 +113,8 @@ function ensureTables(sqlite: Database.Database): void {
       model_override TEXT,
       runtime_options_json TEXT,
       session_id TEXT,
+      runtime_limit_snapshot_json TEXT,
+      runtime_limit_updated_at TEXT,
       locked_by TEXT,
       locked_until TEXT,
       scheduled_at TEXT,
@@ -133,6 +146,8 @@ function ensureTables(sqlite: Database.Database): void {
       headers_json TEXT NOT NULL DEFAULT '{}',
       options_json TEXT NOT NULL DEFAULT '{}',
       enabled INTEGER NOT NULL DEFAULT 1,
+      runtime_limit_snapshot_json TEXT,
+      runtime_limit_updated_at TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
@@ -401,6 +416,84 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE projects ADD COLUMN auto_queue_mode INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 13,
+    description: "Persist runtime limit snapshots on runtime_profiles and tasks",
+    sql: `
+      ALTER TABLE runtime_profiles ADD COLUMN runtime_limit_snapshot_json TEXT;
+      ALTER TABLE runtime_profiles ADD COLUMN runtime_limit_updated_at TEXT;
+      ALTER TABLE tasks ADD COLUMN runtime_limit_snapshot_json TEXT;
+      ALTER TABLE tasks ADD COLUMN runtime_limit_updated_at TEXT;
+    `,
+  },
+  {
+    version: 14,
+    description: "Add app_settings singleton table and extend runtime-profile cleanup coverage",
+    sql: `
+      CREATE TABLE IF NOT EXISTS app_settings (
+        id INTEGER PRIMARY KEY NOT NULL DEFAULT 1,
+        default_task_runtime_profile_id TEXT,
+        default_plan_runtime_profile_id TEXT,
+        default_review_runtime_profile_id TEXT,
+        default_chat_runtime_profile_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      INSERT OR IGNORE INTO app_settings (id) VALUES (1);
+      DROP TRIGGER IF EXISTS trg_runtime_profiles_delete;
+    `,
+    triggers: [
+      `CREATE TRIGGER IF NOT EXISTS trg_runtime_profiles_delete
+       AFTER DELETE ON runtime_profiles
+       FOR EACH ROW
+       BEGIN
+         UPDATE tasks SET runtime_profile_id = NULL WHERE runtime_profile_id = OLD.id;
+         UPDATE projects SET default_task_runtime_profile_id = NULL WHERE default_task_runtime_profile_id = OLD.id;
+         UPDATE projects SET default_plan_runtime_profile_id = NULL WHERE default_plan_runtime_profile_id = OLD.id;
+         UPDATE projects SET default_review_runtime_profile_id = NULL WHERE default_review_runtime_profile_id = OLD.id;
+         UPDATE projects SET default_chat_runtime_profile_id = NULL WHERE default_chat_runtime_profile_id = OLD.id;
+         UPDATE chat_sessions SET runtime_profile_id = NULL WHERE runtime_profile_id = OLD.id;
+         UPDATE app_settings
+         SET
+           default_task_runtime_profile_id = CASE
+             WHEN default_task_runtime_profile_id = OLD.id THEN NULL
+             ELSE default_task_runtime_profile_id
+           END,
+           default_plan_runtime_profile_id = CASE
+             WHEN default_plan_runtime_profile_id = OLD.id THEN NULL
+             ELSE default_plan_runtime_profile_id
+           END,
+           default_review_runtime_profile_id = CASE
+             WHEN default_review_runtime_profile_id = OLD.id THEN NULL
+             ELSE default_review_runtime_profile_id
+           END,
+           default_chat_runtime_profile_id = CASE
+             WHEN default_chat_runtime_profile_id = OLD.id THEN NULL
+             ELSE default_chat_runtime_profile_id
+           END,
+           updated_at = CASE
+             WHEN default_task_runtime_profile_id = OLD.id
+               OR default_plan_runtime_profile_id = OLD.id
+               OR default_review_runtime_profile_id = OLD.id
+               OR default_chat_runtime_profile_id = OLD.id
+             THEN (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             ELSE updated_at
+           END
+         WHERE id = 1;
+       END`,
+    ],
+  },
+  {
+    version: 15,
+    description:
+      "Re-apply runtime limit snapshot columns for DBs that skipped v13 due to branch-merge re-ordering",
+    sql: `
+      ALTER TABLE runtime_profiles ADD COLUMN runtime_limit_snapshot_json TEXT;
+      ALTER TABLE runtime_profiles ADD COLUMN runtime_limit_updated_at TEXT;
+      ALTER TABLE tasks ADD COLUMN runtime_limit_snapshot_json TEXT;
+      ALTER TABLE tasks ADD COLUMN runtime_limit_updated_at TEXT;
+    `,
+  },
 ];
 
 function splitSqlStatements(sqlText: string): string[] {
@@ -478,6 +571,21 @@ function hasColumn(sqlite: Database.Database, tableName: string, columnName: str
 }
 
 function runRuntimeBackfills(sqlite: Database.Database): void {
+  if (hasColumn(sqlite, "app_settings", "id")) {
+    const appSettingsBackfill = sqlite
+      .prepare(
+        `
+        INSERT OR IGNORE INTO app_settings (id)
+        VALUES (1)
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: appSettingsBackfill.changes },
+      "Backfilled singleton app_settings row",
+    );
+  }
+
   if (hasColumn(sqlite, "chat_sessions", "runtime_session_id")) {
     const sessionBackfill = sqlite
       .prepare(
@@ -556,6 +664,40 @@ function runRuntimeBackfills(sqlite: Database.Database): void {
     log.info(
       { backfilledRows: manualReviewBackfill.changes },
       "Backfilled task manual_review_required defaults",
+    );
+  }
+
+  if (hasColumn(sqlite, "runtime_profiles", "runtime_limit_snapshot_json")) {
+    const runtimeProfileLimitBackfill = sqlite
+      .prepare(
+        `
+        UPDATE runtime_profiles
+        SET runtime_limit_snapshot_json = NULL
+        WHERE runtime_limit_snapshot_json IS NOT NULL
+          AND trim(runtime_limit_snapshot_json) = ''
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: runtimeProfileLimitBackfill.changes },
+      "Backfilled runtime profile empty runtime_limit_snapshot_json values",
+    );
+  }
+
+  if (hasColumn(sqlite, "tasks", "runtime_limit_snapshot_json")) {
+    const taskLimitBackfill = sqlite
+      .prepare(
+        `
+        UPDATE tasks
+        SET runtime_limit_snapshot_json = NULL
+        WHERE runtime_limit_snapshot_json IS NOT NULL
+          AND trim(runtime_limit_snapshot_json) = ''
+      `,
+      )
+      .run();
+    log.info(
+      { backfilledRows: taskLimitBackfill.changes },
+      "Backfilled task empty runtime_limit_snapshot_json values",
     );
   }
 }

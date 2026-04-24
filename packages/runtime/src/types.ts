@@ -1,7 +1,16 @@
 import {
   isRuntimeTransport as _isRuntimeTransport,
   RUNTIME_TRANSPORTS as _RUNTIME_TRANSPORTS,
+  RuntimeLimitPrecision as _RuntimeLimitPrecision,
+  RuntimeLimitScope as _RuntimeLimitScope,
+  RuntimeLimitSource as _RuntimeLimitSource,
+  RuntimeLimitStatus as _RuntimeLimitStatus,
   RuntimeTransport as _RuntimeTransport,
+} from "@aif/shared";
+import type {
+  RuntimeLimitEventPayload as _RuntimeLimitEventPayload,
+  RuntimeLimitSnapshot as _RuntimeLimitSnapshot,
+  RuntimeLimitWindow as _RuntimeLimitWindow,
 } from "@aif/shared";
 
 // Re-exported from @aif/shared — single source of truth for browser + server
@@ -9,6 +18,21 @@ export const RuntimeTransport = _RuntimeTransport;
 export type RuntimeTransport = (typeof RuntimeTransport)[keyof typeof RuntimeTransport];
 export const RUNTIME_TRANSPORTS = _RUNTIME_TRANSPORTS;
 export const isRuntimeTransport = _isRuntimeTransport;
+export const RuntimeLimitSource = _RuntimeLimitSource;
+export type RuntimeLimitSource = (typeof RuntimeLimitSource)[keyof typeof RuntimeLimitSource];
+export const RuntimeLimitStatus = _RuntimeLimitStatus;
+export type RuntimeLimitStatus = (typeof RuntimeLimitStatus)[keyof typeof RuntimeLimitStatus];
+export const RuntimeLimitPrecision = _RuntimeLimitPrecision;
+export type RuntimeLimitPrecision =
+  (typeof RuntimeLimitPrecision)[keyof typeof RuntimeLimitPrecision];
+export const RuntimeLimitScope = _RuntimeLimitScope;
+export type RuntimeLimitScope = (typeof RuntimeLimitScope)[keyof typeof RuntimeLimitScope];
+export type RuntimeLimitWindow = _RuntimeLimitWindow;
+export type RuntimeLimitSnapshot = _RuntimeLimitSnapshot;
+export type RuntimeLimitEventPayload = _RuntimeLimitEventPayload;
+
+/** Canonical runtime event type for provider limit-state updates. */
+export const RUNTIME_LIMIT_EVENT_TYPE = "runtime:limit" as const;
 
 /**
  * Usage reporting contract — declares whether an adapter can populate

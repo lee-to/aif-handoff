@@ -3,10 +3,28 @@ import { Hono } from "hono";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { projects } from "@aif/shared";
+import { projects, runtimeProfiles, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
+const mockBroadcast = vi.fn();
+const mockInternalBroadcastToken = { value: "" };
+const baseMockEnv = {
+  AIF_DEFAULT_RUNTIME_ID: "claude",
+  AIF_DEFAULT_PROVIDER_ID: "anthropic",
+  INTERNAL_BROADCAST_TOKEN: "",
+};
+
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  return {
+    ...actual,
+    getEnv: () => ({
+      ...baseMockEnv,
+      INTERNAL_BROADCAST_TOKEN: mockInternalBroadcastToken.value,
+    }),
+  };
+});
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
@@ -37,7 +55,7 @@ vi.mock("../services/runtime.js", () => ({
 }));
 
 vi.mock("../ws.js", () => ({
-  broadcast: vi.fn(),
+  broadcast: (...args: unknown[]) => mockBroadcast(...args),
   setupWebSocket: vi.fn(() => ({
     injectWebSocket: vi.fn(),
     upgradeWebSocket: vi.fn(),
@@ -59,6 +77,9 @@ describe("projects API", () => {
   beforeEach(() => {
     testDb.current = createTestDb();
     app = createApp();
+    mockBroadcast.mockReset();
+    mockInternalBroadcastToken.value = "";
+    vi.stubEnv("NODE_ENV", "test");
   });
 
   it("returns projects list", async () => {
@@ -260,7 +281,58 @@ describe("projects API", () => {
     expect(body.rootPath).toBe("/tmp/demo-project");
   });
 
+  it("rejects foreign project-owned runtime profile defaults on create", async () => {
+    testDb.current
+      .insert(runtimeProfiles)
+      .values({
+        id: "other-project-profile",
+        projectId: "other-project",
+        name: "Other Project Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        enabled: true,
+      })
+      .run();
+
+    const res = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Invalid Defaults",
+        rootPath: "/tmp/invalid-defaults-project",
+        defaultTaskRuntimeProfileId: "other-project-profile",
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBeTruthy();
+    expect(body.fieldErrors.defaultTaskRuntimeProfileId).toBeDefined();
+  });
+
   it("persists per-stage runtime profile IDs on project update", async () => {
+    testDb.current
+      .insert(runtimeProfiles)
+      .values([
+        {
+          id: "profile-task",
+          projectId: null,
+          name: "Task Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "profile-chat",
+          projectId: null,
+          name: "Chat Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+      ])
+      .run();
+
     // Create a project first
     const createRes = await app.request("/projects", {
       method: "POST",
@@ -269,6 +341,28 @@ describe("projects API", () => {
     });
     expect(createRes.status).toBe(201);
     const created = await createRes.json();
+
+    testDb.current
+      .insert(runtimeProfiles)
+      .values([
+        {
+          id: "profile-plan",
+          projectId: created.id,
+          name: "Plan Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "profile-review",
+          projectId: created.id,
+          name: "Review Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+      ])
+      .run();
 
     // Update with per-stage profile IDs
     const updateRes = await app.request(`/projects/${created.id}`, {
@@ -297,6 +391,80 @@ describe("projects API", () => {
     const refetched = projects.find((p: { id: string }) => p.id === created.id);
     expect(refetched.defaultPlanRuntimeProfileId).toBe("profile-plan");
     expect(refetched.defaultReviewRuntimeProfileId).toBe("profile-review");
+  });
+
+  it("rejects foreign project-owned runtime profile defaults on update", async () => {
+    testDb.current
+      .insert(runtimeProfiles)
+      .values({
+        id: "other-project-profile",
+        projectId: "other-project",
+        name: "Other Project Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        enabled: true,
+      })
+      .run();
+
+    const createRes = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Scoped", rootPath: "/tmp/scoped-project" }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json();
+
+    const updateRes = await app.request(`/projects/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Scoped",
+        rootPath: "/tmp/scoped-project",
+        defaultTaskRuntimeProfileId: "other-project-profile",
+      }),
+    });
+
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.error).toBeTruthy();
+    expect(body.fieldErrors.defaultTaskRuntimeProfileId).toBeDefined();
+  });
+
+  it("rejects disabled runtime profile defaults on update", async () => {
+    testDb.current
+      .insert(runtimeProfiles)
+      .values({
+        id: "disabled-global-profile",
+        projectId: null,
+        name: "Disabled Global",
+        runtimeId: "codex",
+        providerId: "openai",
+        enabled: false,
+      })
+      .run();
+
+    const createRes = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Scoped", rootPath: "/tmp/scoped-project-disabled" }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json();
+
+    const updateRes = await app.request(`/projects/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Scoped",
+        rootPath: "/tmp/scoped-project-disabled",
+        defaultTaskRuntimeProfileId: "disabled-global-profile",
+      }),
+    });
+
+    expect(updateRes.status).toBe(400);
+    const body = await updateRes.json();
+    expect(body.error).toBeTruthy();
+    expect(body.fieldErrors.defaultTaskRuntimeProfileId).toBeDefined();
   });
 
   describe("auto-queue mode", () => {
@@ -335,5 +503,273 @@ describe("projects API", () => {
       const res = await app.request("/projects/missing/auto-queue-mode");
       expect(res.status).toBe(404);
     });
+  });
+
+  it("broadcasts runtime-limit updates with project-scoped payloads", async () => {
+    const db = testDb.current;
+    db.insert(projects)
+      .values({ id: "proj-broadcast", name: "Broadcast", rootPath: "/tmp/b" })
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-1",
+        projectId: "proj-broadcast",
+        name: "Broadcast Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        enabled: true,
+      })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast/broadcast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-broadcast",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      },
+    });
+  });
+
+  it("rejects unauthorized broadcast request when internal token is configured", async () => {
+    const db = testDb.current;
+    mockInternalBroadcastToken.value = "internal-token";
+    db.insert(projects)
+      .values({ id: "proj-broadcast-auth", name: "Broadcast Auth", rootPath: "/tmp/ba" })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast-auth/broadcast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("rejects spoofed loopback headers in production when no internal token is configured", async () => {
+    const db = testDb.current;
+    vi.stubEnv("NODE_ENV", "production");
+    db.insert(projects)
+      .values({ id: "proj-broadcast-prod", name: "Broadcast Prod", rootPath: "/tmp/bp" })
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-1",
+        projectId: "proj-broadcast-prod",
+        name: "Broadcast Prod Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        enabled: true,
+      })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast-prod/broadcast", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Host: "localhost:3009",
+        "X-Forwarded-For": "127.0.0.1",
+        "X-Real-IP": "127.0.0.1",
+      },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+      }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("accepts authorized broadcast request with internal token header", async () => {
+    const db = testDb.current;
+    mockInternalBroadcastToken.value = "internal-token";
+    db.insert(projects)
+      .values({ id: "proj-broadcast-auth-ok", name: "Broadcast Auth OK", rootPath: "/tmp/bao" })
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-1",
+        projectId: "proj-broadcast-auth-ok",
+        name: "Broadcast Auth Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        enabled: true,
+      })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast-auth-ok/broadcast", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Broadcast-Token": "internal-token",
+      },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-broadcast-auth-ok",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      },
+    });
+  });
+
+  it("accepts authorized broadcast request with bearer token", async () => {
+    const db = testDb.current;
+    mockInternalBroadcastToken.value = "internal-token";
+    db.insert(projects)
+      .values({
+        id: "proj-broadcast-auth-bearer",
+        name: "Broadcast Auth Bearer",
+        rootPath: "/tmp/bab",
+      })
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-1",
+        projectId: "proj-broadcast-auth-bearer",
+        name: "Broadcast Bearer Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        enabled: true,
+      })
+      .run();
+
+    const res = await app.request("/projects/proj-broadcast-auth-bearer/broadcast", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer internal-token",
+      },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-broadcast-auth-bearer",
+        runtimeProfileId: "profile-1",
+        taskId: "task-1",
+      },
+    });
+  });
+
+  it("rejects runtime-limit broadcasts when the runtime profile belongs to another project", async () => {
+    const db = testDb.current;
+    db.insert(projects)
+      .values([
+        { id: "proj-runtime-a", name: "Project A", rootPath: "/tmp/a" },
+        { id: "proj-runtime-b", name: "Project B", rootPath: "/tmp/b" },
+      ])
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-other-project",
+        projectId: "proj-runtime-b",
+        name: "Other Project Profile",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        enabled: true,
+      })
+      .run();
+
+    const res = await app.request("/projects/proj-runtime-a/broadcast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+        runtimeProfileId: "profile-other-project",
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "runtimeProfileId must belong to the target project or be global",
+    });
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("rejects runtime-limit broadcasts without a runtimeProfileId", async () => {
+    const db = testDb.current;
+    db.insert(projects)
+      .values({ id: "proj-runtime-missing", name: "Project Missing", rootPath: "/tmp/missing" })
+      .run();
+
+    const res = await app.request("/projects/proj-runtime-missing/broadcast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "project:runtime_limit_updated",
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "runtimeProfileId is required for project:runtime_limit_updated",
+    });
+    expect(mockBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("rejects auto-queue broadcasts when the task belongs to another project", async () => {
+    const db = testDb.current;
+    db.insert(projects)
+      .values([
+        { id: "proj-queue-a", name: "Project A", rootPath: "/tmp/a" },
+        { id: "proj-queue-b", name: "Project B", rootPath: "/tmp/b" },
+      ])
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-other-project",
+        projectId: "proj-queue-b",
+        title: "Other project task",
+        status: "backlog",
+      })
+      .run();
+
+    const res = await app.request("/projects/proj-queue-a/broadcast", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "project:auto_queue_advanced",
+        taskId: "task-other-project",
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "taskId does not belong to the target project",
+    });
+    expect(mockBroadcast).not.toHaveBeenCalled();
   });
 });

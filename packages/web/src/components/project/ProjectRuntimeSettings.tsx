@@ -1,18 +1,24 @@
 import { useMemo, useState } from "react";
 import type { Project, RuntimeProfile } from "@aif/shared/browser";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
 import { useUpdateProject } from "@/hooks/useProjects";
 import {
+  useAppRuntimeDefaults,
   useCreateRuntimeProfile,
   useDeleteRuntimeProfile,
+  useProjectRuntimeProfiles,
   useRuntimes,
   useRuntimeProfiles,
   useUpdateRuntimeProfile,
   useValidateRuntimeProfile,
 } from "@/hooks/useRuntimeProfiles";
 import { RuntimeProfileForm } from "@/components/settings/RuntimeProfileForm";
+import { formatRuntimeProfileOptionLabel } from "@/lib/runtimeProfiles";
+import { getRuntimeLimitDisplay, runtimeLimitBadgeClassName } from "@/lib/runtimeLimits";
+import { useUsageLimitsEnabled } from "@/hooks/useSettings";
 
 interface Props {
   project: Project;
@@ -59,14 +65,57 @@ export function ProjectRuntimeSettings({
   const deleteProfile = useDeleteRuntimeProfile();
   const validateProfile = useValidateRuntimeProfile();
   const { data: runtimes = [] } = useRuntimes();
-  const { data: profiles = [], isLoading } = useRuntimeProfiles(project.id, true);
+  const { data: appRuntimeDefaults } = useAppRuntimeDefaults(isOpen);
+  const { data: profiles = [], isLoading } = useRuntimeProfiles(project.id, true, isOpen);
+  const { data: projectProfiles = [], isLoading: projectProfilesLoading } =
+    useProjectRuntimeProfiles(project.id, isOpen);
+  const globalProfiles = useMemo(
+    () => profiles.filter((profile) => profile.projectId == null),
+    [profiles],
+  );
 
   const runtimeOptions = useMemo(() => {
-    return profiles.map((profile) => ({
-      id: profile.id,
-      label: `${profile.name} (${profile.runtimeId}/${profile.providerId})`,
-    }));
+    return profiles
+      .filter((profile) => profile.enabled !== false)
+      .map((profile) => ({
+        id: profile.id,
+        label: formatRuntimeProfileOptionLabel(profile),
+      }));
   }, [profiles]);
+  const usageLimitsEnabled = useUsageLimitsEnabled();
+  const recentLimitSignals = useMemo(() => {
+    if (!usageLimitsEnabled) return [];
+    return profiles.flatMap((profile) => {
+      const limitDisplay = getRuntimeLimitDisplay(profile.runtimeLimitSnapshot, {
+        checkedAt: profile.runtimeLimitUpdatedAt ?? null,
+      });
+      return limitDisplay ? [{ profile, limitDisplay }] : [];
+    });
+  }, [profiles, usageLimitsEnabled]);
+
+  const taskDefaultEmptyLabel = appRuntimeDefaults?.resolvedDefaultTaskRuntimeProfileId
+    ? "(app default)"
+    : "(env fallback)";
+  const planDefaultEmptyLabel =
+    taskDefaultId ||
+    appRuntimeDefaults?.resolvedDefaultPlanRuntimeProfileId ||
+    appRuntimeDefaults?.resolvedDefaultTaskRuntimeProfileId
+      ? taskDefaultId
+        ? "(inherit from project task default)"
+        : "(app default)"
+      : "(env fallback)";
+  const reviewDefaultEmptyLabel =
+    taskDefaultId ||
+    appRuntimeDefaults?.resolvedDefaultReviewRuntimeProfileId ||
+    appRuntimeDefaults?.resolvedDefaultTaskRuntimeProfileId
+      ? taskDefaultId
+        ? "(inherit from project task default)"
+        : "(app default)"
+      : "(env fallback)";
+  const chatDefaultEmptyLabel = appRuntimeDefaults?.resolvedDefaultChatRuntimeProfileId
+    ? "(app default)"
+    : "(env fallback)";
+  const deletingProfileIsGlobal = deletingProfile?.projectId == null;
 
   const handleSaveDefaults = async () => {
     setStatusMessage(null);
@@ -149,8 +198,57 @@ export function ProjectRuntimeSettings({
     enabled?: boolean;
   }) => {
     if (!editingProfile) return;
-    await updateProfile.mutateAsync({ id: editingProfile.id, input });
+    await updateProfile.mutateAsync({
+      id: editingProfile.id,
+      input: { ...input, projectId: project.id },
+    });
     setEditingProfile(null);
+  };
+
+  const handleMakeProfileGlobal = async (profile: RuntimeProfile) => {
+    setStatusMessage(null);
+    setStatusVariant("neutral");
+    try {
+      await updateProfile.mutateAsync({
+        id: profile.id,
+        input: { projectId: null },
+      });
+      if (editingProfile?.id === profile.id) {
+        setEditingProfile(null);
+      }
+      setStatusMessage(`"${profile.name}" is now available to all projects.`);
+      setStatusVariant("success");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Failed to make profile global");
+      setStatusVariant("error");
+    }
+  };
+
+  const handleCopyGlobalProfile = async (profile: RuntimeProfile) => {
+    setStatusMessage(null);
+    setStatusVariant("neutral");
+    try {
+      await createProfile.mutateAsync({
+        projectId: project.id,
+        name: profile.name,
+        runtimeId: profile.runtimeId,
+        providerId: profile.providerId,
+        transport: profile.transport ?? null,
+        baseUrl: profile.baseUrl ?? null,
+        apiKeyEnvVar: profile.apiKeyEnvVar ?? null,
+        defaultModel: profile.defaultModel ?? null,
+        headers: profile.headers ?? {},
+        options: profile.options ?? {},
+        enabled: profile.enabled,
+      });
+      setStatusMessage(`Copied "${profile.name}" into this project.`);
+      setStatusVariant("success");
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Failed to copy global profile into project",
+      );
+      setStatusVariant("error");
+    }
   };
 
   if (!isOpen) {
@@ -177,9 +275,9 @@ export function ProjectRuntimeSettings({
           <Select
             value={taskDefaultId}
             onChange={(e) => setTaskDefaultId(e.target.value)}
-            placeholder="(none)"
+            placeholder={taskDefaultEmptyLabel}
             options={[
-              { value: "", label: "(none)" },
+              { value: "", label: taskDefaultEmptyLabel },
               ...runtimeOptions.map((o) => ({ value: o.id, label: o.label })),
             ]}
           />
@@ -189,9 +287,9 @@ export function ProjectRuntimeSettings({
           <Select
             value={planDefaultId}
             onChange={(e) => setPlanDefaultId(e.target.value)}
-            placeholder="(inherit from default)"
+            placeholder={planDefaultEmptyLabel}
             options={[
-              { value: "", label: "(inherit from default)" },
+              { value: "", label: planDefaultEmptyLabel },
               ...runtimeOptions.map((o) => ({ value: o.id, label: o.label })),
             ]}
           />
@@ -201,9 +299,9 @@ export function ProjectRuntimeSettings({
           <Select
             value={reviewDefaultId}
             onChange={(e) => setReviewDefaultId(e.target.value)}
-            placeholder="(inherit from default)"
+            placeholder={reviewDefaultEmptyLabel}
             options={[
-              { value: "", label: "(inherit from default)" },
+              { value: "", label: reviewDefaultEmptyLabel },
               ...runtimeOptions.map((o) => ({ value: o.id, label: o.label })),
             ]}
           />
@@ -213,9 +311,9 @@ export function ProjectRuntimeSettings({
           <Select
             value={chatDefaultId}
             onChange={(e) => setChatDefaultId(e.target.value)}
-            placeholder="(none)"
+            placeholder={chatDefaultEmptyLabel}
             options={[
-              { value: "", label: "(none)" },
+              { value: "", label: chatDefaultEmptyLabel },
               ...runtimeOptions.map((o) => ({ value: o.id, label: o.label })),
             ]}
           />
@@ -228,9 +326,48 @@ export function ProjectRuntimeSettings({
         </Button>
       </div>
 
+      {usageLimitsEnabled && (
+        <div className="space-y-2 border-t border-border pt-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Recent Limit Signals
+          </p>
+          {recentLimitSignals.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No recent runtime limit signals.</p>
+          ) : (
+            <div className="space-y-1">
+              {recentLimitSignals.map(({ profile, limitDisplay }) => (
+                <div
+                  key={`limit-${profile.id}`}
+                  className="border border-border bg-background/40 px-2 py-1.5"
+                >
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-medium">{profile.name}</span>
+                    <Badge size="sm" className={runtimeLimitBadgeClassName(limitDisplay.tone)}>
+                      {limitDisplay.label.toUpperCase()}
+                    </Badge>
+                    <span className="text-[11px] text-muted-foreground">
+                      {profile.runtimeId}/{profile.providerId}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-muted-foreground">{limitDisplay.summary}</p>
+                  {(limitDisplay.resetText || limitDisplay.checkedText) && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {[limitDisplay.resetText, limitDisplay.checkedText].filter(Boolean).join(" ")}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="space-y-2 border-t border-border pt-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Profiles
+          Project Profiles
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          Project profiles are local to this project. Use Make Global to reuse one everywhere.
         </p>
 
         {creating ? (
@@ -243,7 +380,7 @@ export function ProjectRuntimeSettings({
           />
         ) : (
           <Button className="w-full" size="sm" variant="outline" onClick={() => setCreating(true)}>
-            + New Profile
+            + New Project Profile
           </Button>
         )}
 
@@ -259,24 +396,116 @@ export function ProjectRuntimeSettings({
           />
         )}
 
-        {isLoading ? (
-          <p className="text-xs text-muted-foreground">Loading runtime profiles...</p>
-        ) : profiles.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No runtime profiles configured.</p>
+        {isLoading || projectProfilesLoading ? (
+          <p className="text-xs text-muted-foreground">Loading project runtime profiles...</p>
+        ) : projectProfiles.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No project-specific runtime profiles configured.
+          </p>
         ) : (
           <div className="space-y-1">
-            {profiles.map((profile) => (
+            {projectProfiles.map((profile) => (
+              <div
+                key={profile.id}
+                className="flex items-start justify-between rounded border border-border bg-background/40 px-2 py-1.5"
+              >
+                <div className="min-w-0 pr-3">
+                  <p className="text-xs font-medium">{formatRuntimeProfileOptionLabel(profile)}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    transport={profile.transport ?? "default"} model=
+                    {profile.defaultModel ?? "auto"} {profile.enabled ? "" : "disabled"}
+                  </p>
+                  {usageLimitsEnabled &&
+                    (() => {
+                      const limitDisplay = getRuntimeLimitDisplay(profile.runtimeLimitSnapshot, {
+                        checkedAt: profile.runtimeLimitUpdatedAt ?? null,
+                      });
+                      if (!limitDisplay) {
+                        return (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            No recent runtime limit signal.
+                          </p>
+                        );
+                      }
+                      return (
+                        <div className="mt-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge
+                              size="sm"
+                              className={runtimeLimitBadgeClassName(limitDisplay.tone)}
+                            >
+                              {limitDisplay.label.toUpperCase()}
+                            </Badge>
+                            <span className="text-[11px] text-muted-foreground">
+                              {limitDisplay.summary}
+                            </span>
+                          </div>
+                          {(limitDisplay.resetText || limitDisplay.checkedText) && (
+                            <p className="text-[11px] text-muted-foreground">
+                              {[limitDisplay.resetText, limitDisplay.checkedText]
+                                .filter(Boolean)
+                                .join(" ")}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleValidateProfile(profile.id)}
+                    disabled={validateProfile.isPending}
+                  >
+                    Validate
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleMakeProfileGlobal(profile)}
+                    disabled={updateProfile.isPending}
+                  >
+                    Make Global
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setEditingProfile(profile)}>
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setDeletingProfile(profile)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2 border-t border-border pt-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Global Profiles
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          Available to this project by default. Copy one to create a project-local fork.
+        </p>
+
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading global runtime profiles...</p>
+        ) : globalProfiles.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No global runtime profiles available.</p>
+        ) : (
+          <div className="space-y-1">
+            {globalProfiles.map((profile) => (
               <div
                 key={profile.id}
                 className="flex items-center justify-between rounded border border-border bg-background/40 px-2 py-1.5"
               >
                 <div>
-                  <p className="text-xs font-medium">
-                    {profile.name}{" "}
-                    <span className="text-muted-foreground">
-                      ({profile.runtimeId}/{profile.providerId})
-                    </span>
-                  </p>
+                  <p className="text-xs font-medium">{formatRuntimeProfileOptionLabel(profile)}</p>
                   <p className="text-[11px] text-muted-foreground">
                     transport={profile.transport ?? "default"} model=
                     {profile.defaultModel ?? "auto"} {profile.enabled ? "" : "disabled"}
@@ -291,8 +520,13 @@ export function ProjectRuntimeSettings({
                   >
                     Validate
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => setEditingProfile(profile)}>
-                    Edit
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleCopyGlobalProfile(profile)}
+                    disabled={createProfile.isPending}
+                  >
+                    Copy to Project
                   </Button>
                   <Button
                     size="sm"
@@ -327,8 +561,12 @@ export function ProjectRuntimeSettings({
         onOpenChange={(open) => {
           if (!open) setDeletingProfile(null);
         }}
-        title="Delete Runtime Profile"
-        description={`Delete "${deletingProfile?.name}"? Tasks and projects using this profile will fall back to defaults.`}
+        title={deletingProfileIsGlobal ? "Delete Global Runtime Profile" : "Delete Runtime Profile"}
+        description={
+          deletingProfileIsGlobal
+            ? `Delete "${deletingProfile?.name}" globally? Projects using this profile will fall back to project, app, or environment defaults.`
+            : `Delete "${deletingProfile?.name}"? Tasks and projects using this profile will fall back to defaults.`
+        }
         confirmLabel="Delete"
         variant="destructive"
         disabled={deleteProfile.isPending}

@@ -192,6 +192,20 @@ data/                    # SQLite database files (gitignored)
   - **Usage reporting contract** — every adapter must declare `capabilities.usageReporting` (`FULL` / `PARTIAL` / `NONE`) and return `RuntimeRunResult.usage` as a concrete value (including explicit `null`). The discovery test in `packages/runtime/src/__tests__/bootstrap.test.ts` fails the build if a new adapter ships without a valid `usageReporting` value. See `docs/providers.md` → "Usage reporting contract".
 - **Cross-adapter consistency on shared changes.** When modifying shared runtime infrastructure (`errors.ts`, `types.ts`, `timeouts.ts`, `capabilities.ts`) or refactoring a pattern that exists across multiple adapters — enumerate ALL adapter directories under `packages/runtime/src/adapters/` and verify each is updated. Do not rely on the issue description or plan to list affected adapters — scan the directory.
 
+## Migration Version Rule
+
+- **Migration versions are append-only — never renumber or edit a merged migration.** In `packages/shared/src/db.ts` `MIGRATIONS` array, never change the `version` number or `sql` body of a migration that has already landed on `main`. If a feature branch collides on a version with `main` during merge, append the new migration at the next free slot — do NOT reuse or reorder existing version numbers.
+  - **Why:** user databases store progress via `PRAGMA user_version`. If version N is already applied and the SQL behind N is later swapped for different content, `runMigrations` filters `m.version > currentVersion` and silently skips the new content on those DBs. Result: schema drift between code and DB — missing columns, crashes at query time (see v13 runtime_limit snapshot incident).
+  - **When resolving merge conflicts in `MIGRATIONS`:** keep the first-merged entry at its original version; move the conflicting second entry to a new trailing version. Do not "reconcile" by editing either slot.
+  - **Writing a recovery migration:** `ALTER TABLE ADD COLUMN` statements are idempotent via `isIgnorableMigrationError` (duplicate column → swallowed). Safe to re-issue the same DDL in a later version to backfill DBs that skipped it.
+
+## Nullable Cast Rule
+
+- **Never use `as T` to strip a nullable return.** Helpers like `asRecord(x)`, `JSON.parse` wrappers, and other `unknown → T | null` narrowing functions can legitimately return `null`. Writing `const r = asRecord(x) as T` silently drops `| null` from the type, the TypeScript checker goes quiet, and subsequent `r.foo` access crashes at runtime on real-world nullable inputs.
+  - **Always declare the union explicitly:** `as T | null` (or skip the cast entirely).
+  - **Always guard before access:** `if (!r) return null` immediately after the cast.
+  - **Applies to all adapter parsers** that walk untrusted payloads (Codex session JSONL, Claude stream events, OpenRouter responses) — a missing/null field is normal, not exceptional.
+
 ## Structured Error Classification Rule
 
 - **Never use string/pattern matching on error messages to branch logic.** All error classification must go through structured fields: `category` (enum from `RuntimeErrorCategory`), `adapterCode`, or `httpStatus`. Message text is for logging and diagnostics only — never use `.includes()`, regex, or substring checks on `error.message` to make control-flow decisions.

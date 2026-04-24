@@ -334,6 +334,24 @@ describe("OpenCode API transport", () => {
     );
   });
 
+  it("redacts raw provider secrets from run failure responses", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('{"error":"Bearer SECRET sk-SECRET"}', { status: 500 }),
+    );
+
+    try {
+      await runOpenCodeApi(createRunInput());
+    } catch (error) {
+      expect(error).toMatchObject({
+        message: expect.stringContaining("[REDACTED]"),
+      });
+      expect(String(error)).not.toContain("SECRET");
+      return;
+    }
+
+    throw new Error("Expected runOpenCodeApi to throw");
+  });
+
   it("keeps full model tail when model id contains multiple slashes", async () => {
     fetchMock
       .mockResolvedValueOnce(

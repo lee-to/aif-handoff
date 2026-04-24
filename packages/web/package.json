@@ -7,12 +7,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build --configLoader native",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --configLoader runner",
     "coverage": "vitest run --coverage",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
-    "test:watch": "vitest"
+    "test:watch": "vitest --configLoader runner",
+    "perf": "playwright test --config=playwright.config.ts",
+    "perf:ui": "playwright test --config=playwright.config.ts --ui",
+    "perf:report": "playwright show-report playwright-report",
+    "perf:install": "playwright install chromium"
   },
   "dependencies": {
     "@aif/shared": "*",
@@ -30,6 +34,7 @@
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.2",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",

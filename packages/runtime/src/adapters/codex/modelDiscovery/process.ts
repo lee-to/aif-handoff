@@ -117,6 +117,13 @@ export function buildCodexAppServerDiscoveryEnvWithStats(input: RuntimeModelList
     env.CODEX_BASE_URL = baseUrl;
   }
 
+  // Windows environment variables are case-insensitive, so one proxy-key casing can
+  // overwrite the other in process.env. Mirror whichever variant survived so downstream
+  // subprocesses receive both forms consistently.
+  mirrorEnvPair(env, "HTTP_PROXY", "http_proxy");
+  mirrorEnvPair(env, "HTTPS_PROXY", "https_proxy");
+  mirrorEnvPair(env, "NO_PROXY", "no_proxy");
+
   return {
     env,
     forwardedCount,
@@ -124,6 +131,19 @@ export function buildCodexAppServerDiscoveryEnvWithStats(input: RuntimeModelList
     blockedCount,
     droppedDisallowedPrefixKeys: [...droppedDisallowedPrefixKeys],
   };
+}
+
+function mirrorEnvPair(
+  env: Record<string, string>,
+  uppercaseKey: string,
+  lowercaseKey: string,
+): void {
+  const value = env[uppercaseKey] ?? env[lowercaseKey];
+  if (!value) {
+    return;
+  }
+  env[uppercaseKey] = value;
+  env[lowercaseKey] = value;
 }
 
 export async function reservePort(): Promise<number> {

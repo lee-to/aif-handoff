@@ -111,6 +111,14 @@ function getSpawnInvocation() {
 describe("runClaudeCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: vi.fn().mockResolvedValue({}),
+      }),
+    );
     mockChild.on.mockReset();
     mockStdout.on.mockReset();
     mockStderr.on.mockReset();
@@ -121,6 +129,7 @@ describe("runClaudeCli", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 

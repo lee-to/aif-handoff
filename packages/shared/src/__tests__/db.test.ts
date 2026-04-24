@@ -7,6 +7,16 @@ import { eq } from "drizzle-orm";
 import { chatSessions } from "../schema.js";
 import { closeDb, createTestDb, getDb } from "../db.js";
 
+function removeSqliteArtifacts(dbPath: string): void {
+  for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      rmSync(path, { force: true });
+    } catch {
+      // Windows can hold SQLite sidecars briefly after close; ignore cleanup noise in tests.
+    }
+  }
+}
+
 describe("db", () => {
   it("createTestDb returns a working database with indexes", () => {
     const db = createTestDb();
@@ -19,6 +29,51 @@ describe("db", () => {
     const db2 = createTestDb();
     expect(db1).toBeDefined();
     expect(db2).toBeDefined();
+  });
+
+  it("creates and seeds a singleton app_settings row", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-app-settings-${Date.now()}-${Math.random()}.sqlite`);
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const sqlite = new Database(dbPath, { readonly: true });
+      const rows = sqlite
+        .prepare(
+          `
+          SELECT
+            id,
+            default_task_runtime_profile_id,
+            default_plan_runtime_profile_id,
+            default_review_runtime_profile_id,
+            default_chat_runtime_profile_id
+          FROM app_settings
+        `,
+        )
+        .all() as Array<{
+        id: number;
+        default_task_runtime_profile_id: string | null;
+        default_plan_runtime_profile_id: string | null;
+        default_review_runtime_profile_id: string | null;
+        default_chat_runtime_profile_id: string | null;
+      }>;
+      sqlite.close();
+
+      expect(rows).toEqual([
+        {
+          id: 1,
+          default_task_runtime_profile_id: null,
+          default_plan_runtime_profile_id: null,
+          default_review_runtime_profile_id: null,
+          default_chat_runtime_profile_id: null,
+        },
+      ]);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
   });
 
   it("migrates pre-v6 schema and backfills runtime_session_id from agent_session_id", () => {
@@ -131,7 +186,7 @@ describe("db", () => {
       expect(migrated?.runtimeSessionId).toBe("legacy-agent-session");
     } finally {
       closeDb();
-      rmSync(dbPath, { force: true });
+      removeSqliteArtifacts(dbPath);
     }
   });
 
@@ -269,6 +324,9 @@ describe("db", () => {
       const taskColumns = migratedSqlite.prepare(`PRAGMA table_info(tasks)`).all() as Array<{
         name: string;
       }>;
+      const runtimeProfileColumns = migratedSqlite
+        .prepare(`PRAGMA table_info(runtime_profiles)`)
+        .all() as Array<{ name: string }>;
       const userVersion = migratedSqlite.pragma("user_version", { simple: true }) as number;
       migratedSqlite.close();
 
@@ -280,12 +338,85 @@ describe("db", () => {
         expect.arrayContaining(["token_input", "token_output", "token_total", "cost_usd"]),
       );
       expect(taskColumns.map((column) => column.name)).toEqual(
-        expect.arrayContaining(["manual_review_required", "auto_review_state_json"]),
+        expect.arrayContaining([
+          "manual_review_required",
+          "auto_review_state_json",
+          "runtime_limit_snapshot_json",
+          "runtime_limit_updated_at",
+        ]),
       );
-      expect(userVersion).toBe(12);
+      expect(runtimeProfileColumns.map((column) => column.name)).toEqual(
+        expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
+      );
+      expect(userVersion).toBe(15);
     } finally {
       closeDb();
-      rmSync(dbPath, { force: true });
+      removeSqliteArtifacts(dbPath);
+    }
+  });
+
+  it("recovers v13 runtime-limit columns for DBs stranded at user_version=14 after branch-merge reordering", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-v14-stranded-${Date.now()}-${Math.random()}.sqlite`);
+    const sqlite = new Database(dbPath);
+
+    sqlite.exec(`
+      CREATE TABLE runtime_profiles (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        name TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        transport TEXT,
+        base_url TEXT,
+        api_key_env_var TEXT,
+        default_model TEXT,
+        headers_json TEXT NOT NULL DEFAULT '{}',
+        options_json TEXT NOT NULL DEFAULT '{}',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'backlog',
+        position REAL NOT NULL DEFAULT 1000.0,
+        retry_after TEXT,
+        locked_by TEXT,
+        locked_until TEXT,
+        scheduled_at TEXT,
+        runtime_profile_id TEXT
+      );
+    `);
+    sqlite.pragma("user_version = 14");
+    sqlite.close();
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const migratedSqlite = new Database(dbPath, { readonly: true });
+      const taskColumns = migratedSqlite.prepare(`PRAGMA table_info(tasks)`).all() as Array<{
+        name: string;
+      }>;
+      const profileColumns = migratedSqlite
+        .prepare(`PRAGMA table_info(runtime_profiles)`)
+        .all() as Array<{ name: string }>;
+      const userVersion = migratedSqlite.pragma("user_version", { simple: true }) as number;
+      migratedSqlite.close();
+
+      expect(taskColumns.map((column) => column.name)).toEqual(
+        expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
+      );
+      expect(profileColumns.map((column) => column.name)).toEqual(
+        expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
+      );
+      expect(userVersion).toBe(15);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
     }
   });
 });

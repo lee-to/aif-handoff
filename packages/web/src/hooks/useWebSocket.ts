@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { WsEvent, Task, TaskStatus } from "@aif/shared/browser";
 import { useNotificationSettings } from "./useNotificationSettings";
 import { playStatusChangeBeep, showTaskMovedNotification } from "@/lib/notifications";
@@ -19,6 +19,26 @@ function isTaskPayload(value: unknown): value is Task {
 
 function hasIdPayload(value: unknown): value is { id: string } {
   return isRecord(value) && typeof value.id === "string";
+}
+
+function hasRuntimeLimitPayload(
+  value: unknown,
+): value is { projectId: string; runtimeProfileId?: string | null; taskId?: string | null } {
+  return isRecord(value) && typeof value.projectId === "string";
+}
+
+function invalidateRuntimeLimitQueries(
+  queryClient: QueryClient,
+  payload: { projectId: string; taskId?: string | null },
+): void {
+  queryClient.invalidateQueries({ queryKey: ["runtimeProfiles"] });
+  queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
+  queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
+  queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime", payload.projectId] });
+  if (typeof payload.taskId === "string" && payload.taskId.length > 0) {
+    queryClient.invalidateQueries({ queryKey: ["task", payload.taskId] });
+    queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime", payload.taskId] });
+  }
 }
 
 function resolveWsUrl(): string {
@@ -115,6 +135,12 @@ export function useWebSocket() {
         raw.type === "chat:session_deleted"
       ) {
         window.dispatchEvent(new CustomEvent(raw.type, { detail: raw.payload }));
+        if (
+          (raw.type === "chat:done" || raw.type === "chat:error") &&
+          hasRuntimeLimitPayload(raw.payload)
+        ) {
+          invalidateRuntimeLimitQueries(queryClient, raw.payload);
+        }
         return;
       }
 
@@ -171,6 +197,14 @@ export function useWebSocket() {
         queryClient.invalidateQueries({ queryKey: ["projects"] });
         if (hasIdPayload(data.payload)) {
           queryClient.invalidateQueries({ queryKey: ["autoQueueMode", data.payload.id] });
+        }
+        return;
+      }
+
+      if (data.type === "project:runtime_limit_updated" && hasRuntimeLimitPayload(data.payload)) {
+        invalidateRuntimeLimitQueries(queryClient, data.payload);
+        if (typeof data.payload.taskId === "string" && data.payload.taskId.length > 0) {
+          pendingTaskIds.current.add(data.payload.taskId);
         }
         return;
       }

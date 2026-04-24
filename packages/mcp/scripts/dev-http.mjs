@@ -24,8 +24,8 @@ const port = resolveMcpPort(process.env.MCP_PORT);
 console.log(`[mcp] Starting HTTP transport on port ${port}`);
 
 spawnDev({
-  command: "npx",
-  args: ["tsx", "watch", "src/index.ts"],
+  command: "node",
+  args: ["--watch", "--import", "tsx", "src/index.ts"],
   cwd: packageRoot,
   env: {
     ...process.env,

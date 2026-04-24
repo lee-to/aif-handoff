@@ -17,7 +17,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
-  AlertTriangle,
   Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -31,7 +30,10 @@ import { useChat } from "@/hooks/useChat";
 import { useChatSessions } from "@/hooks/useChatSessions";
 import { useTask } from "@/hooks/useTasks";
 import { useEffectiveChatRuntime, useRuntimeProfiles } from "@/hooks/useRuntimeProfiles";
+import { useUsageLimitsEnabled } from "@/hooks/useSettings";
 import { toAttachmentPayload } from "@/components/task/useTaskDetailActions";
+import { getRuntimeLimitDisplay } from "@/lib/runtimeLimits";
+import { formatRuntimeProfileName } from "@/lib/runtimeProfiles";
 import { SessionList } from "./SessionList";
 import { MessageBubble } from "./MessageBubble";
 import { TypingIndicator } from "./TypingIndicator";
@@ -67,18 +69,27 @@ export function ChatPanel({
     renameSession,
   } = useChatSessions(projectId);
 
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+
   const {
     messages,
     isStreaming,
     isLoadingMessages,
     chatErrorCode,
+    chatRuntimeLimitSnapshot,
     explore,
     setExplore,
     sendMessage,
     abortStream,
     clearMessages,
     newSession,
-  } = useChat(projectId, activeSessionId, taskId, setActiveSessionId);
+  } = useChat(
+    projectId,
+    activeSessionId,
+    taskId,
+    setActiveSessionId,
+    activeSession?.runtimeProfileId ?? null,
+  );
 
   const { data: currentTask } = useTask(taskId);
   const { data: effectiveChatRuntime } = useEffectiveChatRuntime(projectId);
@@ -110,12 +121,9 @@ export function ChatPanel({
 
   const handleSend = () => {
     if (!input.trim() || isStreaming) return;
-    const forceNew = runtimeMismatch;
-    if (!forceNew) {
-      pinActiveSession();
-    }
+    pinActiveSession();
     const files = pendingFiles.length > 0 ? pendingFiles : undefined;
-    void sendMessage(input, files, forceNew);
+    void sendMessage(input, files, false);
     setInput("");
     setPendingFiles([]);
   };
@@ -172,17 +180,7 @@ export function ChatPanel({
     [renameSession],
   );
 
-  // Find active session title
-  const activeSession = sessions.find((s) => s.id === activeSessionId);
-
-  // Detect runtime mismatch: session was created with a different runtime profile
-  const currentProfileId = effectiveChatRuntime?.profile?.id ?? null;
   const sessionProfileId = activeSession?.runtimeProfileId ?? null;
-  const runtimeMismatch =
-    Boolean(activeSession) &&
-    Boolean(sessionProfileId) &&
-    Boolean(currentProfileId) &&
-    sessionProfileId !== currentProfileId;
 
   // Show the session's own runtime when it has one, otherwise show the project effective runtime
   const sessionProfile = sessionProfileId
@@ -190,8 +188,14 @@ export function ChatPanel({
     : null;
   const displayProfile = sessionProfile ?? effectiveChatRuntime?.profile ?? null;
   const activeRuntimeProfileName =
-    displayProfile?.name ??
-    (effectiveChatRuntime?.source === "none" ? "Default runtime" : "Unnamed profile");
+    (displayProfile ? formatRuntimeProfileName(displayProfile) : null) ??
+    (effectiveChatRuntime?.source === "system_default"
+      ? "App default"
+      : effectiveChatRuntime?.source === "project_default"
+        ? "Project default"
+        : effectiveChatRuntime?.source === "none"
+          ? "Env fallback"
+          : "Unnamed profile");
   const activeRuntimeEngine = displayProfile
     ? `${displayProfile.runtimeId}/${displayProfile.providerId}`
     : effectiveChatRuntime?.resolved
@@ -199,6 +203,51 @@ export function ChatPanel({
       : "n/a";
   const activeRuntimeModel =
     displayProfile?.defaultModel ?? effectiveChatRuntime?.resolved?.model ?? "auto";
+  const usageLimitsEnabled = useUsageLimitsEnabled();
+  const chatRuntimeLimitDisplay = usageLimitsEnabled
+    ? getRuntimeLimitDisplay(
+        chatRuntimeLimitSnapshot ?? displayProfile?.runtimeLimitSnapshot ?? null,
+        {
+          checkedAt:
+            displayProfile?.runtimeLimitUpdatedAt ?? chatRuntimeLimitSnapshot?.checkedAt ?? null,
+        },
+      )
+    : null;
+  const chatRuntimeLimitTone = chatRuntimeLimitDisplay?.tone ?? "warning";
+  const chatRuntimeLimitContainerClassName = cn(
+    "mt-2 border px-2.5 py-2",
+    chatRuntimeLimitTone === "warning" &&
+      "border-amber-500/50 bg-amber-500/15 text-amber-700 dark:text-amber-200/90",
+    chatRuntimeLimitTone === "error" && "border-destructive/40 bg-destructive/10 text-destructive",
+    chatRuntimeLimitTone === "success" &&
+      "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+    chatRuntimeLimitTone === "info" && "border-border bg-card/60 text-foreground",
+  );
+  const chatRuntimeLimitLabel = chatRuntimeLimitDisplay
+    ? chatRuntimeLimitDisplay.state === "expired"
+      ? "Limit Window Expired"
+      : chatRuntimeLimitDisplay.state === "signal_no_reset"
+        ? "Limit Signal (No Reset)"
+        : chatRuntimeLimitDisplay.state === "historical"
+          ? "Historical Limit Signal"
+          : chatRuntimeLimitDisplay.label === "Blocked"
+            ? "Runtime Blocked"
+            : chatRuntimeLimitDisplay.label === "Healthy"
+              ? "Runtime Healthy"
+              : "Runtime Near Limit"
+    : "Usage Limit Reached";
+  const chatRuntimeLimitSummary =
+    chatRuntimeLimitDisplay?.summary ??
+    "Runtime usage limit is currently exhausted. Wait for reset time and send again.";
+  const chatRuntimeLimitMeta =
+    chatRuntimeLimitDisplay &&
+    [
+      chatRuntimeLimitDisplay.resetText,
+      chatRuntimeLimitDisplay.taskRetryText,
+      chatRuntimeLimitDisplay.checkedText,
+    ]
+      .filter(Boolean)
+      .join(" ");
 
   const content = (
     <div
@@ -292,6 +341,26 @@ export function ChatPanel({
             {activeRuntimeModel}
           </Badge>
         </div>
+        {chatRuntimeLimitDisplay && (
+          <div className={chatRuntimeLimitContainerClassName}>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge
+                variant="outline"
+                className={cn(
+                  "border-current/40",
+                  chatRuntimeLimitTone === "info" && "text-foreground",
+                )}
+              >
+                {chatRuntimeLimitLabel}
+              </Badge>
+              <span className="text-[11px] opacity-80">{activeRuntimeProfileName}</span>
+            </div>
+            <p className="mt-1 text-xs">{chatRuntimeLimitSummary}</p>
+            {chatRuntimeLimitMeta && (
+              <p className="mt-1 text-[11px] opacity-80">{chatRuntimeLimitMeta}</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Content area: sessions sidebar + messages */}
@@ -313,16 +382,6 @@ export function ChatPanel({
 
         {/* Messages area */}
         <div className="flex-1 overflow-y-auto overscroll-contain py-2">
-          {runtimeMismatch && (
-            <div className="px-3 pb-2">
-              <div className="flex items-center gap-1.5 rounded border border-amber-500/50 bg-amber-500/15 px-2.5 py-1.5">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                <span className="text-xs text-amber-700/90 dark:text-amber-200/90">
-                  Runtime changed — next message will start a new session
-                </span>
-              </div>
-            </div>
-          )}
           {chatErrorCode === "aborted" && (
             <div className="px-3 pb-2">
               <div className="rounded border border-muted-foreground/30 bg-muted/40 p-2">
@@ -335,21 +394,23 @@ export function ChatPanel({
               </div>
             </div>
           )}
-          {chatErrorCode === "CHAT_USAGE_LIMIT" && (
-            <div className="px-3 pb-2">
-              <div className="rounded border border-amber-500/50 bg-amber-500/15 p-2">
-                <Badge
-                  variant="outline"
-                  className="border-amber-600/60 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
-                >
-                  Usage Limit Reached
-                </Badge>
-                <p className="mt-1 text-xs text-amber-700/90 dark:text-amber-200/90">
-                  Runtime usage limit is currently exhausted. Wait for reset time and send again.
-                </p>
+          {usageLimitsEnabled &&
+            chatErrorCode === "CHAT_USAGE_LIMIT" &&
+            !chatRuntimeLimitDisplay && (
+              <div className="px-3 pb-2">
+                <div className="rounded border border-amber-500/50 bg-amber-500/15 p-2">
+                  <Badge
+                    variant="outline"
+                    className="border-amber-600/60 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
+                  >
+                    Usage Limit Reached
+                  </Badge>
+                  <p className="mt-1 text-xs text-amber-700/90 dark:text-amber-200/90">
+                    Runtime usage limit is currently exhausted. Wait for reset time and send again.
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
           {(isLoadingMessages || isLoadingSessions) && (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
               <Spinner size="lg" />

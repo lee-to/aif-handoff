@@ -29,7 +29,7 @@ Need something custom? Add your own runtime adapter module and load it at startu
 - **Beautiful Kanban UI** — drag-and-drop board with real-time WebSocket updates
 - **AI Factory core** — built on [ai-factory](https://github.com/lee-to/ai-factory) agent definitions and skill system
 - **Subagent orchestration** — plan-coordinator, implement-coordinator, review + security sidecars
-- **Runtime/provider modularity** — runtime registry, project/task runtime profile selection, and provider-specific capability gating
+- **Runtime/provider modularity** — runtime registry, global/project/task runtime profile selection, and provider-specific capability gating
 - **Layer-aware execution** — implementer computes dependency layers and enforces parallel worker dispatch where possible
 - **Self-healing pipeline** — heartbeat + stale-stage watchdog auto-recovers stuck agent stages
 - **Human-in-the-loop** — approve plans, request changes, or let auto-mode handle everything
@@ -107,6 +107,22 @@ docker compose exec agent aif-codex-callback "http://localhost:1455/?code=…&st
 **Production note:** the broker is **dev-only**. `docker-compose.production.yml`
 sets `AIF_ENABLE_CODEX_LOGIN_PROXY=false`. For production, configure
 `OPENAI_API_KEY` in `.env` instead.
+
+### Runtime Defaults
+
+Runtime profiles can now be managed at two scopes:
+
+- **Global profiles** live in Global Settings and can be reused across every project
+- **Project profiles** stay local to a single project
+
+Effective runtime resolution follows this order:
+
+1. task override
+2. project default
+3. app default
+4. environment fallback
+
+Planning and review keep their own defaults, but when those are unset they inherit from the task default at the same scope. Chat has its own dedicated project/app default chain.
 
 ### OpenCode Quick Setup
 

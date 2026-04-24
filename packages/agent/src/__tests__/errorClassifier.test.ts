@@ -41,6 +41,13 @@ describe("isExternalFailure", () => {
     expect(isExternalFailure(new Error("rate limit hit"))).toBe(false);
   });
 
+  it("unwraps RuntimeExecutionError from error causes", () => {
+    const err = new Error("wrapped", {
+      cause: new RuntimeExecutionError("rate limited", undefined, "rate_limit"),
+    });
+    expect(isExternalFailure(err)).toBe(true);
+  });
+
   it("returns false for internal errors", () => {
     expect(isExternalFailure(new Error("Cannot read property 'foo' of undefined"))).toBe(false);
   });

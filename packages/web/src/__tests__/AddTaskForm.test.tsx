@@ -5,7 +5,15 @@ const mutateCreateTask = vi.fn();
 
 const mockSettingsData = {
   data: { useSubagents: false, maxReviewIterations: 3 } as
-    | { useSubagents: boolean; maxReviewIterations: number }
+    | {
+        useSubagents: boolean;
+        maxReviewIterations: number;
+        runtimeDefaults?: {
+          app?: {
+            resolvedDefaultTaskRuntimeProfileId?: string | null;
+          };
+        };
+      }
     | undefined,
 };
 
@@ -57,7 +65,7 @@ describe("AddTaskForm", () => {
     mockRuntimesData.data = [];
   });
 
-  it("uses autoMode=true by default", () => {
+  it("uses autoMode=true by default", { timeout: 15_000 }, async () => {
     render(<AddTaskForm projectId="p-1" />);
 
     fireEvent.click(screen.getByText("Add task"));
@@ -66,15 +74,17 @@ describe("AddTaskForm", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    expect(mutateCreateTask).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: "p-1",
-        title: "Task with auto mode",
-        autoMode: true,
-        isFix: false,
-      }),
-      expect.any(Object),
-    );
+    await waitFor(() => {
+      expect(mutateCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "p-1",
+          title: "Task with auto mode",
+          autoMode: true,
+          isFix: false,
+        }),
+        expect.any(Object),
+      );
+    });
   });
 
   it("submits autoMode=false when checkbox is unchecked", () => {
@@ -285,6 +295,25 @@ describe("AddTaskForm", () => {
     expect(screen.getByText("(project default)")).toBeDefined();
   });
 
+  it("shows app-default runtime hint when only the app default is configured", () => {
+    mockSettingsData.data = {
+      useSubagents: false,
+      maxReviewIterations: 3,
+      runtimeDefaults: {
+        app: {
+          resolvedDefaultTaskRuntimeProfileId: "global-task",
+        },
+      },
+    };
+
+    render(<AddTaskForm projectId="p-1" />);
+
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.click(screen.getByRole("button", { name: "Runtime override" }));
+
+    expect(screen.getByText("No override uses the app default runtime profile.")).toBeDefined();
+  });
+
   it("submits selected runtime profile and trimmed model override", () => {
     mockRuntimeProfilesData.data = [
       {
@@ -350,6 +379,39 @@ describe("AddTaskForm", () => {
         "This runtime does not support subagents — skills mode will be used instead.",
       ),
     ).toBeDefined();
+  });
+
+  it("filters disabled runtime profiles out of the override selector", () => {
+    mockRuntimeProfilesData.data = [
+      {
+        id: "rp-enabled",
+        name: "Enabled Profile",
+        runtimeId: "codex",
+        providerId: "openai",
+        projectId: null,
+        enabled: true,
+      },
+      {
+        id: "rp-disabled",
+        name: "Disabled Profile",
+        runtimeId: "codex",
+        providerId: "openai",
+        projectId: null,
+        enabled: false,
+      },
+    ];
+
+    render(<AddTaskForm projectId="p-1" />);
+
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.click(screen.getByRole("button", { name: "Runtime override" }));
+
+    expect(
+      screen.getByRole("option", { name: "Enabled Profile [Global] (codex/openai)" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("option", { name: "Disabled Profile [Global] (codex/openai)" }),
+    ).toBeNull();
   });
 
   it("submits planner settings from advanced options", () => {

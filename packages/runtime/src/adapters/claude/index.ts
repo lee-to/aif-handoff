@@ -1,5 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { findClaudePath } from "./findPath.js";
+import { findClaudePath, resolveClaudeSdkExecutablePath } from "./findPath.js";
 import {
   RuntimeTransport,
   UsageReporting,
@@ -142,9 +142,34 @@ function readStringOption(input: RuntimeConnectionValidationInput, key: string):
   return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
 }
 
-function normalizeSdkExecutablePath(path: string | null | undefined): string | undefined {
-  if (!path) return undefined;
-  return path.toLowerCase().endsWith(".cmd") ? undefined : path;
+function normalizeSdkExecutablePath(
+  path: string | null | undefined,
+  logger: ClaudeRuntimeAdapterLogger,
+  runtimeId: string,
+): string | undefined {
+  const normalized = resolveClaudeSdkExecutablePath(path);
+  if (process.platform !== "win32" || !path) {
+    return normalized;
+  }
+  if (normalized && normalized !== path) {
+    logger.info(
+      {
+        runtimeId,
+        wrapperPath: path,
+        nativeExecutablePath: normalized,
+      },
+      "Resolved Claude SDK wrapper path to native executable",
+    );
+  } else if (!normalized) {
+    logger.warn(
+      {
+        runtimeId,
+        wrapperPath: path,
+      },
+      "Dropped Claude SDK wrapper path and deferred to Agent SDK lookup",
+    );
+  }
+  return normalized;
 }
 
 function toClaudeModelDiscoveryInput(input: RuntimeModelListInput): RuntimeRunInput {
@@ -236,6 +261,8 @@ async function listClaudeModels(
   const execution = parseExecutionOptions(discoveryInput, {
     pathToClaudeCodeExecutable: normalizeSdkExecutablePath(
       configuredCliPath ?? adapterDefaults?.pathToClaudeCodeExecutable,
+      logger,
+      input.runtimeId,
     ),
   });
   const modelDiscoveryAbortController = new AbortController();
@@ -441,12 +468,10 @@ export function createClaudeRuntimeAdapter(
   const logger = options.logger ?? createFallbackLogger();
   const executablePath = options.executablePath ?? findClaudePath();
 
-  // On Windows, npm installs produce `.cmd` wrappers (e.g. claude.cmd).
-  // The Anthropic SDK spawns `pathToClaudeCodeExecutable` directly without
-  // shell, so passing a `.cmd` path causes EINVAL. For SDK transport, omit
-  // the path and let the SDK resolve it via its own lookup. CLI transport
-  // already uses `shell: true` on Windows so `.cmd` works there.
-  const sdkExecutablePath = executablePath?.endsWith(".cmd") ? undefined : executablePath;
+  // On Windows, PATH discovery often returns npm/nvm wrapper scripts like
+  // `claude`, `claude.cmd`, or `claude.ps1`. The Agent SDK requires the real
+  // native `claude.exe`, while CLI transport can keep using the shell wrapper.
+  const sdkExecutablePath = normalizeSdkExecutablePath(executablePath, logger, runtimeId);
 
   function runByTransport(input: RuntimeRunInput): Promise<RuntimeRunResult> {
     const transport = input.transport ?? RuntimeTransport.SDK;

@@ -16,6 +16,15 @@ import {
   type CommentRow,
   updateTask,
 } from "@aif/data";
+import type { TaskStatus } from "@aif/shared";
+
+export function toTaskBroadcastPayload(task: { id: string; title: string; status: TaskStatus }) {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+  };
+}
 
 export function updateTaskPlan(
   taskId: string,

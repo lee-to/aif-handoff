@@ -1,16 +1,15 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { logger, getEnv } from "@aif/shared";
-import { listProjects, listRuntimeProfiles, listStaleInProgressTasks } from "@aif/data";
+import { getEnv, logger } from "@aif/shared";
+import { listProjects, listStaleInProgressTasks } from "@aif/data";
 import { projectsRouter } from "./routes/projects.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { chatRouter } from "./routes/chat.js";
-import { settingsRoutes } from "./routes/settings.js";
+import { buildSettingsOverview, settingsRoutes } from "./routes/settings.js";
 import { runtimeProfilesRouter } from "./routes/runtimeProfiles.js";
 import { codexAuthRouter } from "./routes/codexAuth.js";
-import { setupWebSocket } from "./ws.js";
+import { setupWebSocket, closeAllWebSocketClients } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
-import { getApiRuntimeRegistry } from "./services/runtime.js";
 import { startServer } from "./serverBootstrap.js";
 
 const log = logger("server");
@@ -67,48 +66,8 @@ app.get("/agent/status", (c) => {
 });
 
 // Settings (expose env defaults to frontend)
-app.get("/settings", (c) => {
-  const env = getEnv();
-  return getApiRuntimeRegistry()
-    .then((registry) => {
-      const runtimeProfiles = listRuntimeProfiles();
-      const enabledProfiles = runtimeProfiles.filter((profile) => profile.enabled);
-      return c.json({
-        useSubagents: env.AGENT_USE_SUBAGENTS,
-        maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
-        autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
-        runtimeReadiness: {
-          availableRuntimeCount: registry.listRuntimes().length,
-          runtimeProfileCount: runtimeProfiles.length,
-          enabledRuntimeProfileCount: enabledProfiles.length,
-        },
-        runtimeDefaults: {
-          modules: env.AIF_RUNTIME_MODULES,
-          openAiBaseUrlConfigured: Boolean(env.OPENAI_BASE_URL),
-          codexCliPathConfigured: Boolean(env.CODEX_CLI_PATH),
-        },
-      });
-    })
-    .catch((error) => {
-      log.error({ error }, "Failed to include runtime settings payload");
-      const allProfiles = listRuntimeProfiles();
-      const enabledProfiles = listRuntimeProfiles({ enabledOnly: true });
-      return c.json({
-        useSubagents: env.AGENT_USE_SUBAGENTS,
-        maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
-        autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
-        runtimeReadiness: {
-          availableRuntimeCount: 0,
-          runtimeProfileCount: allProfiles.length,
-          enabledRuntimeProfileCount: enabledProfiles.length,
-        },
-        runtimeDefaults: {
-          modules: env.AIF_RUNTIME_MODULES,
-          openAiBaseUrlConfigured: Boolean(env.OPENAI_BASE_URL),
-          codexCliPathConfigured: Boolean(env.CODEX_CLI_PATH),
-        },
-      });
-    });
+app.get("/settings", async (c) => {
+  return c.json(await buildSettingsOverview());
 });
 
 // Routes
@@ -146,5 +105,28 @@ const server = startServer({
   injectWebSocket,
   logger: log,
 });
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown: close HTTP server + terminate WS clients so Ctrl+C /
+// tsx-watch reload frees port 3009 without a second signal. Without this the
+// open WS connections keep the event loop alive and the next restart hits
+// EADDRINUSE.
+// ---------------------------------------------------------------------------
+let shuttingDown = false;
+function onShutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info({ signal }, "Shutdown signal received — terminating WS + exiting");
+  closeAllWebSocketClients();
+  // Fire-and-forget server.close so any in-flight response can drain, but
+  // don't wait for its callback — tsx watch + turbo race on Ctrl+C and
+  // print "Previous process hasn't exited yet. Force killing..." if the
+  // child exit is delayed even briefly. Exit synchronously instead.
+  server.close();
+  process.exit(0);
+}
+
+process.on("SIGINT", () => onShutdown("SIGINT"));
+process.on("SIGTERM", () => onShutdown("SIGTERM"));
 
 export { app, server };

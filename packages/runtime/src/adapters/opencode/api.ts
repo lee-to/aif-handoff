@@ -11,6 +11,7 @@ import type {
   RuntimeSessionGetInput,
   RuntimeSessionListInput,
 } from "../../types.js";
+import { redactProviderText } from "@aif/shared";
 import { classifyOpenCodeRuntimeError, OpenCodeRuntimeAdapterError } from "./errors.js";
 
 export interface OpenCodeApiLogger {
@@ -100,6 +101,11 @@ function stripSensitiveOptions(
     }
   }
   return cleaned;
+}
+
+function safeProviderErrorMessage(rawText: string, fallbackMessage: string): string {
+  const trimmed = rawText.trim();
+  return trimmed.length > 0 ? redactProviderText(trimmed) : fallbackMessage;
 }
 
 function resolveBaseUrl(
@@ -308,7 +314,7 @@ async function requestJson<T>(
     if (!response.ok) {
       const bodyText = await response.text();
       throw classifyOpenCodeRuntimeError(
-        new Error(bodyText || `OpenCode request failed at ${options.path}`),
+        new Error(safeProviderErrorMessage(bodyText, `OpenCode request failed at ${options.path}`)),
         response.status,
       );
     }

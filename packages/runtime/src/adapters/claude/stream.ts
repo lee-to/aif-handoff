@@ -1,11 +1,20 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { RuntimeEvent, RuntimeRunInput, RuntimeUsage } from "../../types.js";
+import type {
+  RuntimeEvent,
+  RuntimeLimitSnapshot,
+  RuntimeRunInput,
+  RuntimeUsage,
+} from "../../types.js";
+import { buildRuntimeLimitEvent } from "../../limitEvents.js";
 import { withStreamTimeouts } from "../../timeouts.js";
 import { classifyClaudeResultSubtype } from "./errors.js";
 import type { ClaudeOptionsLogger, ClaudeRuntimeExecutionOptions } from "./options.js";
 import { buildClaudeQueryOptions } from "./options.js";
 import { buildToolUseEvents } from "../../toolEvents.js";
+import { normalizeClaudeLimitSnapshot } from "./limit.js";
 import { parseClaudeAskUserQuestion } from "./questions.js";
+import { resolveClaudeProviderAuth } from "./providerIdentity.js";
+import { fetchZaiClaudeQuotaSnapshot } from "./zaiQuota.js";
 
 const QUERY_START_TIMEOUT_CODE = "query_start_timeout";
 
@@ -18,6 +27,7 @@ interface ClaudeStreamMessage {
   subtype?: string;
   session_id?: string;
   result?: string;
+  rate_limit_info?: unknown;
   usage?: Record<string, number>;
   total_cost_usd?: number;
   event?: {
@@ -65,6 +75,17 @@ function normalizeUsage(message: ClaudeStreamMessage): RuntimeUsage | null {
     outputTokens,
     totalTokens,
     costUsd: costUsd > 0 ? costUsd : undefined,
+  };
+}
+
+function buildClaudeLimitErrorMetadata(snapshot: RuntimeLimitSnapshot | null) {
+  const retryAfterSeconds = snapshot?.retryAfterSeconds ?? null;
+  return {
+    resetAt: snapshot?.resetAt ?? null,
+    retryAfterSeconds,
+    retryAfterMs: retryAfterSeconds != null ? retryAfterSeconds * 1000 : null,
+    limitSnapshot: snapshot,
+    providerMeta: snapshot?.providerMeta ?? null,
   };
 }
 
@@ -165,6 +186,14 @@ export async function runClaudeQueryAttempt(
   execution: ClaudeRuntimeExecutionOptions,
   logger?: ClaudeOptionsLogger,
 ): Promise<ClaudeQueryAttemptResult> {
+  const { identity: providerIdentity, authToken } = resolveClaudeProviderAuth({
+    providerId: input.providerId ?? "anthropic",
+    transport: input.transport ?? "sdk",
+    baseUrl: typeof input.options?.baseUrl === "string" ? input.options.baseUrl : null,
+    apiKeyEnvVar:
+      typeof input.options?.apiKeyEnvVar === "string" ? input.options.apiKeyEnvVar : null,
+    apiKey: typeof input.options?.apiKey === "string" ? input.options.apiKey : null,
+  });
   const options = buildClaudeQueryOptions(input, execution, logger);
   const queryImpl = resolveQueryImplementation();
   const stream = queryImpl({ prompt: input.prompt, options });
@@ -186,6 +215,7 @@ export async function runClaudeQueryAttempt(
   let outputText = "";
   let usage: RuntimeUsage | null = null;
   const events: RuntimeEvent[] = [];
+  let latestLimitSnapshot: RuntimeLimitSnapshot | null = null;
   let terminalErrorSubtype: string | null = null;
   let terminalErrorDetail: string | null = null;
 
@@ -197,6 +227,47 @@ export async function runClaudeQueryAttempt(
     if (runtimeEvent) {
       events.push(runtimeEvent);
       execution.onEvent?.(runtimeEvent);
+    }
+
+    if (message.type === "rate_limit_event") {
+      const snapshot = normalizeClaudeLimitSnapshot({
+        info: message.rate_limit_info,
+        runtimeId: input.runtimeId,
+        providerId: input.providerId ?? "anthropic",
+        profileId: input.profileId ?? null,
+        checkedAt: new Date().toISOString(),
+        providerIdentity,
+      });
+
+      if (!snapshot) {
+        logger?.warn?.(
+          {
+            runtimeId: input.runtimeId,
+            providerId: input.providerId ?? "anthropic",
+            profileId: input.profileId ?? null,
+          },
+          "Dropped Claude rate_limit_event because it did not contain usable limit metadata",
+        );
+        return;
+      }
+
+      latestLimitSnapshot = snapshot;
+      const limitEvent = buildRuntimeLimitEvent(snapshot, "rate_limit_event");
+      events.push(limitEvent);
+      execution.onEvent?.(limitEvent);
+      logger?.debug?.(
+        {
+          runtimeId: input.runtimeId,
+          providerId: snapshot.providerId,
+          profileId: snapshot.profileId ?? null,
+          status: snapshot.status,
+          precision: snapshot.precision,
+          source: snapshot.source,
+          resetAt: snapshot.resetAt ?? null,
+        },
+        "Translated Claude rate_limit_event into runtime limit snapshot",
+      );
+      return;
     }
 
     if (message.type === "system" && message.subtype === "init" && message.session_id) {
@@ -247,7 +318,11 @@ export async function runClaudeQueryAttempt(
       terminalErrorSubtype = message.subtype ?? "unknown";
       terminalErrorDetail = directResult || null;
       if (directResult) {
-        throw classifyClaudeResultSubtype(terminalErrorSubtype, directResult);
+        throw classifyClaudeResultSubtype(
+          terminalErrorSubtype,
+          directResult,
+          buildClaudeLimitErrorMetadata(latestLimitSnapshot),
+        );
       }
       return;
     }
@@ -261,8 +336,51 @@ export async function runClaudeQueryAttempt(
     processMessage(value);
   }
 
+  if (providerIdentity.quotaSource === "zai_monitor" && authToken) {
+    logger?.debug?.(
+      {
+        runtimeId: input.runtimeId,
+        providerId: input.providerId ?? "anthropic",
+        profileId: input.profileId ?? null,
+        quotaAuthEnvVar: providerIdentity.apiKeyEnvVar,
+        providerFamily: providerIdentity.providerFamily,
+      },
+      "Refreshing Z.AI coding quota snapshot with resolved Claude auth identity",
+    );
+    try {
+      const providerSnapshot = await fetchZaiClaudeQuotaSnapshot({
+        runtimeId: input.runtimeId,
+        providerId: input.providerId ?? "anthropic",
+        profileId: input.profileId ?? null,
+        identity: providerIdentity,
+        authToken,
+        logger,
+      });
+      if (providerSnapshot) {
+        latestLimitSnapshot = providerSnapshot;
+        const providerLimitEvent = buildRuntimeLimitEvent(providerSnapshot, "zai_monitor");
+        events.push(providerLimitEvent);
+        execution.onEvent?.(providerLimitEvent);
+      }
+    } catch (error) {
+      logger?.warn?.(
+        {
+          runtimeId: input.runtimeId,
+          providerId: input.providerId ?? "anthropic",
+          profileId: input.profileId ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to refresh Z.AI coding quota snapshot after Claude runtime run",
+      );
+    }
+  }
+
   if (terminalErrorSubtype) {
-    throw classifyClaudeResultSubtype(terminalErrorSubtype, terminalErrorDetail);
+    throw classifyClaudeResultSubtype(
+      terminalErrorSubtype,
+      terminalErrorDetail,
+      buildClaudeLimitErrorMetadata(latestLimitSnapshot),
+    );
   }
 
   return { outputText, sessionId, events, usage };

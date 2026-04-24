@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Moon, Sun, Command, ChartColumn, Cpu, Map, Settings } from "lucide-react";
+import { Bell, Moon, Sun, Command, ChartColumn, Cpu, Map, Settings, Activity } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { useEffectiveChatRuntime } from "@/hooks/useRuntimeProfiles";
+import { useUsageLimitsEnabled } from "@/hooks/useSettings";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProjectSelector } from "@/components/project/ProjectSelector";
@@ -11,6 +12,7 @@ import { NotificationsDialog } from "./NotificationsDialog";
 import { MetricsDialog, type AggregateProjectTotals } from "./MetricsDialog";
 import { RoadmapDialog } from "./RoadmapDialog";
 import { GlobalSettingsDialog } from "./GlobalSettingsDialog";
+import { RuntimeUsageDialog } from "./RuntimeUsageDialog";
 
 export interface RoadmapImportResult {
   roadmapAlias: string;
@@ -66,12 +68,27 @@ export function Header({
   const [metricsOpen, setMetricsOpen] = useState(false);
   const [roadmapOpen, setRoadmapOpen] = useState(false);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
+  const [runtimeUsageOpen, setRuntimeUsageOpen] = useState(false);
+  const usageLimitsEnabled = useUsageLimitsEnabled();
   const isCompact = density === "compact";
-  const currentRuntimeLabel = !selectedProject
+  const currentRuntimeProfileLabel = !selectedProject
     ? "No project"
     : effectiveRuntimeFetching
       ? "Loading..."
       : (effectiveChatRuntime?.profile?.name ?? "Default");
+  const currentRuntimeEngine = effectiveChatRuntime?.profile
+    ? `${effectiveChatRuntime.profile.runtimeId}/${effectiveChatRuntime.profile.providerId}`
+    : effectiveChatRuntime?.resolved
+      ? `${effectiveChatRuntime.resolved.runtimeId}/${effectiveChatRuntime.resolved.providerId}`
+      : "n/a";
+  const currentRuntimeModel =
+    effectiveChatRuntime?.profile?.defaultModel ?? effectiveChatRuntime?.resolved?.model ?? "auto";
+  const runtimeButtonTitle = !selectedProject
+    ? "Select project first"
+    : `Current runtime profile: ${currentRuntimeProfileLabel} (${currentRuntimeEngine}, model ${currentRuntimeModel}).`;
+  const runtimeUsageButtonTitle = !selectedProject
+    ? "Select project first"
+    : "Open usage snapshots for all configured runtimes";
 
   return (
     <header ref={headerRef} className="sticky top-0 z-60 border-b border-border bg-background">
@@ -184,6 +201,20 @@ export function Header({
             <ChartColumn className="h-3.5 w-3.5" />
             <span className="hidden md:inline">METRICS</span>
           </Button>
+          {usageLimitsEnabled && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRuntimeUsageOpen(true)}
+              disabled={!selectedProject}
+              className="gap-1 font-mono text-3xs"
+              aria-label="Runtime usage"
+              title={runtimeUsageButtonTitle}
+            >
+              <Activity className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">USAGE</span>
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -194,11 +225,7 @@ export function Header({
               runtimeProfilesOpen && "border-primary/70 bg-primary/10",
             )}
             aria-label="Runtime profiles"
-            title={
-              selectedProject
-                ? `Current runtime profile: ${currentRuntimeLabel}`
-                : "Select project first"
-            }
+            title={runtimeButtonTitle}
           >
             <Cpu className="h-3.5 w-3.5" />
             <span>RUNTIME</span>
@@ -252,6 +279,13 @@ export function Header({
         onOpenChange={setGlobalSettingsOpen}
         projectId={selectedProject?.id ?? null}
       />
+      {selectedProject && usageLimitsEnabled && (
+        <RuntimeUsageDialog
+          open={runtimeUsageOpen}
+          onOpenChange={setRuntimeUsageOpen}
+          projectId={selectedProject.id}
+        />
+      )}
     </header>
   );
 }

@@ -36,9 +36,13 @@ export function resolveCodexSubagentStrategy(
 ): CodexSubagentStrategy | null {
   if (runtimeId !== "codex") return null;
   const configured = readString(asRecord(runtimeOptions)[CODEX_SUBAGENT_STRATEGY_OPTION]);
-  return configured === CODEX_SUBAGENT_STRATEGIES.isolated
-    ? CODEX_SUBAGENT_STRATEGIES.isolated
-    : CODEX_SUBAGENT_STRATEGIES.native;
+  if (!configured || configured === CODEX_SUBAGENT_STRATEGIES.native) {
+    return CODEX_SUBAGENT_STRATEGIES.native;
+  }
+  if (configured === CODEX_SUBAGENT_STRATEGIES.isolated) {
+    return CODEX_SUBAGENT_STRATEGIES.isolated;
+  }
+  return CODEX_SUBAGENT_STRATEGIES.isolated;
 }
 
 export function resolveCodexNativeSubagentReadiness(

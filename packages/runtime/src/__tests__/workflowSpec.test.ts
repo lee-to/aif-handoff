@@ -179,6 +179,49 @@ describe("runtime workflow spec + prompt policy", () => {
     expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
   });
 
+  it("warns and falls back to isolated skill-command mode when codexSubagentStrategy is invalid", () => {
+    const projectRoot = createCodexNativeAssetsProjectRoot();
+    const warnings: Array<{ context: Record<string, unknown>; message: string }> = [];
+    const workflow = createRuntimeWorkflowSpec({
+      workflowKind: "implementer",
+      prompt: "Implement this feature",
+      agentDefinitionName: "implement-coordinator",
+      fallbackSlashCommand: "/aif-implement @.ai-factory/PLAN.md",
+      fallbackStrategy: "slash_command",
+      executionMode: "native_subagents",
+      requiredCapabilities: ["supportsAgentDefinitions"],
+    });
+
+    const resolved = resolveRuntimePromptPolicy({
+      runtimeId: "codex",
+      projectRoot,
+      capabilities: CODEX_CAPABILITIES,
+      runtimeOptions: { codexSubagentStrategy: "isloated" },
+      workflow,
+      logger: {
+        warn(context, message) {
+          warnings.push({ context, message });
+        },
+      },
+    });
+
+    expect(resolved.usedNativeSubagentWorkflow).toBe(false);
+    expect(resolved.usedIsolatedSkillCommand).toBe(true);
+    expect(resolved.usedFallbackSlashCommand).toBe(false);
+    expect(resolved.prompt).toContain("/aif-implement @.ai-factory/PLAN.md");
+    expect(warnings).toEqual([
+      {
+        context: {
+          runtimeId: "codex",
+          workflowKind: "implementer",
+          invalidValue: "isloated",
+        },
+        message:
+          "Ignoring invalid Codex subagent strategy override; falling back to isolated skill-session execution",
+      },
+    ]);
+  });
+
   it("defaults Codex native_subagents requests to native orchestration when no strategy override is set", () => {
     const projectRoot = createCodexNativeAssetsProjectRoot();
     const workflow = createRuntimeWorkflowSpec({

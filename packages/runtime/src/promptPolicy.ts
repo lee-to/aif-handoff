@@ -1,6 +1,8 @@
 import type { RuntimeCapabilities } from "./types.js";
 import type { RuntimeWorkflowSpec } from "./workflowSpec.js";
+import { asRecord, readString } from "./utils.js";
 import {
+  CODEX_SUBAGENT_STRATEGY_OPTION,
   CODEX_SUBAGENT_STRATEGIES,
   getNativeSubagentWorkflowGuidance,
   resolveCodexNativeSubagentReadiness,
@@ -87,6 +89,10 @@ export function resolveRuntimePromptPolicy(
   const wantsIsolatedSkillCommand = input.workflow.executionMode === "isolated_skill_session";
   const wantsSlashFallback = input.workflow.fallbackStrategy === "slash_command";
   // Returns null for non-Codex runtimes; capability checks remain the real gate.
+  const rawCodexSubagentStrategy =
+    input.runtimeId === "codex"
+      ? readString(asRecord(input.runtimeOptions)[CODEX_SUBAGENT_STRATEGY_OPTION])
+      : null;
   const requestedCodexSubagentStrategy = resolveCodexSubagentStrategy(
     input.runtimeId,
     input.runtimeOptions,
@@ -145,12 +151,19 @@ export function resolveRuntimePromptPolicy(
     requestedCodexSubagentStrategy === CODEX_SUBAGENT_STRATEGIES.isolated &&
     input.runtimeId === "codex"
   ) {
+    const invalidCodexSubagentStrategy =
+      rawCodexSubagentStrategy !== null &&
+      rawCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.native &&
+      rawCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.isolated;
     input.logger?.warn?.(
       {
         runtimeId: input.runtimeId,
         workflowKind: input.workflow.workflowKind,
+        ...(invalidCodexSubagentStrategy ? { invalidValue: rawCodexSubagentStrategy } : {}),
       },
-      "Native Codex subagents disabled via runtime option; falling back to isolated skill-session execution",
+      invalidCodexSubagentStrategy
+        ? "Ignoring invalid Codex subagent strategy override; falling back to isolated skill-session execution"
+        : "Native Codex subagents disabled via runtime option; falling back to isolated skill-session execution",
     );
   }
   if (
@@ -187,6 +200,12 @@ export function resolveRuntimePromptPolicy(
       requestedCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.isolated &&
       codexNativeReadiness &&
       !codexNativeReadiness.ready
+    ) &&
+    !(
+      input.runtimeId === "codex" &&
+      rawCodexSubagentStrategy !== null &&
+      rawCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.native &&
+      rawCodexSubagentStrategy !== CODEX_SUBAGENT_STRATEGIES.isolated
     )
   ) {
     input.logger?.warn?.(

@@ -268,6 +268,9 @@ export function ensureFeatureBranch(input: EnsureFeatureBranchInput): EnsureFeat
     );
   }
 
+  // Step 1: ensure HEAD is on the base branch. We need it both as the
+  // create-from-target for `git checkout -b` and as the target of the pull
+  // policy below.
   if (current !== config.base_branch) {
     if (!branchExists(projectRoot, config.base_branch)) {
       throw new BranchIsolationError(
@@ -290,35 +293,40 @@ export function ensureFeatureBranch(input: EnsureFeatureBranchInput): EnsureFeat
         branchName,
       );
     }
-    const pullResult = runGit(projectRoot, ["pull", "--ff-only", "origin", config.base_branch], {
-      ignoreExit: true,
-    });
-    if (pullResult.status !== 0) {
-      // Policy: by default, treat pull failure as best-effort (warn + continue
-      // from local base). Projects that REQUIRE a fresh base before branching
-      // can opt into strict mode via `git.strict_base_update: true` in
-      // `.ai-factory/config.yaml`; in that mode pull failure is a hard
-      // BranchIsolationError("base_update_failed") classified as
-      // blocked_external by the coordinator.
-      if (config.strict_base_update) {
-        throw new BranchIsolationError(
-          "base_update_failed",
-          `git pull --ff-only origin ${config.base_branch} failed: ${pullResult.stderr || "unknown error"}. ` +
-            `Project has git.strict_base_update=true; refusing to branch from a stale base.`,
-          projectRoot,
-          branchName,
-        );
-      }
-      log.warn(
-        {
-          projectRoot,
-          branchName,
-          baseBranch: config.base_branch,
-          stderr: pullResult.stderr,
-        },
-        "Could not fast-forward base branch before creating feature branch; continuing from local base (git.strict_base_update=false)",
+  }
+
+  // Step 2: refresh the base branch via `git pull --ff-only origin <base>`.
+  // Run UNCONDITIONALLY (regardless of whether we just switched into base or
+  // were already on it) so `git.strict_base_update=true` cannot be bypassed
+  // by a HEAD that already happens to be on a stale local base.
+  //
+  // Policy: by default treat pull failure as best-effort (warn + continue
+  // from local base). Projects that REQUIRE a fresh base before branching
+  // opt into strict mode via `git.strict_base_update: true` — pull failure
+  // becomes a hard BranchIsolationError("base_update_failed") classified as
+  // blocked_external by the coordinator.
+  const pullResult = runGit(projectRoot, ["pull", "--ff-only", "origin", config.base_branch], {
+    ignoreExit: true,
+  });
+  if (pullResult.status !== 0) {
+    if (config.strict_base_update) {
+      throw new BranchIsolationError(
+        "base_update_failed",
+        `git pull --ff-only origin ${config.base_branch} failed: ${pullResult.stderr || "unknown error"}. ` +
+          `Project has git.strict_base_update=true; refusing to branch from a stale base.`,
+        projectRoot,
+        branchName,
       );
     }
+    log.warn(
+      {
+        projectRoot,
+        branchName,
+        baseBranch: config.base_branch,
+        stderr: pullResult.stderr,
+      },
+      "Could not fast-forward base branch before creating feature branch; continuing from local base (git.strict_base_update=false)",
+    );
   }
 
   const { status, stderr } = runGit(projectRoot, ["checkout", "-b", branchName], {

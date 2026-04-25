@@ -268,70 +268,64 @@ describe("runPlanner comment selection", () => {
     expect(updatedTask?.branchName).toBe(branch);
   });
 
-  it(
-    "throws BranchIsolationError when subagent silently switched branches (drift)",
-    { timeout: 20_000 },
-    async () => {
-      const db = testDb.current;
-      const projectRoot = mkdtempSync(join(tmpdir(), "planner-drift-"));
-      execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
-      execFileSync("git", ["config", "user.email", "t@t.local"], {
-        cwd: projectRoot,
-        stdio: "ignore",
-      });
-      execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
-      execFileSync("git", ["config", "commit.gpgsign", "false"], {
-        cwd: projectRoot,
-        stdio: "ignore",
-      });
-      writeFileSync(join(projectRoot, "README.md"), "# t\n");
-      execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
-      execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
-        cwd: projectRoot,
-        stdio: "ignore",
-      });
-      // Pre-create the branch so drift test has something to drift AWAY from
-      execFileSync("git", ["checkout", "-b", "feature/some-drift"], {
-        cwd: projectRoot,
-        stdio: "ignore",
-      });
+  it("throws BranchIsolationError when subagent silently switched branches (drift)", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-drift-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    // Pre-create the branch so drift test has something to drift AWAY from
+    execFileSync("git", ["checkout", "-b", "feature/some-drift"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+
+    db.insert(projects).values({ id: "project-drift", name: "Drift", rootPath: projectRoot }).run();
+    db.insert(tasks)
+      .values({
+        id: "task-drift-1",
+        projectId: "project-drift",
+        title: "Drift test",
+        description: "",
+        status: "planning",
+        plannerMode: "full",
+        useSubagents: true,
+        branchName: "feature/some-drift",
+      })
+      .run();
+
+    // Simulate subagent switching HEAD away while "running"
+    queryMock.mockReset();
+    queryMock.mockImplementation(() => {
       execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+      return streamSuccess("## Plan\n- [ ] x");
+    });
 
-      db.insert(projects)
-        .values({ id: "project-drift", name: "Drift", rootPath: projectRoot })
-        .run();
-      db.insert(tasks)
-        .values({
-          id: "task-drift-1",
-          projectId: "project-drift",
-          title: "Drift test",
-          description: "",
-          status: "planning",
-          plannerMode: "full",
-          useSubagents: true,
-          branchName: "feature/some-drift",
-        })
-        .run();
-
-      // Simulate subagent switching HEAD away while "running"
-      queryMock.mockReset();
-      queryMock.mockImplementation(() => {
-        execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
-        return streamSuccess("## Plan\n- [ ] x");
-      });
-
-      const { isBranchIsolationError } = await import("../gitBranch.js");
-      try {
-        await runPlanner("task-drift-1", projectRoot);
-        throw new Error("expected throw");
-      } catch (err) {
-        expect(isBranchIsolationError(err)).toBe(true);
-        if (isBranchIsolationError(err)) {
-          expect(err.kind).toBe("branch_drift");
-        }
+    const { isBranchIsolationError } = await import("../gitBranch.js");
+    try {
+      await runPlanner("task-drift-1", projectRoot);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(isBranchIsolationError(err)).toBe(true);
+      if (isBranchIsolationError(err)) {
+        expect(err.kind).toBe("branch_drift");
       }
-    },
-  );
+    }
+  });
 
   it("injects HANDOFF_BRANCH_PREPARED + HANDOFF_BRANCH_NAME into prompt", async () => {
     const db = testDb.current;

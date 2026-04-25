@@ -1,9 +1,9 @@
 import {
   assertCurrentBranch,
-  ensureFeatureBranch,
   getProjectConfig,
   isBranchIsolationError,
   logger,
+  restorePersistedBranch,
 } from "@aif/shared";
 import { findProjectById, findTaskById } from "@aif/data";
 import { UsageSource } from "@aif/runtime";
@@ -75,13 +75,19 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
 
   const task = taskId ? findTaskById(taskId) : null;
   if (task?.branchName && !task.isFix) {
+    // task.branchName is a source-of-truth contract: commit MUST land on the
+    // persisted branch or fail loud. `ensureFeatureBranch({switchOnly:true})`
+    // can return `skipped` for `git.enabled=false` / non-git projectRoot —
+    // letting the commit run on whatever HEAD happens to be. The post-run
+    // assertion would catch the drift, but the commit may already have
+    // landed by then. Use `restorePersistedBranch` instead, which throws
+    // `git_disabled_with_persisted_branch` / `not_a_repo_with_persisted_branch`
+    // before any runtime call.
     try {
-      ensureFeatureBranch({
+      restorePersistedBranch({
         projectRoot: project.rootPath,
         taskId: task.id,
-        title: task.title,
-        explicitBranchName: task.branchName,
-        switchOnly: true,
+        persistedBranchName: task.branchName,
       });
     } catch (err) {
       const message = isBranchIsolationError(err)

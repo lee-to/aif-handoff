@@ -4,7 +4,7 @@ const mockRunApiRuntimeOneShot = vi.fn();
 const mockFindProjectById = vi.fn();
 const mockFindTaskById = vi.fn();
 const mockGetProjectConfig = vi.fn();
-const mockEnsureFeatureBranch = vi.fn();
+const mockRestorePersistedBranch = vi.fn();
 const mockAssertCurrentBranch = vi.fn();
 
 vi.mock("../services/runtime.js", () => ({
@@ -20,7 +20,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
   return {
     ...actual,
-    ensureFeatureBranch: (...args: unknown[]) => mockEnsureFeatureBranch(...args),
+    restorePersistedBranch: (...args: unknown[]) => mockRestorePersistedBranch(...args),
     getProjectConfig: (...args: unknown[]) => mockGetProjectConfig(...args),
     assertCurrentBranch: (...args: unknown[]) => mockAssertCurrentBranch(...args),
   };
@@ -69,7 +69,7 @@ describe("runCommitQuery", () => {
     mockFindProjectById.mockReset();
     mockFindTaskById.mockReset();
     mockGetProjectConfig.mockReset();
-    mockEnsureFeatureBranch.mockReset();
+    mockRestorePersistedBranch.mockReset();
     mockAssertCurrentBranch.mockReset();
     mockFindProjectById.mockReturnValue({ id: "p1", rootPath: "/tmp/p1" });
     mockFindTaskById.mockReturnValue(null);
@@ -97,7 +97,7 @@ describe("runCommitQuery", () => {
     expect(callArg.prompt).not.toMatch(/Do NOT push/i);
   });
 
-  it("restores task branch before commit runtime starts", async () => {
+  it("restores persisted task branch via restorePersistedBranch before commit runtime starts", async () => {
     mockGetProjectConfig.mockReturnValue(gitConfig(false));
     mockFindTaskById.mockReturnValue({
       id: "t1",
@@ -110,16 +110,33 @@ describe("runCommitQuery", () => {
     const res = await runCommitQuery({ projectId: "p1", taskId: "t1" });
 
     expect(res.ok).toBe(true);
-    expect(mockEnsureFeatureBranch).toHaveBeenCalledWith({
+    expect(mockRestorePersistedBranch).toHaveBeenCalledWith({
       projectRoot: "/tmp/p1",
       taskId: "t1",
-      title: "Task title",
-      explicitBranchName: "feature/task-title-t1",
-      switchOnly: true,
+      persistedBranchName: "feature/task-title-t1",
     });
-    expect(mockEnsureFeatureBranch.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mockRestorePersistedBranch.mock.invocationCallOrder[0]).toBeLessThan(
       mockRunApiRuntimeOneShot.mock.invocationCallOrder[0],
     );
+  });
+
+  it("returns ok:false fail-closed when restorePersistedBranch throws (e.g. git_disabled_with_persisted_branch)", async () => {
+    mockGetProjectConfig.mockReturnValue(gitConfig(false));
+    mockFindTaskById.mockReturnValue({
+      id: "t1",
+      title: "Task title",
+      branchName: "feature/task-title-t1",
+      isFix: false,
+    });
+    mockRestorePersistedBranch.mockImplementation(() => {
+      throw new Error("Branch isolation: config drift, git.enabled=false");
+    });
+
+    const res = await runCommitQuery({ projectId: "p1", taskId: "t1" });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/config drift/);
+    expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
   });
 
   it("sends no-push prompt when skip_push_after_commit=true", async () => {

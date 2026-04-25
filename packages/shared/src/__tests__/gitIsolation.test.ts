@@ -298,4 +298,35 @@ describe("gitIsolation", () => {
     },
     GIT_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "throws base_update_failed when HEAD is already on base and strict_base_update=true",
+    () => {
+      // Regression: previously the pull lived inside `if (current !== base)`,
+      // so a HEAD that already happened to be on stale local base bypassed
+      // strict_base_update entirely. Now the pull runs unconditionally.
+      initRepo(projectRoot);
+      writeConfig(
+        projectRoot,
+        "git:\n  enabled: true\n  base_branch: main\n  create_branches: true\n  strict_base_update: true\n",
+      );
+      // Stay on `main` — do NOT switch to a topic branch first.
+
+      let captured: unknown;
+      try {
+        ensureFeatureBranch({
+          projectRoot,
+          taskId: "task-on-base-strict",
+          title: "On base strict",
+        });
+      } catch (err) {
+        captured = err;
+      }
+
+      expect(isBranchIsolationError(captured)).toBe(true);
+      const branchErr = captured as BranchIsolationError;
+      expect(branchErr.kind).toBe("base_update_failed");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });

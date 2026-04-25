@@ -241,27 +241,21 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
     return { ok: false, status: 404, error: "Project not found for task" };
   }
 
-  const cfg = getProjectConfig(project.rootPath);
-  const planFilePath = task.isFix
-    ? resolve(project.rootPath, cfg.paths.fix_plan)
-    : resolve(project.rootPath, task.planPath || cfg.paths.plan);
-
-  if (!existsSync(planFilePath)) {
-    return { ok: false, status: 404, error: "Plan file not found on disk" };
-  }
-
-  const filePlan = readFileSync(planFilePath, "utf8");
-  if (!filePlan.trim()) {
-    return { ok: false, status: 409, error: "Plan file is empty" };
-  }
-
-  // Branch binding: accept_existing_plan is a back-door route into the
-  // autonomous pipeline that bypasses the planner. If the project has
-  // branch isolation enabled and the task has no bound branch yet, create
-  // one now — otherwise implementer/reviewer stages will run on whatever
-  // HEAD happens to be. Fix tasks keep the legacy behavior (no branch).
+  // Branch handling MUST happen before resolving/reading the plan file:
+  // task.branchName is a source-of-truth contract, and an already-bound
+  // task whose HEAD has drifted to a different branch would otherwise read
+  // the plan file from the wrong work-tree state and persist that content
+  // onto the bound branch. Two paths:
+  //   - Already-bound (task.branchName set): restorePersistedBranch — config
+  //     drift / missing branch / dirty tree fail loud, fail-closed.
+  //   - Unbound (no task.branchName): ensureFeatureBranch creates the
+  //     feature branch from base, then we read the plan from that branch.
+  // Fix tasks keep the legacy no-branch behavior.
   let boundBranchName: string | null = task.branchName ?? null;
-  if (!task.isFix && !boundBranchName) {
+  if (!task.isFix && boundBranchName) {
+    const branchError = restoreTaskBranchForMutation(task, project.rootPath);
+    if (branchError) return branchError;
+  } else if (!task.isFix && !boundBranchName) {
     try {
       const branchResult = ensureFeatureBranch({
         projectRoot: project.rootPath,
@@ -279,11 +273,20 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
           : String(err);
       return { ok: false, status: 409, error };
     }
-  } else if (boundBranchName && !task.isFix) {
-    // Task already has a bound branch: make sure HEAD is on it before we
-    // read/persist the plan.
-    const branchError = restoreTaskBranchForMutation(task, project.rootPath);
-    if (branchError) return branchError;
+  }
+
+  const cfg = getProjectConfig(project.rootPath);
+  const planFilePath = task.isFix
+    ? resolve(project.rootPath, cfg.paths.fix_plan)
+    : resolve(project.rootPath, task.planPath || cfg.paths.plan);
+
+  if (!existsSync(planFilePath)) {
+    return { ok: false, status: 404, error: "Plan file not found on disk" };
+  }
+
+  const filePlan = readFileSync(planFilePath, "utf8");
+  if (!filePlan.trim()) {
+    return { ok: false, status: 409, error: "Plan file is empty" };
   }
 
   const nowIso = new Date().toISOString();

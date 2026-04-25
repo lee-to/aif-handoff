@@ -1460,6 +1460,62 @@ describe("tasks API", () => {
       expect(res.status).toBe(404);
     });
 
+    it("should create and persist a feature branch when accepting an existing plan in a git repo with create_branches=true", async () => {
+      const db = testDb.current;
+      const { execFileSync } = await import("node:child_process");
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-accept-branch-"));
+      execFileSync("git", ["init", "--initial-branch=main"], { cwd: rootPath, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "t@t.local"], {
+        cwd: rootPath,
+        stdio: "ignore",
+      });
+      execFileSync("git", ["config", "user.name", "T"], { cwd: rootPath, stdio: "ignore" });
+      execFileSync("git", ["config", "commit.gpgsign", "false"], {
+        cwd: rootPath,
+        stdio: "ignore",
+      });
+      const aiFactoryDir = join(rootPath, ".ai-factory");
+      mkdirSync(aiFactoryDir, { recursive: true });
+      writeFileSync(join(aiFactoryDir, "PLAN.md"), "# Existing Plan\n\n- Step 1\n");
+      writeFileSync(join(rootPath, "README.md"), "# t\n");
+      execFileSync("git", ["add", "-A"], { cwd: rootPath, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+        cwd: rootPath,
+        stdio: "ignore",
+      });
+
+      db.insert(projects)
+        .values({ id: "proj-accept-branch", name: "Accept Branch", rootPath })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "ev-accept-branch-1",
+          projectId: "proj-accept-branch",
+          title: "Auto accept and branch",
+          status: "backlog",
+          autoMode: true,
+        })
+        .run();
+
+      const res = await app.request("/tasks/ev-accept-branch-1/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "accept_existing_plan" }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("plan_ready");
+      expect(body.branchName).toMatch(/^feature\/auto-accept-and-branch-/);
+
+      // HEAD now on the task's feature branch
+      const current = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd: rootPath,
+        encoding: "utf8",
+      }).trim();
+      expect(current).toBe(body.branchName);
+    });
+
     it("should reject accept_existing_plan from non-backlog status", async () => {
       const db = testDb.current;
       db.insert(tasks)

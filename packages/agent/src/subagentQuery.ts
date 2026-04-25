@@ -640,6 +640,13 @@ function buildExecutionIntent(
   const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
   const explicitAbort =
     options.abortController ?? getActiveStageAbortController(options.taskId) ?? undefined;
+  const task = findTaskById(options.taskId);
+  const branchEnvironment: Record<string, string> = task?.branchName
+    ? {
+        HANDOFF_BRANCH_PREPARED: "1",
+        HANDOFF_BRANCH_NAME: task.branchName,
+      }
+    : {};
 
   return {
     maxBudgetUsd: options.maxBudgetUsd ?? null,
@@ -654,6 +661,7 @@ function buildExecutionIntent(
     environment: {
       HANDOFF_MODE: "1",
       HANDOFF_TASK_ID: options.taskId,
+      ...branchEnvironment,
       ...(options.skipReview ? { HANDOFF_SKIP_REVIEW: "1" } : {}),
     },
     abortController: explicitAbort,

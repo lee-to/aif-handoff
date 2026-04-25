@@ -70,7 +70,6 @@ export function useUsageLimitsEnabled(): boolean {
       setValue(cachedUsageLimitsEnabled);
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     const listener = (next: boolean) => setValue(next);
     usageLimitsListeners.add(listener);
     void loadUsageLimitsFlag();

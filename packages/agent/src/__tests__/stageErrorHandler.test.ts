@@ -306,4 +306,60 @@ describe("classifyStageError", () => {
     );
     expect(result.kind).toBe("fast_retry");
   });
+
+  // --- BranchIsolationError → blocked_external with no retry ---
+
+  it("classifies BranchIsolationError(dirty_worktree) as blocked_external with retryAfter=null", async () => {
+    const { BranchIsolationError } = await import("../gitBranch.js");
+    const err = new BranchIsolationError(
+      "dirty_worktree",
+      "Work tree at /tmp/p dirty",
+      "/tmp/p",
+      "feature/x",
+    );
+    const result = classifyStageError(makeInput({ err }));
+    expect(result.kind).toBe("blocked_external");
+    if (result.kind === "blocked_external") {
+      expect(result.retryAfter).toBeNull();
+      expect(result.retryAfterSource).toBe("none");
+      expect(result.blockedReason).toMatch(/Branch isolation failure \(dirty_worktree\)/);
+      expect(result.limitSnapshot).toBeNull();
+    }
+  });
+
+  it("classifies BranchIsolationError(branch_drift) as blocked_external", async () => {
+    const { BranchIsolationError } = await import("../gitBranch.js");
+    const err = new BranchIsolationError("branch_drift", "HEAD drift", "/tmp/p", "feature/y");
+    const result = classifyStageError(makeInput({ err }));
+    expect(result.kind).toBe("blocked_external");
+    if (result.kind === "blocked_external") {
+      expect(result.blockedReason).toContain("branch_drift");
+    }
+  });
+
+  it("classifies BranchIsolationError(branch_missing) as blocked_external", async () => {
+    const { BranchIsolationError } = await import("../gitBranch.js");
+    const err = new BranchIsolationError("branch_missing", "missing", "/tmp/p", "feature/z");
+    const result = classifyStageError(makeInput({ err }));
+    expect(result.kind).toBe("blocked_external");
+  });
+
+  it("does not retry branch isolation errors (retryCount unchanged)", async () => {
+    const { BranchIsolationError } = await import("../gitBranch.js");
+    const err = new BranchIsolationError("checkout_failed", "failed", "/tmp/p", "feature/c");
+    const result = classifyStageError(makeInput({ err, retryCount: 5 }));
+    expect(result.kind).toBe("blocked_external");
+    if (result.kind === "blocked_external") {
+      expect(result.retryCount).toBe(5);
+    }
+  });
+
+  it("BranchIsolationError wrapped in cause chain is still classified", async () => {
+    const { BranchIsolationError } = await import("../gitBranch.js");
+    const inner = new BranchIsolationError("dirty_worktree", "inner", "/tmp/p", "feature/w");
+    const outer = new Error("wrapper");
+    (outer as Error & { cause?: unknown }).cause = inner;
+    const result = classifyStageError(makeInput({ err: outer }));
+    expect(result.kind).toBe("blocked_external");
+  });
 });

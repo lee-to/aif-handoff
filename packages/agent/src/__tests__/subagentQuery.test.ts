@@ -17,6 +17,7 @@ interface MockTaskRow {
   projectId: string;
   runtimeOptionsJson: string | null;
   modelOverride: string | null;
+  branchName?: string | null;
 }
 
 interface MockEffectiveRuntimeProfile {
@@ -245,6 +246,43 @@ describe("executeSubagentQuery attribution", () => {
     const callOptions = queryMock.mock.calls[0][0].options;
     expect(callOptions.settings).toEqual(
       expect.objectContaining({ attribution: { commit: "", pr: "" } }),
+    );
+  });
+
+  it("passes Handoff branch contract in runtime environment", async () => {
+    findTaskByIdMock.mockReturnValue({
+      id: "task-branch",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+      branchName: "feature/task-branch",
+    });
+    queryMock.mockImplementation(async function* () {
+      yield {
+        type: "result",
+        subtype: "success",
+        result: "done",
+        usage: {},
+        total_cost_usd: 0,
+      };
+    });
+
+    await executeSubagentQuery({
+      taskId: "task-branch",
+      projectRoot: "/tmp/project",
+      agentName: "plan-coordinator",
+      prompt: "run",
+      workflowKind: "planner",
+    });
+
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.env).toEqual(
+      expect.objectContaining({
+        HANDOFF_MODE: "1",
+        HANDOFF_TASK_ID: "task-branch",
+        HANDOFF_BRANCH_PREPARED: "1",
+        HANDOFF_BRANCH_NAME: "feature/task-branch",
+      }),
     );
   });
 });

@@ -2,8 +2,12 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   applyHumanTaskEvent,
+  assertCurrentBranch,
+  ensureFeatureBranch,
+  isBranchIsolationError,
   looksLikeFullPlanUpdate,
   getProjectConfig,
+  restorePersistedBranch,
   type TaskEvent,
 } from "@aif/shared";
 import {
@@ -25,6 +29,49 @@ interface EventHandlerInput {
 export type EventHandlerResult =
   | { ok: false; status: number; error: string }
   | { ok: true; task: TaskRow; broadcastType: "task:moved" | "task:updated" };
+
+function restoreTaskBranchForMutation(
+  task: TaskRow,
+  projectRoot: string,
+): EventHandlerResult | null {
+  if (!task.branchName || task.isFix) return null;
+  try {
+    // task.branchName is a source-of-truth contract: every mutation path
+    // (fast-fix, regular transition, accept_existing_plan) must land on the
+    // persisted branch or fail loud. Use `restorePersistedBranch` instead of
+    // `ensureFeatureBranch({switchOnly:true})` so config drift
+    // (`git.enabled` / `create_branches` toggled off after planner) cannot
+    // release us to current HEAD.
+    restorePersistedBranch({
+      projectRoot,
+      taskId: task.id,
+      persistedBranchName: task.branchName,
+    });
+    return null;
+  } catch (err) {
+    const error = isBranchIsolationError(err)
+      ? `Branch isolation failure (${err.kind}): ${err.message}`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    return { ok: false, status: 409, error };
+  }
+}
+
+function assertTaskBranchPostRun(task: TaskRow, projectRoot: string): EventHandlerResult | null {
+  if (!task.branchName || task.isFix) return null;
+  try {
+    assertCurrentBranch(projectRoot, task.branchName);
+    return null;
+  } catch (err) {
+    const error = isBranchIsolationError(err)
+      ? `Branch isolation failure (${err.kind}): ${err.message}`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    return { ok: false, status: 409, error };
+  }
+}
 
 async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResult> {
   const task = findTaskById(input.taskId);
@@ -51,6 +98,9 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
   if (!project) {
     return { ok: false, status: 404, error: "Project not found for task" };
   }
+
+  const branchError = restoreTaskBranchForMutation(task, project.rootPath);
+  if (branchError) return branchError;
 
   const previousPlan = task.plan?.trim() ?? "";
   if (!previousPlan) {
@@ -105,6 +155,12 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
     };
   }
 
+  // Post-run drift check: `runFastFixQuery` runs a runtime that may write to
+  // disk (`@${planPath}` injection asks for file overwrite). A rogue skill
+  // could `git checkout` mid-flow and persist plan/state on the wrong branch.
+  const driftError = assertTaskBranchPostRun(task, project.rootPath);
+  if (driftError) return driftError;
+
   const nowIso = new Date().toISOString();
   persistTaskPlanForTask({
     taskId: task.id,
@@ -145,6 +201,9 @@ function handleRegularTransition(input: EventHandlerInput): EventHandlerResult {
       return { ok: false, status: 404, error: "Project not found for task" };
     }
 
+    const branchError = restoreTaskBranchForMutation(task, project.rootPath);
+    if (branchError) return branchError;
+
     // For fix tasks, always remove canonical FIX_PLAN.md.
     // For regular tasks, use configured planPath (defaults from config.yaml).
     const cfg = getProjectConfig(project.rootPath);
@@ -182,6 +241,40 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
     return { ok: false, status: 404, error: "Project not found for task" };
   }
 
+  // Branch handling MUST happen before resolving/reading the plan file:
+  // task.branchName is a source-of-truth contract, and an already-bound
+  // task whose HEAD has drifted to a different branch would otherwise read
+  // the plan file from the wrong work-tree state and persist that content
+  // onto the bound branch. Two paths:
+  //   - Already-bound (task.branchName set): restorePersistedBranch — config
+  //     drift / missing branch / dirty tree fail loud, fail-closed.
+  //   - Unbound (no task.branchName): ensureFeatureBranch creates the
+  //     feature branch from base, then we read the plan from that branch.
+  // Fix tasks keep the legacy no-branch behavior.
+  let boundBranchName: string | null = task.branchName ?? null;
+  if (!task.isFix && boundBranchName) {
+    const branchError = restoreTaskBranchForMutation(task, project.rootPath);
+    if (branchError) return branchError;
+  } else if (!task.isFix && !boundBranchName) {
+    try {
+      const branchResult = ensureFeatureBranch({
+        projectRoot: project.rootPath,
+        taskId: task.id,
+        title: task.title,
+      });
+      if (branchResult.action !== "skipped" && branchResult.branchName) {
+        boundBranchName = branchResult.branchName;
+      }
+    } catch (err) {
+      const error = isBranchIsolationError(err)
+        ? `Branch isolation failure (${err.kind}): ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      return { ok: false, status: 409, error };
+    }
+  }
+
   const cfg = getProjectConfig(project.rootPath);
   const planFilePath = task.isFix
     ? resolve(project.rootPath, cfg.paths.fix_plan)
@@ -216,6 +309,7 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
     reviewIterationCount: 0,
     manualReviewRequired: false,
     autoReviewState: null,
+    branchName: boundBranchName,
     lastHeartbeatAt: nowIso,
     updatedAt: nowIso,
   });

@@ -1,5 +1,11 @@
-import { getProjectConfig, logger } from "@aif/shared";
-import { findProjectById } from "@aif/data";
+import {
+  assertCurrentBranch,
+  getProjectConfig,
+  isBranchIsolationError,
+  logger,
+  restorePersistedBranch,
+} from "@aif/shared";
+import { findProjectById, findTaskById } from "@aif/data";
 import { UsageSource } from "@aif/runtime";
 import { runApiRuntimeOneShot } from "./runtime.js";
 
@@ -67,6 +73,36 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
     return { ok: false, error: msg };
   }
 
+  const task = taskId ? findTaskById(taskId) : null;
+  if (task?.branchName && !task.isFix) {
+    // task.branchName is a source-of-truth contract: commit MUST land on the
+    // persisted branch or fail loud. `ensureFeatureBranch({switchOnly:true})`
+    // can return `skipped` for `git.enabled=false` / non-git projectRoot —
+    // letting the commit run on whatever HEAD happens to be. The post-run
+    // assertion would catch the drift, but the commit may already have
+    // landed by then. Use `restorePersistedBranch` instead, which throws
+    // `git_disabled_with_persisted_branch` / `not_a_repo_with_persisted_branch`
+    // before any runtime call.
+    try {
+      restorePersistedBranch({
+        projectRoot: project.rootPath,
+        taskId: task.id,
+        persistedBranchName: task.branchName,
+      });
+    } catch (err) {
+      const message = isBranchIsolationError(err)
+        ? `Branch isolation failure (${err.kind}): ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      log.error(
+        { err, projectId, taskId, branchName: task.branchName },
+        "Commit runtime aborted before start due to branch isolation failure",
+      );
+      return { ok: false, error: message };
+    }
+  }
+
   const { git } = getProjectConfig(project.rootPath);
   const shouldPush = git.enabled && !git.skip_push_after_commit;
   const prompt = buildCommitPrompt(shouldPush);
@@ -94,6 +130,28 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
       systemPromptAppend: PROJECT_SCOPE_APPEND,
       usageContext: { source: UsageSource.COMMIT },
     });
+
+    // Post-run drift check: the commit subagent runs git directly, so a
+    // mid-run `git checkout` (rogue skill, bad fallback) would land the
+    // commit on the wrong branch. Surface the drift instead of silently
+    // returning ok.
+    if (task?.branchName && !task.isFix) {
+      try {
+        assertCurrentBranch(project.rootPath, task.branchName);
+      } catch (err) {
+        const message = isBranchIsolationError(err)
+          ? `Branch isolation failure (${err.kind}): ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+        log.error(
+          { err, projectId, taskId, branchName: task.branchName },
+          "Commit runtime aborted after run due to branch drift",
+        );
+        return { ok: false, error: message };
+      }
+    }
+
     log.info(
       {
         projectId,

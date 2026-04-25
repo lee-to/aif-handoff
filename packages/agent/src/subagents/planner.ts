@@ -1,9 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { findProjectById, findTaskById, listTaskComments, persistTaskPlanForTask } from "@aif/data";
+import {
+  findProjectById,
+  findTaskById,
+  listTaskComments,
+  persistTaskPlanForTask,
+  setTaskFields,
+} from "@aif/data";
 import { createRuntimeWorkflowSpec } from "@aif/runtime";
 import { logger, formatAttachmentsForPrompt, getProjectConfig } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
+import { assertCurrentBranch, ensureFeatureBranch, restorePersistedBranch } from "../gitBranch.js";
+import { logActivity } from "../hooks.js";
 
 const log = logger("planner");
 const AGENT_NAME = "plan-coordinator";
@@ -136,6 +144,55 @@ export async function runPlanner(taskId: string, projectRoot: string): Promise<v
   const planPath = normalizePlanPath(task.planPath, projectRoot);
   const planDocs = task.planDocs ? "true" : "false";
   const planTests = task.planTests ? "true" : "false";
+
+  // Deterministic branch handling. Two contracts, applied in order:
+  //
+  //  1. RESTORE for ANY bound non-fix task — runs regardless of plannerMode
+  //     (full or fast). `task.branchName` is the source-of-truth: once a
+  //     prior run persisted it, every subsequent stage MUST land on it or
+  //     fail loud. A replan triggered with mode=fast (manual replanning,
+  //     comment-driven re-run) used to skip the restore entirely and let
+  //     the planner write to whatever HEAD happened to be.
+  //
+  //  2. CREATE only in full mode for unbound non-fix tasks. Fast mode stays
+  //     on the current branch by design (see aif-handoff#83) — first-time
+  //     branch provisioning is a full-mode-only concern.
+  //
+  // Failures throw BranchIsolationError (dirty worktree, missing base branch,
+  // checkout failure, branch_missing, etc). The coordinator classifies it as
+  // blocked_external with retryAfter=null so an operator can inspect the work
+  // tree instead of the stage silently reverting into a bad state.
+  let preparedBranch: string | null = task.branchName ?? null;
+  if (!task.isFix && task.branchName) {
+    restorePersistedBranch({
+      projectRoot,
+      taskId,
+      persistedBranchName: task.branchName,
+    });
+    preparedBranch = task.branchName;
+    logActivity(taskId, "Agent", `Restored feature branch: ${task.branchName}`);
+  } else if (!task.isFix && plannerMode === "full") {
+    const branchResult = ensureFeatureBranch({
+      projectRoot,
+      taskId,
+      title: task.title,
+    });
+    if (branchResult.action !== "skipped" && branchResult.branchName) {
+      preparedBranch = branchResult.branchName;
+      setTaskFields(taskId, {
+        branchName: branchResult.branchName,
+        updatedAt: new Date().toISOString(),
+      });
+      logActivity(
+        taskId,
+        "Agent",
+        `Feature branch ${branchResult.action}: ${branchResult.branchName}`,
+      );
+    } else if (branchResult.reason) {
+      log.debug({ taskId, reason: branchResult.reason }, "Branch creation skipped");
+    }
+  }
+
   const taskContext = `Title: ${task.title}
 Description: ${task.description}
 Task attachments:
@@ -144,7 +201,15 @@ User comments and replanning feedback:
 ${commentsForPrompt}`;
   let prompt: string;
   let workflowSpec: ReturnType<typeof createRuntimeWorkflowSpec>;
-  const handoffContext = `HANDOFF_MODE: 1\nHANDOFF_TASK_ID: ${taskId}`;
+  // HANDOFF_BRANCH_PREPARED=1 tells the aif-plan / plan-polisher skill that
+  // Handoff already owns branch creation for this run. The skill MUST NOT
+  // execute its own `git checkout -b`; it should validate that the current
+  // branch matches HANDOFF_BRANCH_NAME and report a blocker if not. See
+  // ai-factory#96.
+  const handoffBranchLines = preparedBranch
+    ? `\nHANDOFF_BRANCH_PREPARED: 1\nHANDOFF_BRANCH_NAME: ${preparedBranch}`
+    : "";
+  const handoffContext = `HANDOFF_MODE: 1\nHANDOFF_TASK_ID: ${taskId}${handoffBranchLines}`;
   const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}\nAll files must be created and modified inside this directory. Do NOT navigate to parent directories or other projects.`;
   const plannerSlashCommand = `/aif-plan ${plannerMode} @${planPath} docs:${planDocs} tests:${planTests}`;
 
@@ -215,6 +280,15 @@ ${taskContext}`;
     workflowKind: "planner",
     fallbackSlashCommand: task.isFix ? undefined : plannerSlashCommand,
   });
+
+  // Detect skill-level branch drift: if the planner subagent (or its
+  // nested plan-polisher) silently created or switched to a different
+  // branch than the one we prepared, the plan we're about to persist
+  // belongs to the wrong HEAD. Surface as BranchIsolationError so the
+  // coordinator blocks the task instead of committing the drift.
+  if (preparedBranch) {
+    assertCurrentBranch(projectRoot, preparedBranch);
+  }
 
   const diskPlan = readPlanFromDisk(projectRoot, rawResult, !!task.isFix, planPath);
   const resultText = diskPlan ?? normalizePlannerResult(rawResult);

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projects, taskComments, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { eq } from "drizzle-orm";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -214,6 +215,264 @@ describe("runPlanner comment selection", () => {
 
     const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-fallback")).get();
     expect(updatedTask?.plan).toBe("## Fallback Plan\n- [ ] Step from fallback");
+  });
+
+  it("creates a feature branch when plannerMode=full and git.create_branches=true", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-git-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+
+    db.insert(projects)
+      .values({
+        id: "project-git",
+        name: "Git Project",
+        rootPath: projectRoot,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-git-1",
+        projectId: "project-git",
+        title: "Add user authentication",
+        description: "Implement JWT login",
+        status: "planning",
+        plannerMode: "full",
+        useSubagents: true,
+      })
+      .run();
+
+    await runPlanner("task-git-1", projectRoot);
+
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(branch).toMatch(/^feature\/add-user-authentication-/);
+
+    const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-git-1")).get();
+    expect(updatedTask?.branchName).toBe(branch);
+  });
+
+  it("restores persisted branch in fast plannerMode for already-bound task (mode-drift safe)", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-mode-drift-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    // Bind a feature branch then drift HEAD back to main.
+    execFileSync("git", ["checkout", "-b", "feature/bound-fast"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+
+    db.insert(projects)
+      .values({ id: "project-mode-drift", name: "Mode drift", rootPath: projectRoot })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-mode-drift-1",
+        projectId: "project-mode-drift",
+        title: "Mode drift",
+        description: "",
+        status: "planning",
+        // FAST mode + persisted branchName = the dangerous case the previous
+        // gating broke: restore must still happen, otherwise the planner
+        // writes plan/log on whatever HEAD happens to be.
+        plannerMode: "fast",
+        useSubagents: false,
+        branchName: "feature/bound-fast",
+      })
+      .run();
+
+    queryMock.mockReset();
+    queryMock.mockReturnValue(streamSuccess("## Plan\n- [ ] x"));
+
+    await runPlanner("task-mode-drift-1", projectRoot);
+
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(branch).toBe("feature/bound-fast");
+  });
+
+  it("throws BranchIsolationError when subagent silently switched branches (drift)", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-drift-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    // Pre-create the branch so drift test has something to drift AWAY from
+    execFileSync("git", ["checkout", "-b", "feature/some-drift"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+
+    db.insert(projects).values({ id: "project-drift", name: "Drift", rootPath: projectRoot }).run();
+    db.insert(tasks)
+      .values({
+        id: "task-drift-1",
+        projectId: "project-drift",
+        title: "Drift test",
+        description: "",
+        status: "planning",
+        plannerMode: "full",
+        useSubagents: true,
+        branchName: "feature/some-drift",
+      })
+      .run();
+
+    // Simulate subagent switching HEAD away while "running"
+    queryMock.mockReset();
+    queryMock.mockImplementation(() => {
+      execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+      return streamSuccess("## Plan\n- [ ] x");
+    });
+
+    const { isBranchIsolationError } = await import("../gitBranch.js");
+    try {
+      await runPlanner("task-drift-1", projectRoot);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(isBranchIsolationError(err)).toBe(true);
+      if (isBranchIsolationError(err)) {
+        expect(err.kind).toBe("branch_drift");
+      }
+    }
+  });
+
+  it("injects HANDOFF_BRANCH_PREPARED + HANDOFF_BRANCH_NAME into prompt", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-env-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+
+    db.insert(projects).values({ id: "project-env", name: "Env", rootPath: projectRoot }).run();
+    db.insert(tasks)
+      .values({
+        id: "task-env-1",
+        projectId: "project-env",
+        title: "Env contract",
+        description: "",
+        status: "planning",
+        plannerMode: "full",
+        useSubagents: true,
+      })
+      .run();
+
+    await runPlanner("task-env-1", projectRoot);
+
+    const call = queryMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(call.prompt).toContain("HANDOFF_BRANCH_PREPARED: 1");
+    expect(call.prompt).toMatch(/HANDOFF_BRANCH_NAME: feature\/env-contract-/);
+  });
+
+  it("skips branch creation when plannerMode=fast", async () => {
+    const db = testDb.current;
+    const projectRoot = mkdtempSync(join(tmpdir(), "planner-fast-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+
+    db.insert(projects)
+      .values({
+        id: "project-fast",
+        name: "Fast Project",
+        rootPath: projectRoot,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "task-fast-1",
+        projectId: "project-fast",
+        title: "Quick fix",
+        description: "",
+        status: "planning",
+        plannerMode: "fast",
+        useSubagents: true,
+      })
+      .run();
+
+    await runPlanner("task-fast-1", projectRoot);
+
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(branch).toBe("main");
+
+    const updatedTask = db.select().from(tasks).where(eq(tasks.id, "task-fast-1")).get();
+    expect(updatedTask?.branchName).toBeNull();
   });
 
   it("uses /aif-plan command format only in skill mode", async () => {

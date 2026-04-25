@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projects, taskComments, tasks } from "@aif/shared";
@@ -399,5 +400,194 @@ describe("runImplementer rework behavior", () => {
 
     // Stored session must NOT be resumed for rework, even in skill mode
     expect(call.options.resume).toBeUndefined();
+  });
+});
+
+describe("runImplementer feature branch routing", () => {
+  let projectRoot: string;
+
+  beforeEach(() => {
+    (globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
+      queryMock;
+    testDb.current = createTestDb();
+    queryMock.mockReset();
+    queryMock.mockReturnValue(streamSuccess("Implementation done"));
+    projectRoot = mkdtempSync(join(tmpdir(), "aif-implementer-branch-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    writeFileSync(join(projectRoot, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: projectRoot, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    // Pre-create the task's feature branch so implementer can switch to it
+    execFileSync("git", ["checkout", "-b", "feature/my-task"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+
+    testDb.current
+      .insert(projects)
+      .values({ id: "project-b", name: "Branch", rootPath: projectRoot })
+      .run();
+  });
+
+  it("switches HEAD to task.branchName before running implementer", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-b-1",
+        projectId: "project-b",
+        title: "Has branch",
+        description: "",
+        status: "implementing",
+        plan: "## Plan\n- [ ] Do work",
+        branchName: "feature/my-task",
+      })
+      .run();
+
+    // HEAD is on main before run
+    const before = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(before).toBe("main");
+
+    await runImplementer("task-b-1", projectRoot);
+
+    const after = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(after).toBe("feature/my-task");
+  });
+
+  it("does not touch HEAD when task has no branchName", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-b-2",
+        projectId: "project-b",
+        title: "No branch",
+        description: "",
+        status: "implementing",
+        plan: "## Plan\n- [ ] Do work",
+      })
+      .run();
+
+    await runImplementer("task-b-2", projectRoot);
+
+    const after = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(after).toBe("main");
+  });
+
+  it("restores branch BEFORE no-op early return (so plan is read from the right branch)", async () => {
+    const db = testDb.current;
+    // Plan text on feature branch shows pending work; plan text on main
+    // (current HEAD before implementer runs) would be "all done" — if we
+    // evaluated pending-task count on main, we'd wrongly early-return.
+    db.insert(tasks)
+      .values({
+        id: "task-b-3",
+        projectId: "project-b",
+        title: "Must switch first",
+        description: "",
+        status: "implementing",
+        plan: "## Plan\n- [ ] still pending\n- [x] already done",
+        branchName: "feature/my-task",
+      })
+      .run();
+
+    // HEAD on main — restore must happen before any config/plan read.
+    const before = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(before).toBe("main");
+
+    await runImplementer("task-b-3", projectRoot);
+
+    const after = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+    }).trim();
+    expect(after).toBe("feature/my-task");
+    // Subagent WAS invoked (pending task remains) — if branch restore ran
+    // after the no-op check on a stale plan, the test would see 0 calls.
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws BranchIsolationError when task.branchName is missing from git", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-b-missing",
+        projectId: "project-b",
+        title: "Branch gone",
+        description: "",
+        status: "implementing",
+        plan: "## Plan\n- [ ] work",
+        branchName: "feature/never-existed",
+      })
+      .run();
+
+    const { isBranchIsolationError } = await import("../gitBranch.js");
+    try {
+      await runImplementer("task-b-missing", projectRoot);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(isBranchIsolationError(err)).toBe(true);
+      if (isBranchIsolationError(err)) {
+        expect(err.kind).toBe("branch_missing");
+      }
+    }
+    // Subagent was NOT invoked — stage aborted before prompt build
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("throws branch_drift when subagent switches HEAD mid-run", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-b-drift",
+        projectId: "project-b",
+        title: "Drift implementer",
+        description: "",
+        status: "implementing",
+        plan: "## Plan\n- [ ] work",
+        branchName: "feature/my-task",
+      })
+      .run();
+
+    // Simulate subagent switching HEAD off the task branch during its run
+    queryMock.mockReset();
+    queryMock.mockImplementation(() => {
+      execFileSync("git", ["checkout", "main"], { cwd: projectRoot, stdio: "ignore" });
+      return streamSuccess("Implementation done");
+    });
+
+    const { isBranchIsolationError } = await import("../gitBranch.js");
+    try {
+      await runImplementer("task-b-drift", projectRoot);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(isBranchIsolationError(err)).toBe(true);
+      if (isBranchIsolationError(err)) {
+        expect(err.kind).toBe("branch_drift");
+      }
+    }
   });
 });

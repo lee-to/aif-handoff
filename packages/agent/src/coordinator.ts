@@ -14,6 +14,7 @@ import {
   listAutoQueueProjects,
   nextBacklogTaskByPosition,
   countActivePipelineTasksForProject,
+  hasActiveBranchBoundTasksForProject,
   claimBacklogTaskForAdvance,
   persistTaskRuntimeLimitSnapshot,
   resolveEffectiveRuntimeProfile,
@@ -27,6 +28,11 @@ import { runPlanner } from "./subagents/planner.js";
 import { runPlanChecker } from "./subagents/planChecker.js";
 import { runImplementer } from "./subagents/implementer.js";
 import { runReviewer } from "./subagents/reviewer.js";
+import {
+  describeDirtyWorkingTree,
+  isGitRepo,
+  projectUsesSharedBranchIsolation,
+} from "./gitBranch.js";
 import { flushActivityQueue } from "./hooks.js";
 import {
   notifyTaskBroadcast,
@@ -624,7 +630,28 @@ export function processAutoQueueAdvance(): number {
 
   let advanced = 0;
   for (const project of projects) {
-    const limit = project.parallelEnabled ? env.COORDINATOR_MAX_CONCURRENT_TASKS : 1;
+    // Serialization predicate combines:
+    //   - current config (`git.create_branches=true` on a real git repo), AND
+    //   - task state (any in-flight task already has a persisted branchName).
+    //
+    // Config alone is not enough: an operator can toggle `create_branches=off`
+    // mid-pipeline. `restorePersistedBranch` keeps switching HEAD for already
+    // bound tasks, so concurrent parallel stages would still race on the
+    // shared work tree. Until #86 introduces per-task worktrees, fall back to
+    // serial whenever EITHER signal says the project is shared-branch.
+    const usesSharedBranchIsolation =
+      projectUsesSharedBranchIsolation(project.rootPath) ||
+      hasActiveBranchBoundTasksForProject(project.id);
+    if (project.parallelEnabled && usesSharedBranchIsolation) {
+      log.warn(
+        { projectId: project.id, projectRoot: project.rootPath },
+        "Auto-queue parallel pool disabled for git.create_branches project (or active branch-bound tasks) until per-task worktrees are available",
+      );
+    }
+    const limit =
+      project.parallelEnabled && !usesSharedBranchIsolation
+        ? env.COORDINATOR_MAX_CONCURRENT_TASKS
+        : 1;
     let active = countActivePipelineTasksForProject(project.id);
 
     if (active >= limit) {
@@ -633,6 +660,23 @@ export function processAutoQueueAdvance(): number {
         "Auto-queue: project pipeline at capacity, skipping",
       );
       continue;
+    }
+
+    // Dirty-worktree gate. Terminal statuses (done/verified) don't
+    // guarantee the previous task's diff was committed — manual-review
+    // pauses the pipeline with a clean-status but dirty repo. Advancing
+    // the next task now would let its planner create a feature branch
+    // on top of stale changes (or fail checkout outright). Pause
+    // auto-queue advance for this project until the work tree is clean.
+    if (isGitRepo(project.rootPath)) {
+      const dirty = describeDirtyWorkingTree(project.rootPath);
+      if (dirty) {
+        log.warn(
+          { projectId: project.id, projectRoot: project.rootPath, dirtyPreview: dirty },
+          "Auto-queue paused: work tree has uncommitted changes from previous task",
+        );
+        continue;
+      }
     }
 
     // Fill the pool up to the limit in this single tick. Loop bound keeps it
@@ -723,14 +767,31 @@ export async function pollAndProcess(): Promise<void> {
   // Track tasks that failed in this cycle — prevent re-picking in downstream stages
   const failedInCycle = new Set<string>();
 
-  // Cache project parallel settings to avoid repeated lookups
-  const projectParallelCache = new Map<string, boolean>();
-  function isProjectParallel(projectId: string): boolean {
-    let cached = projectParallelCache.get(projectId);
+  // Cache effective project concurrency settings to avoid repeated lookups.
+  // Branch-per-task isolation still mutates one shared projectRoot, so it must
+  // be serial until #86 introduces task-specific worktrees.
+  const projectConcurrencyCache = new Map<string, { parallel: boolean; max: number }>();
+  function resolveProjectConcurrency(projectId: string): { parallel: boolean; max: number } {
+    let cached = projectConcurrencyCache.get(projectId);
     if (cached === undefined) {
       const project = findProjectById(projectId);
-      cached = project?.parallelEnabled ?? false;
-      projectParallelCache.set(projectId, cached);
+      const configuredParallel = project?.parallelEnabled ?? false;
+      // Mirror processAutoQueueAdvance: config OR task-state forces serial.
+      const usesSharedBranchIsolation = project
+        ? projectUsesSharedBranchIsolation(project.rootPath) ||
+          hasActiveBranchBoundTasksForProject(projectId)
+        : false;
+      cached = {
+        parallel: configuredParallel && !usesSharedBranchIsolation,
+        max: configuredParallel && !usesSharedBranchIsolation ? globalMax : 1,
+      };
+      if (configuredParallel && usesSharedBranchIsolation) {
+        log.warn(
+          { projectId, projectRoot: project?.rootPath },
+          "Project parallel execution forced to serial because git.create_branches uses a shared worktree (or active branch-bound tasks remain)",
+        );
+      }
+      projectConcurrencyCache.set(projectId, cached);
     }
     return cached;
   }
@@ -782,8 +843,9 @@ export async function pollAndProcess(): Promise<void> {
 
     for (const task of candidates) {
       // Per-project concurrency: non-parallel projects limited to 1 task at a time
-      const parallel = isProjectParallel(task.projectId);
-      const projectMax = parallel ? globalMax : 1;
+      const concurrency = resolveProjectConcurrency(task.projectId);
+      const parallel = concurrency.parallel;
+      const projectMax = concurrency.max;
       const projectCount = projectSpawnCount.get(task.projectId) ?? 0;
       if (projectCount >= projectMax) {
         log.debug(

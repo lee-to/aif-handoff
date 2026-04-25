@@ -14,6 +14,7 @@ import {
 } from "@aif/shared";
 import { logActivity } from "./hooks.js";
 import {
+  findBranchIsolationError,
   findRuntimeExecutionError,
   isExternalFailure,
   isFastRetryableFailure,
@@ -128,6 +129,39 @@ function resolveRetryAfter(err: unknown): {
  */
 export function classifyStageError(input: StageErrorInput): ErrorRecovery {
   const { taskId, stageLabel, sourceStatus, err } = input;
+
+  // Branch / worktree isolation failures must NEVER fall into the generic
+  // revert path — generic revert triggers unbounded re-planning on a
+  // corrupted work tree. Pin the task to blocked_external with no retry so
+  // an operator inspects dirty changes, missing branches, or drift.
+  const branchErr = findBranchIsolationError(err);
+  if (branchErr) {
+    const blockedReason = `Branch isolation failure (${branchErr.kind}): ${branchErr.message}`;
+    logActivity(
+      taskId,
+      "Agent",
+      `coordinator moved to blocked_external from ${sourceStatus} at ${stageLabel}; retryAfter=manual; source=none; reason=${truncateReason(blockedReason)}`,
+    );
+    log.error(
+      {
+        taskId,
+        stage: stageLabel,
+        branchKind: branchErr.kind,
+        branchName: branchErr.branchName,
+        projectRoot: branchErr.projectRoot,
+      },
+      "Subagent stage aborted due to branch isolation failure",
+    );
+    return {
+      kind: "blocked_external",
+      blockedReason,
+      retryAfter: null,
+      retryAfterSource: "none",
+      retryCount: input.retryCount ?? 0,
+      limitSnapshot: null,
+    };
+  }
+
   const runtimeError = findRuntimeExecutionError(err);
   if (runtimeError && NON_RETRYABLE_RUNTIME_CATEGORIES.has(runtimeError.category)) {
     const safeReason = mapSafeRuntimeErrorReason(runtimeError);

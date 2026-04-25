@@ -7,6 +7,15 @@
  */
 
 import { RuntimeExecutionError, isExternalFailureCategory } from "@aif/runtime";
+import { BranchIsolationError } from "./gitBranch.js";
+
+export function findBranchIsolationError(err: unknown): BranchIsolationError | null {
+  if (err instanceof BranchIsolationError) return err;
+  if (err instanceof Error && "cause" in err && err.cause) {
+    return findBranchIsolationError(err.cause);
+  }
+  return null;
+}
 
 /** Capability errors surface as RuntimeCapabilityError with these message fragments. */
 const CAPABILITY_FAILURE_PATTERNS = [

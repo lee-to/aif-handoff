@@ -27,6 +27,7 @@ const baseTask: Task = {
   lastSyncedAt: null,
   sessionId: null,
   scheduledAt: null,
+  branchName: null,
   roadmapAlias: "RM-1",
   tags: ["backend", "rm:ignore"],
   status: "plan_ready",

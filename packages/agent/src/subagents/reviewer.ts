@@ -1,6 +1,7 @@
 import { findProjectById, findTaskById, setTaskFields } from "@aif/data";
 import { createRuntimeWorkflowSpec, type RuntimeWorkflowSpec } from "@aif/runtime";
 import { getEnv, logger, formatAttachmentsForPrompt } from "@aif/shared";
+import { assertCurrentBranch, restorePersistedBranch } from "../gitBranch.js";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery, startHeartbeat } from "../subagentQuery.js";
 import {
@@ -43,6 +44,17 @@ export async function runReviewer(taskId: string, projectRoot: string): Promise<
   if (!task) {
     log.error({ taskId }, "Task not found for review");
     throw new Error(`Task ${taskId} not found`);
+  }
+
+  // Reviewer must diff against the task's feature branch — not whatever HEAD
+  // happens to be. Same mandatory-restore contract as implementer/plan-checker.
+  if (task.branchName && !task.isFix) {
+    restorePersistedBranch({
+      projectRoot,
+      taskId,
+      persistedBranchName: task.branchName,
+    });
+    logActivity(taskId, "Agent", `Restored feature branch: ${task.branchName}`);
   }
 
   const project = findProjectById(task.projectId);
@@ -218,6 +230,11 @@ ${reviewOutputContract}`;
       } catch {
         /* safety guard */
       }
+    }
+
+    // Post-run drift check: review sidecars must not have switched HEAD.
+    if (task.branchName && !task.isFix) {
+      assertCurrentBranch(projectRoot, task.branchName);
     }
 
     log.info({ taskId }, "Review and security sidecars completed");

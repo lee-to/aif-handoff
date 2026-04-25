@@ -57,6 +57,7 @@ const {
   nextBacklogTaskByPosition,
   listAutoQueueProjects,
   countActivePipelineTasksForProject,
+  hasActiveBranchBoundTasksForProject,
   claimBacklogTaskForAdvance,
 } = await import("../index.js");
 
@@ -1130,6 +1131,34 @@ describe("data layer", () => {
       const a = createTask({ projectId: "proj-1", title: "A", description: "" });
       updateTaskStatus(a!.id, "blocked_external");
       expect(countActivePipelineTasksForProject("proj-1")).toBe(1);
+    });
+
+    it("hasActiveBranchBoundTasksForProject returns false when no task has a branchName", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      updateTaskStatus(a!.id, "implementing");
+      expect(hasActiveBranchBoundTasksForProject("proj-1")).toBe(false);
+    });
+
+    it("hasActiveBranchBoundTasksForProject true once a branch-bound task is in flight", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      setTaskFields(a!.id, { branchName: "feature/a" });
+      updateTaskStatus(a!.id, "implementing");
+      expect(hasActiveBranchBoundTasksForProject("proj-1")).toBe(true);
+    });
+
+    it("hasActiveBranchBoundTasksForProject true for a queued backlog task that already has branchName", () => {
+      // accept_existing_plan / replan can leave a branch-bound task in
+      // backlog briefly; serialization must already kick in.
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      setTaskFields(a!.id, { branchName: "feature/a-prepared" });
+      expect(hasActiveBranchBoundTasksForProject("proj-1")).toBe(true);
+    });
+
+    it("hasActiveBranchBoundTasksForProject false when bound tasks are terminal (done)", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      setTaskFields(a!.id, { branchName: "feature/a" });
+      updateTaskStatus(a!.id, "done");
+      expect(hasActiveBranchBoundTasksForProject("proj-1")).toBe(false);
     });
 
     it("nextBacklogTaskByPosition skips paused tasks", () => {

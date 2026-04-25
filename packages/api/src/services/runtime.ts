@@ -544,6 +544,13 @@ export async function runApiRuntimeOneShot(input: {
   });
 
   const bypassPermissions = env.AGENT_BYPASS_PERMISSIONS;
+  const task = input.taskId ? findTaskById(input.taskId) : null;
+  const branchEnvironment: Record<string, string> = task?.branchName
+    ? {
+        HANDOFF_BRANCH_PREPARED: "1",
+        HANDOFF_BRANCH_NAME: task.branchName,
+      }
+    : {};
   let latestLimitSnapshot: RuntimeLimitSnapshot | null = null;
   const onRuntimeEvent = (event: RuntimeEvent) => {
     latestLimitSnapshot = observeRuntimeLimitEvent(event, latestLimitSnapshot, {
@@ -599,7 +606,7 @@ export async function runApiRuntimeOneShot(input: {
         systemPromptAppend: input.systemPromptAppend,
         bypassPermissions,
         environment: input.taskId
-          ? { HANDOFF_MODE: "1", HANDOFF_TASK_ID: input.taskId }
+          ? { HANDOFF_MODE: "1", HANDOFF_TASK_ID: input.taskId, ...branchEnvironment }
           : { HANDOFF_MODE: "1" },
         hooks: {
           permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",

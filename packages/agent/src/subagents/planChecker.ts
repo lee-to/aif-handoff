@@ -1,6 +1,8 @@
 import { findProjectById, findTaskById, persistTaskPlanForTask } from "@aif/data";
 import { logger, looksLikeFullPlanUpdate } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
+import { assertCurrentBranch, restorePersistedBranch } from "../gitBranch.js";
+import { logActivity } from "../hooks.js";
 
 const log = logger("plan-checker");
 const AGENT_NAME = "plan-checker";
@@ -47,6 +49,17 @@ export async function runPlanChecker(taskId: string, projectRoot: string): Promi
   if (!task) {
     log.error({ taskId }, "Task not found for plan checklist verification");
     throw new Error(`Task ${taskId} not found`);
+  }
+
+  // Same branch-restore contract as implementer/reviewer: must run before any
+  // repo read or plan persist. BranchIsolationError → blocked_external.
+  if (task.branchName && !task.isFix) {
+    restorePersistedBranch({
+      projectRoot,
+      taskId,
+      persistedBranchName: task.branchName,
+    });
+    logActivity(taskId, "Agent", `Restored feature branch: ${task.branchName}`);
   }
 
   if (!task.plan || task.plan.trim().length === 0) {
@@ -109,6 +122,11 @@ Requirements:
     profileMode: "plan",
     maxBudgetUsd: planCheckerBudget,
   });
+
+  // Post-run drift check: subagent must not have switched HEAD.
+  if (task.branchName && !task.isFix) {
+    assertCurrentBranch(projectRoot, task.branchName);
+  }
 
   const normalizedPlan = normalizeMarkdownFence(resultText);
   if (normalizedPlan.length === 0) {

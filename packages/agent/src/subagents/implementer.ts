@@ -18,6 +18,7 @@ import { createRuntimeWorkflowSpec } from "@aif/runtime";
 import { logActivity } from "../hooks.js";
 import { executeSubagentQuery } from "../subagentQuery.js";
 import { computePendingPlanLayers, computePlanLayers } from "../planLayers.js";
+import { assertCurrentBranch, restorePersistedBranch } from "../gitBranch.js";
 
 const log = logger("implementer");
 const AGENT_NAME = "implement-coordinator";
@@ -172,6 +173,27 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
     log.error({ taskId }, "Task not found for implementation");
     throw new Error(`Task ${taskId} not found`);
   }
+
+  // Branch restore MUST happen before any repo/config/plan read. If the
+  // planner prepared a feature branch but auto-queue (or a chat/manual
+  // action) moved HEAD between stages, every downstream read — config,
+  // canonical plan, pending-task detection, no-op early return — would
+  // operate on the wrong branch and silently ship incorrect state.
+  //
+  // `task.branchName` is a source-of-truth contract: once planner set it,
+  // every subsequent stage MUST land on that branch or fail loud. Config
+  // drift (git.enabled / create_branches toggled off between stages) cannot
+  // release us to the current HEAD — `restorePersistedBranch` throws instead
+  // of the "skipped" shortcut `ensureFeatureBranch` uses.
+  if (task.branchName && !task.isFix) {
+    restorePersistedBranch({
+      projectRoot,
+      taskId,
+      persistedBranchName: task.branchName,
+    });
+    logActivity(taskId, "Agent", `Restored feature branch: ${task.branchName}`);
+  }
+
   const project = findProjectById(task.projectId);
   const implementerBudget = project?.implementerMaxBudgetUsd ?? null;
   const useSubagents = task.useSubagents;
@@ -220,6 +242,7 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   }
 
   log.info({ taskId, title: task.title, useSubagents }, "Starting implementation stage");
+
   const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}
 All files must be created and modified inside this directory. Do NOT create files outside of it.`;
   const implementSlashCommand = `/aif-implement ${planSection}`;
@@ -326,6 +349,14 @@ Execution rules:
     fallbackSlashCommand: implementSlashCommand,
   });
 
+  // Post-run drift check: if the subagent switched branches during execution
+  // (e.g. a rogue skill ran `git checkout` or plan-polisher followed legacy
+  // Step 1.4), we MUST block before persisting plan/log — otherwise we
+  // attribute diffs from a different branch to this task.
+  if (task.branchName && !task.isFix) {
+    assertCurrentBranch(projectRoot, task.branchName);
+  }
+
   let finalResultText = resultText;
 
   if (isBlockedImplementationResult(resultText)) {
@@ -356,6 +387,13 @@ Execution rules:
         "Checklist auto-sync returned non-plan-like response, keeping original plan",
       );
     }
+  }
+
+  // Second post-run drift check: `runChecklistSyncQuery` itself spawns a
+  // subagent. Even if the main implementer ended on the right HEAD, the sync
+  // pass can switch branches mid-flow. Re-assert before persisting plan/log.
+  if (task.branchName && !task.isFix) {
+    assertCurrentBranch(projectRoot, task.branchName);
   }
 
   const checklistAfterSync = getChecklistProgress(syncedPlan);

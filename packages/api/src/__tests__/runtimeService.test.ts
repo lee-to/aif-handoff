@@ -201,6 +201,7 @@ describe("runtime service", () => {
     mockRegistryResolveRuntime.mockReturnValue(adapter);
 
     mockFindProjectById.mockReturnValue({ id: "proj-1", rootPath: "/tmp/project" });
+    mockFindTaskById.mockReturnValue(null);
     mockGetAppDefaultRuntimeProfileId.mockReturnValue(null);
     mockResolveEffectiveRuntimeProfile.mockReturnValue({
       source: "project_default",
@@ -560,6 +561,39 @@ describe("runtime service", () => {
             allowDangerouslySkipPermissions: false,
             _trustToken: Symbol.for("aif.runtime.trust"),
           }),
+        }),
+      }),
+    );
+  });
+
+  it("passes Handoff branch contract in one-shot runtime environment", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+    mockFindTaskById.mockReturnValue({
+      id: "task-branch",
+      projectId: "proj-1",
+      branchName: "feature/task-branch",
+    });
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      taskId: "task-branch",
+      prompt: "commit",
+      workflowKind: "commit",
+      usageContext: { source: "test" },
+    });
+
+    expect(adapter.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execution: expect.objectContaining({
+          environment: {
+            HANDOFF_MODE: "1",
+            HANDOFF_TASK_ID: "task-branch",
+            HANDOFF_BRANCH_PREPARED: "1",
+            HANDOFF_BRANCH_NAME: "feature/task-branch",
+          },
         }),
       }),
     );

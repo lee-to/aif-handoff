@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { tasks, projects } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
@@ -281,6 +285,96 @@ describe("processAutoQueueAdvance", () => {
       setAutoQueueMode("toggle", true);
       expect(processAutoQueueAdvance()).toBe(1);
       expect(findTaskById("t1")?.status).toBe("planning");
+    });
+  });
+
+  describe("dirty-worktree gate", () => {
+    it("pauses advance when the project work tree has uncommitted changes", () => {
+      const root = mkdtempSync(join(tmpdir(), "autoqueue-dirty-"));
+      execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "T"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root, stdio: "ignore" });
+      writeFileSync(join(root, "README.md"), "# t\n");
+      execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init", "--no-verify"], { cwd: root, stdio: "ignore" });
+
+      // Project points at a REAL git repo; seedProject uses /tmp/<id>,
+      // so insert directly with the real path.
+      testDb.current
+        .insert(projects)
+        .values({
+          id: "dirty",
+          name: "dirty",
+          rootPath: root,
+          parallelEnabled: false,
+          autoQueueMode: true,
+        })
+        .run();
+      seedTask("t-dirty-1", "dirty", 100);
+
+      // Introduce uncommitted change
+      writeFileSync(join(root, "scratch.txt"), "dirty\n");
+
+      const advanced = processAutoQueueAdvance();
+      expect(advanced).toBe(0);
+      expect(findTaskById("t-dirty-1")?.status).toBe("backlog");
+    });
+
+    it("advances normally once the work tree is clean again", () => {
+      const root = mkdtempSync(join(tmpdir(), "autoqueue-clean-"));
+      execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "T"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root, stdio: "ignore" });
+      writeFileSync(join(root, "README.md"), "# t\n");
+      execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init", "--no-verify"], { cwd: root, stdio: "ignore" });
+
+      testDb.current
+        .insert(projects)
+        .values({
+          id: "clean",
+          name: "clean",
+          rootPath: root,
+          parallelEnabled: false,
+          autoQueueMode: true,
+        })
+        .run();
+      seedTask("t-clean-1", "clean", 100);
+
+      expect(processAutoQueueAdvance()).toBe(1);
+      expect(findTaskById("t-clean-1")?.status).toBe("planning");
+    });
+
+    it("forces parallel auto-queue to one task for branch-isolated git projects", () => {
+      const root = mkdtempSync(join(tmpdir(), "autoqueue-parallel-branch-"));
+      execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "T"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root, stdio: "ignore" });
+      writeFileSync(join(root, "README.md"), "# t\n");
+      execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init", "--no-verify"], { cwd: root, stdio: "ignore" });
+
+      testDb.current
+        .insert(projects)
+        .values({
+          id: "parallel-branch",
+          name: "parallel-branch",
+          rootPath: root,
+          parallelEnabled: true,
+          autoQueueMode: true,
+        })
+        .run();
+      seedTask("t-branch-1", "parallel-branch", 100);
+      seedTask("t-branch-2", "parallel-branch", 200);
+      seedTask("t-branch-3", "parallel-branch", 300);
+
+      expect(processAutoQueueAdvance()).toBe(1);
+      expect(findTaskById("t-branch-1")?.status).toBe("planning");
+      expect(findTaskById("t-branch-2")?.status).toBe("backlog");
+      expect(findTaskById("t-branch-3")?.status).toBe("backlog");
     });
   });
 });

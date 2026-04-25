@@ -1319,6 +1319,39 @@ export function countActivePipelineTasksForProject(projectId: string): number {
   return row?.cnt ?? 0;
 }
 
+/**
+ * True if the project has at least one in-flight task with a persisted
+ * `branchName`. Used by the auto-queue scheduler to keep parallel execution
+ * disabled even after `git.create_branches` is toggled off mid-pipeline —
+ * already-bound tasks still mutate the shared worktree on stage transitions
+ * via `restorePersistedBranch`, so concurrent stages would race on HEAD.
+ *
+ * Includes `backlog` so a queued task whose branch was prepared (e.g. via
+ * `accept_existing_plan`) does not let the scheduler open the parallel pool
+ * before its first stage starts.
+ */
+export function hasActiveBranchBoundTasksForProject(projectId: string): boolean {
+  const row = getDb()
+    .select({ cnt: count() })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.projectId, projectId),
+        isNotNull(tasks.branchName),
+        inArray(tasks.status, [
+          "backlog",
+          "planning",
+          "plan_ready",
+          "implementing",
+          "review",
+          "blocked_external",
+        ]),
+      ),
+    )
+    .get();
+  return (row?.cnt ?? 0) > 0;
+}
+
 export function hasActiveLockedTaskForProject(projectId: string): boolean {
   const nowIso = new Date().toISOString();
   const row = getDb()

@@ -38,6 +38,7 @@ import {
   findProjectById,
   getAppDefaultRuntimeProfileId,
   resolveEffectiveRuntimeProfile,
+  resolveEffectiveRuntimeProfilesForTasks,
   updateTaskPositionOnly,
   type TaskRow,
 } from "@aif/data";
@@ -50,23 +51,23 @@ export const tasksRouter = new Hono();
 function toTaskRouteResponse(
   task: TaskRow,
   systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task"),
-) {
-  const response = toTaskResponse(task);
-  const effective = resolveEffectiveRuntimeProfile({
+  effectiveRuntime = resolveEffectiveRuntimeProfile({
     taskId: task.id,
     projectId: task.projectId,
     mode: "task",
     systemDefaultRuntimeProfileId,
-  });
+  }),
+) {
+  const response = toTaskResponse(task);
 
   return {
     ...response,
     effectiveRuntime: {
-      source: effective.source,
-      profileId: effective.profile?.id ?? null,
-      runtimeId: effective.profile?.runtimeId ?? null,
-      providerId: effective.profile?.providerId ?? null,
-      profileName: effective.profile?.name ?? null,
+      source: effectiveRuntime.source,
+      profileId: effectiveRuntime.profile?.id ?? null,
+      runtimeId: effectiveRuntime.profile?.runtimeId ?? null,
+      providerId: effectiveRuntime.profile?.providerId ?? null,
+      profileName: effectiveRuntime.profile?.name ?? null,
     },
   };
 }
@@ -97,8 +98,20 @@ tasksRouter.get("/", (c) => {
 
   const allTasks = listTasks(projectId);
   const systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task");
+  const effectiveRuntimeByTaskId = resolveEffectiveRuntimeProfilesForTasks(allTasks, {
+    mode: "task",
+    systemDefaultRuntimeProfileId,
+  });
   log.debug({ count: allTasks.length, projectId }, "Listed tasks");
-  return c.json(allTasks.map((task) => toTaskRouteResponse(task, systemDefaultRuntimeProfileId)));
+  return c.json(
+    allTasks.map((task) =>
+      toTaskRouteResponse(
+        task,
+        systemDefaultRuntimeProfileId,
+        effectiveRuntimeByTaskId.get(task.id),
+      ),
+    ),
+  );
 });
 
 // POST /tasks — create

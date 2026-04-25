@@ -1970,6 +1970,22 @@ export function listRuntimeProfileResponses(input: {
   return rows.map((row) => toRuntimeProfileResponse(row, usageByProfileId.get(row.id) ?? null));
 }
 
+function getProjectRuntimeProfileId(
+  project: ProjectRow | undefined,
+  mode: "task" | "plan" | "review" | "chat",
+): string | null {
+  if (mode === "chat") {
+    return project?.defaultChatRuntimeProfileId ?? null;
+  }
+  if (mode === "plan") {
+    return project?.defaultPlanRuntimeProfileId ?? project?.defaultTaskRuntimeProfileId ?? null;
+  }
+  if (mode === "review") {
+    return project?.defaultReviewRuntimeProfileId ?? project?.defaultTaskRuntimeProfileId ?? null;
+  }
+  return project?.defaultTaskRuntimeProfileId ?? null;
+}
+
 export function createRuntimeProfile(input: CreateRuntimeProfileInput): RuntimeProfileRow | undefined {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -2328,16 +2344,7 @@ export function resolveEffectiveRuntimeProfile(input: {
   // pipeline (plan, implement, review, chat) runs on the specified runtime.
   const taskRuntimeProfileId = task?.runtimeProfileId ?? null;
 
-  let projectRuntimeProfileId: string | null = null;
-  if (mode === "chat") {
-    projectRuntimeProfileId = project?.defaultChatRuntimeProfileId ?? null;
-  } else if (mode === "plan") {
-    projectRuntimeProfileId = project?.defaultPlanRuntimeProfileId ?? project?.defaultTaskRuntimeProfileId ?? null;
-  } else if (mode === "review") {
-    projectRuntimeProfileId = project?.defaultReviewRuntimeProfileId ?? project?.defaultTaskRuntimeProfileId ?? null;
-  } else {
-    projectRuntimeProfileId = project?.defaultTaskRuntimeProfileId ?? null;
-  }
+  const projectRuntimeProfileId = getProjectRuntimeProfileId(project, mode);
   const systemRuntimeProfileId = input.systemDefaultRuntimeProfileId ?? null;
 
   const candidates: Array<{
@@ -2359,7 +2366,7 @@ export function resolveEffectiveRuntimeProfile(input: {
       continue;
     }
 
-    if (candidate.source !== "task_override") {
+    if (candidate.source !== "task_override" && unavailableIds.length > 0) {
       log.info(
         {
           source: candidate.source,
@@ -2391,6 +2398,137 @@ export function resolveEffectiveRuntimeProfile(input: {
     projectRuntimeProfileId,
     systemRuntimeProfileId,
   };
+}
+
+// ── Runtime Profile Resolution ─────────────────────────────────
+
+type RuntimeResolvableTask = Pick<TaskRow, "id" | "projectId" | "runtimeProfileId">;
+
+export function resolveEffectiveRuntimeProfilesForTasks(
+  taskRows: RuntimeResolvableTask[],
+  input: {
+    mode?: "task" | "plan" | "review" | "chat";
+    systemDefaultRuntimeProfileId?: string | null;
+  } = {},
+): Map<string, EffectiveRuntimeProfileSelection> {
+  const mode = input.mode ?? "task";
+  const systemRuntimeProfileId = input.systemDefaultRuntimeProfileId ?? null;
+  const results = new Map<string, EffectiveRuntimeProfileSelection>();
+  if (taskRows.length === 0) {
+    return results;
+  }
+
+  const db = getDb();
+  const projectIds = Array.from(new Set(taskRows.map((task) => task.projectId)));
+  const projectRows =
+    projectIds.length > 0
+      ? db.select().from(projects).where(inArray(projects.id, projectIds)).all()
+      : [];
+  const projectById = new Map(projectRows.map((project) => [project.id, project]));
+
+  const candidatesByTaskId = new Map<
+    string,
+    Array<{
+      source: EffectiveRuntimeProfileSelection["source"];
+      profileId: string | null;
+    }>
+  >();
+  const profileIds = new Set<string>();
+
+  for (const task of taskRows) {
+    const project = projectById.get(task.projectId);
+    const taskRuntimeProfileId = task.runtimeProfileId ?? null;
+    const projectRuntimeProfileId = getProjectRuntimeProfileId(project, mode);
+    const candidates: Array<{
+      source: EffectiveRuntimeProfileSelection["source"];
+      profileId: string | null;
+    }> = [
+      { source: "task_override", profileId: taskRuntimeProfileId },
+      { source: "project_default", profileId: projectRuntimeProfileId },
+      { source: "system_default", profileId: systemRuntimeProfileId },
+    ];
+    candidatesByTaskId.set(task.id, candidates);
+
+    for (const candidate of candidates) {
+      if (candidate.profileId) {
+        profileIds.add(candidate.profileId);
+      }
+    }
+  }
+
+  const uniqueProfileIds = Array.from(profileIds);
+  const profileRows =
+    uniqueProfileIds.length > 0
+      ? db.select().from(runtimeProfiles).where(inArray(runtimeProfiles.id, uniqueProfileIds)).all()
+      : [];
+  const profileById = new Map(profileRows.map((profile) => [profile.id, profile]));
+  const usageByProfileId = findLatestRuntimeProfileUsageByIds(uniqueProfileIds);
+
+  let fallbackLogCount = 0;
+  for (const task of taskRows) {
+    const project = projectById.get(task.projectId);
+    const taskRuntimeProfileId = task.runtimeProfileId ?? null;
+    const projectRuntimeProfileId = getProjectRuntimeProfileId(project, mode);
+    const candidates = candidatesByTaskId.get(task.id) ?? [];
+    const unavailableIds: string[] = [];
+
+    for (const candidate of candidates) {
+      if (!candidate.profileId) continue;
+      const profile = profileById.get(candidate.profileId);
+      if (!profile || !profile.enabled) {
+        unavailableIds.push(candidate.profileId);
+        continue;
+      }
+
+      if (candidate.source !== "task_override" && unavailableIds.length > 0) {
+        fallbackLogCount += 1;
+        log.info(
+          {
+            source: candidate.source,
+            taskRuntimeProfileId,
+            projectRuntimeProfileId,
+            systemRuntimeProfileId,
+            unavailableCount: unavailableIds.length,
+          },
+          "Effective runtime profile fell back from higher-priority source",
+        );
+      }
+
+      results.set(task.id, {
+        source: candidate.source,
+        profile: toRuntimeProfileResponse(
+          profile,
+          usageByProfileId.get(profile.id) ?? null,
+        ),
+        taskRuntimeProfileId,
+        projectRuntimeProfileId,
+        systemRuntimeProfileId,
+      });
+      break;
+    }
+
+    if (!results.has(task.id)) {
+      results.set(task.id, {
+        source: "none",
+        profile: null,
+        taskRuntimeProfileId,
+        projectRuntimeProfileId,
+        systemRuntimeProfileId,
+      });
+    }
+  }
+
+  log.debug(
+    {
+      taskCount: taskRows.length,
+      projectCount: projectById.size,
+      candidateProfileCount: profileById.size,
+      fallbackLogCount,
+    },
+    "[FIX:tasks-runtime-batch] Resolved effective runtime profiles for task list",
+  );
+
+  return results;
 }
 
 // ── Chat Sessions ──────────────────────────────────────────────

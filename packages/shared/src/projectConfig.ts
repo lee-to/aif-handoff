@@ -40,6 +40,15 @@ export interface AifProjectGit {
    * after committing. Surfaced in the web settings UI.
    */
   skip_push_after_commit: boolean;
+  /**
+   * Policy for `git pull --ff-only origin <base_branch>` before creating a
+   * feature branch. When false (default), a failed pull is best-effort:
+   * Handoff logs a warning and branches from the local base. When true, a
+   * failed pull is a hard `BranchIsolationError("base_update_failed")` and
+   * the task is parked as `blocked_external` — useful for projects that
+   * require feature branches to start from an up-to-date base.
+   */
+  strict_base_update: boolean;
 }
 
 export interface AifProjectLanguage {
@@ -100,6 +109,7 @@ const DEFAULT_GIT: AifProjectGit = {
   create_branches: true,
   branch_prefix: "feature/",
   skip_push_after_commit: false,
+  strict_base_update: false,
 };
 
 const DEFAULT_LANGUAGE: AifProjectLanguage = {

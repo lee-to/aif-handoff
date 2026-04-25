@@ -5,6 +5,7 @@ const mockFindProjectById = vi.fn();
 const mockFindTaskById = vi.fn();
 const mockGetProjectConfig = vi.fn();
 const mockEnsureFeatureBranch = vi.fn();
+const mockAssertCurrentBranch = vi.fn();
 
 vi.mock("../services/runtime.js", () => ({
   runApiRuntimeOneShot: (...args: unknown[]) => mockRunApiRuntimeOneShot(...args),
@@ -21,6 +22,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
     ...actual,
     ensureFeatureBranch: (...args: unknown[]) => mockEnsureFeatureBranch(...args),
     getProjectConfig: (...args: unknown[]) => mockGetProjectConfig(...args),
+    assertCurrentBranch: (...args: unknown[]) => mockAssertCurrentBranch(...args),
   };
 });
 
@@ -68,6 +70,7 @@ describe("runCommitQuery", () => {
     mockFindTaskById.mockReset();
     mockGetProjectConfig.mockReset();
     mockEnsureFeatureBranch.mockReset();
+    mockAssertCurrentBranch.mockReset();
     mockFindProjectById.mockReturnValue({ id: "p1", rootPath: "/tmp/p1" });
     mockFindTaskById.mockReturnValue(null);
   });
@@ -135,5 +138,30 @@ describe("runCommitQuery", () => {
     const res = await runCommitQuery({ projectId: "p1" });
     expect(res.ok).toBe(false);
     expect(res.error).toBe("boom");
+  });
+
+  it("returns ok:false when subagent switched HEAD to a different branch (post-run drift)", async () => {
+    mockGetProjectConfig.mockReturnValue(gitConfig(false));
+    mockFindTaskById.mockReturnValue({
+      id: "t1",
+      title: "Task title",
+      branchName: "feature/task-title-t1",
+      isFix: false,
+    });
+    mockRunApiRuntimeOneShot.mockResolvedValue({ result: { outputText: "ok" }, context: {} });
+    mockAssertCurrentBranch.mockImplementation(() => {
+      throw new Error(
+        "Branch drift detected: expected HEAD=feature/task-title-t1, actual HEAD=main.",
+      );
+    });
+
+    const res = await runCommitQuery({ projectId: "p1", taskId: "t1" });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/Branch drift detected/);
+    expect(mockAssertCurrentBranch).toHaveBeenCalledWith("/tmp/p1", "feature/task-title-t1");
+    expect(mockAssertCurrentBranch.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mockRunApiRuntimeOneShot.mock.invocationCallOrder[0],
+    );
   });
 });

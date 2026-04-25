@@ -389,6 +389,13 @@ Execution rules:
     }
   }
 
+  // Second post-run drift check: `runChecklistSyncQuery` itself spawns a
+  // subagent. Even if the main implementer ended on the right HEAD, the sync
+  // pass can switch branches mid-flow. Re-assert before persisting plan/log.
+  if (task.branchName && !task.isFix) {
+    assertCurrentBranch(projectRoot, task.branchName);
+  }
+
   const checklistAfterSync = getChecklistProgress(syncedPlan);
   const checklistWarning =
     syncedPlan && checklistAfterSync.parsedTaskCount > 0 && checklistAfterSync.pendingTaskCount > 0

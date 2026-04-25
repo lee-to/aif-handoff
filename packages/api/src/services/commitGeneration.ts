@@ -1,4 +1,10 @@
-import { ensureFeatureBranch, getProjectConfig, isBranchIsolationError, logger } from "@aif/shared";
+import {
+  assertCurrentBranch,
+  ensureFeatureBranch,
+  getProjectConfig,
+  isBranchIsolationError,
+  logger,
+} from "@aif/shared";
 import { findProjectById, findTaskById } from "@aif/data";
 import { UsageSource } from "@aif/runtime";
 import { runApiRuntimeOneShot } from "./runtime.js";
@@ -118,6 +124,28 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
       systemPromptAppend: PROJECT_SCOPE_APPEND,
       usageContext: { source: UsageSource.COMMIT },
     });
+
+    // Post-run drift check: the commit subagent runs git directly, so a
+    // mid-run `git checkout` (rogue skill, bad fallback) would land the
+    // commit on the wrong branch. Surface the drift instead of silently
+    // returning ok.
+    if (task?.branchName && !task.isFix) {
+      try {
+        assertCurrentBranch(project.rootPath, task.branchName);
+      } catch (err) {
+        const message = isBranchIsolationError(err)
+          ? `Branch isolation failure (${err.kind}): ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+        log.error(
+          { err, projectId, taskId, branchName: task.branchName },
+          "Commit runtime aborted after run due to branch drift",
+        );
+        return { ok: false, error: message };
+      }
+    }
+
     log.info(
       {
         projectId,

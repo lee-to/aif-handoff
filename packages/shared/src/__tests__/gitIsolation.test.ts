@@ -250,4 +250,52 @@ describe("gitIsolation", () => {
     },
     GIT_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "by default warns and continues when git pull --ff-only fails (strict_base_update=false)",
+    () => {
+      initRepo(projectRoot);
+      // No `origin` remote → `git pull` will fail. Default policy is
+      // best-effort: branch creation should still succeed.
+      git(projectRoot, ["checkout", "-b", "topic-dirty"]);
+
+      expect(() =>
+        ensureFeatureBranch({
+          projectRoot,
+          taskId: "task-pull-warn",
+          title: "Pull warn",
+        }),
+      ).not.toThrow();
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "throws base_update_failed when git pull fails and strict_base_update=true",
+    () => {
+      initRepo(projectRoot);
+      writeConfig(
+        projectRoot,
+        "git:\n  enabled: true\n  base_branch: main\n  create_branches: true\n  strict_base_update: true\n",
+      );
+      git(projectRoot, ["checkout", "-b", "topic-strict"]);
+
+      let captured: unknown;
+      try {
+        ensureFeatureBranch({
+          projectRoot,
+          taskId: "task-pull-strict",
+          title: "Pull strict",
+        });
+      } catch (err) {
+        captured = err;
+      }
+
+      expect(isBranchIsolationError(captured)).toBe(true);
+      const branchErr = captured as BranchIsolationError;
+      expect(branchErr.kind).toBe("base_update_failed");
+      expect(branchErr.message).toMatch(/git pull --ff-only/);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });

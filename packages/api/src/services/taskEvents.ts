@@ -2,10 +2,12 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   applyHumanTaskEvent,
+  assertCurrentBranch,
   ensureFeatureBranch,
   isBranchIsolationError,
   looksLikeFullPlanUpdate,
   getProjectConfig,
+  restorePersistedBranch,
   type TaskEvent,
 } from "@aif/shared";
 import {
@@ -34,13 +36,32 @@ function restoreTaskBranchForMutation(
 ): EventHandlerResult | null {
   if (!task.branchName || task.isFix) return null;
   try {
-    ensureFeatureBranch({
+    // task.branchName is a source-of-truth contract: every mutation path
+    // (fast-fix, regular transition, accept_existing_plan) must land on the
+    // persisted branch or fail loud. Use `restorePersistedBranch` instead of
+    // `ensureFeatureBranch({switchOnly:true})` so config drift
+    // (`git.enabled` / `create_branches` toggled off after planner) cannot
+    // release us to current HEAD.
+    restorePersistedBranch({
       projectRoot,
       taskId: task.id,
-      title: task.title,
-      explicitBranchName: task.branchName,
-      switchOnly: true,
+      persistedBranchName: task.branchName,
     });
+    return null;
+  } catch (err) {
+    const error = isBranchIsolationError(err)
+      ? `Branch isolation failure (${err.kind}): ${err.message}`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    return { ok: false, status: 409, error };
+  }
+}
+
+function assertTaskBranchPostRun(task: TaskRow, projectRoot: string): EventHandlerResult | null {
+  if (!task.branchName || task.isFix) return null;
+  try {
+    assertCurrentBranch(projectRoot, task.branchName);
     return null;
   } catch (err) {
     const error = isBranchIsolationError(err)
@@ -133,6 +154,12 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
       error: "Fast fix result omitted existing plan content. Plan was left unchanged.",
     };
   }
+
+  // Post-run drift check: `runFastFixQuery` runs a runtime that may write to
+  // disk (`@${planPath}` injection asks for file overwrite). A rogue skill
+  // could `git checkout` mid-flow and persist plan/state on the wrong branch.
+  const driftError = assertTaskBranchPostRun(task, project.rootPath);
+  if (driftError) return driftError;
 
   const nowIso = new Date().toISOString();
   persistTaskPlanForTask({

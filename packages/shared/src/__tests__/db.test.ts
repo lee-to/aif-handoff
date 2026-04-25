@@ -419,4 +419,62 @@ describe("db", () => {
       removeSqliteArtifacts(dbPath);
     }
   });
+
+  it("upgrades a v15 schema to v16 by adding tasks.branch_name (without dropping prior columns)", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-v15-to-v16-${Date.now()}-${Math.random()}.sqlite`);
+    const sqlite = new Database(dbPath);
+
+    // Minimal pre-v16 schema with all columns the v6→v15 migrations would have
+    // produced. The point of this test is to lock the v16 contract: the
+    // upgrade must add `branch_name` and bump user_version to 16, while
+    // leaving every prior column (esp. the v15 runtime_limit recovery
+    // columns) intact. If this PR lands second after another v16 migration
+    // merges to main, this test will fail and force the rebaser to bump to a
+    // free trailing version slot rather than silently re-using v16 with
+    // different SQL.
+    sqlite.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'backlog',
+        position REAL NOT NULL DEFAULT 1000.0,
+        manual_review_required INTEGER NOT NULL DEFAULT 0,
+        auto_review_state_json TEXT,
+        runtime_limit_snapshot_json TEXT,
+        runtime_limit_updated_at TEXT,
+        runtime_profile_id TEXT
+      );
+    `);
+    sqlite.pragma("user_version = 15");
+    sqlite.close();
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const migratedSqlite = new Database(dbPath, { readonly: true });
+      const taskColumns = migratedSqlite.prepare(`PRAGMA table_info(tasks)`).all() as Array<{
+        name: string;
+      }>;
+      const userVersion = migratedSqlite.pragma("user_version", { simple: true }) as number;
+      migratedSqlite.close();
+
+      const taskColumnNames = taskColumns.map((column) => column.name);
+      expect(taskColumnNames).toContain("branch_name");
+      expect(taskColumnNames).toEqual(
+        expect.arrayContaining([
+          "manual_review_required",
+          "auto_review_state_json",
+          "runtime_limit_snapshot_json",
+          "runtime_limit_updated_at",
+        ]),
+      );
+      expect(userVersion).toBe(16);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
+  });
 });

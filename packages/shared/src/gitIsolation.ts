@@ -12,6 +12,7 @@ export class BranchIsolationError extends Error {
     | "branch_missing"
     | "branch_drift"
     | "base_branch_unavailable"
+    | "base_update_failed"
     | "checkout_failed"
     | "create_failed"
     | "invalid_branch_name"
@@ -293,6 +294,21 @@ export function ensureFeatureBranch(input: EnsureFeatureBranchInput): EnsureFeat
       ignoreExit: true,
     });
     if (pullResult.status !== 0) {
+      // Policy: by default, treat pull failure as best-effort (warn + continue
+      // from local base). Projects that REQUIRE a fresh base before branching
+      // can opt into strict mode via `git.strict_base_update: true` in
+      // `.ai-factory/config.yaml`; in that mode pull failure is a hard
+      // BranchIsolationError("base_update_failed") classified as
+      // blocked_external by the coordinator.
+      if (config.strict_base_update) {
+        throw new BranchIsolationError(
+          "base_update_failed",
+          `git pull --ff-only origin ${config.base_branch} failed: ${pullResult.stderr || "unknown error"}. ` +
+            `Project has git.strict_base_update=true; refusing to branch from a stale base.`,
+          projectRoot,
+          branchName,
+        );
+      }
       log.warn(
         {
           projectRoot,
@@ -300,7 +316,7 @@ export function ensureFeatureBranch(input: EnsureFeatureBranchInput): EnsureFeat
           baseBranch: config.base_branch,
           stderr: pullResult.stderr,
         },
-        "Could not fast-forward base branch before creating feature branch; continuing from local base",
+        "Could not fast-forward base branch before creating feature branch; continuing from local base (git.strict_base_update=false)",
       );
     }
   }

@@ -37,6 +37,7 @@ describe("startServer", () => {
     const server = new FakeServer();
     const logger = createLogger();
     const injectWebSocket = vi.fn();
+    const onStarted = vi.fn();
 
     createAdaptorServerMock.mockReturnValue(server);
 
@@ -46,6 +47,7 @@ describe("startServer", () => {
       fetch: vi.fn(),
       port: 3009,
       injectWebSocket,
+      onStarted,
       logger,
     });
 
@@ -65,6 +67,7 @@ describe("startServer", () => {
       { hostname: undefined, port: 3009 },
       "API server started",
     );
+    expect(onStarted).toHaveBeenCalledTimes(1);
   });
 
   it("logs an actionable error message when the port is already in use", async () => {

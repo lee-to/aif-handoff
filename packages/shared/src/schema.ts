@@ -231,3 +231,117 @@ export const usageEvents = sqliteTable("usage_events", {
 
 export type UsageEventRow = typeof usageEvents.$inferSelect;
 export type NewUsageEventRow = typeof usageEvents.$inferInsert;
+
+/**
+ * Rebuildable Codex session index used by hot request paths.
+ * Source of truth stays on disk (~/.codex/sessions/*.jsonl).
+ */
+export const codexSessions = sqliteTable("codex_sessions", {
+  sessionId: text("session_id").primaryKey(),
+  filePath: text("file_path").notNull().unique(),
+  title: text("title"),
+  projectRoot: text("project_root"),
+  accountFingerprint: text("account_fingerprint"),
+  sourceCreatedAt: text("source_created_at"),
+  sourceUpdatedAt: text("source_updated_at"),
+  messageCount: integer("message_count").notNull().default(0),
+  previewText: text("preview_text"),
+  sizeBytes: integer("size_bytes").notNull().default(0),
+  mtimeMs: integer("mtime_ms").notNull().default(0),
+  lastIndexedAt: text("last_indexed_at").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type CodexSessionRow = typeof codexSessions.$inferSelect;
+export type NewCodexSessionRow = typeof codexSessions.$inferInsert;
+
+/**
+ * Tracks file-level dirtiness/cursors for Codex session reconcile passes.
+ */
+export const codexSessionFiles = sqliteTable("codex_session_files", {
+  filePath: text("file_path").primaryKey(),
+  sessionId: text("session_id"),
+  sizeBytes: integer("size_bytes").notNull().default(0),
+  mtimeMs: integer("mtime_ms").notNull().default(0),
+  parsedOffset: integer("parsed_offset").notNull().default(0),
+  pendingTail: text("pending_tail").notNull().default(""),
+  missing: integer("missing", { mode: "boolean" }).notNull().default(false),
+  importVersion: integer("import_version").notNull().default(1),
+  lastSeenAt: text("last_seen_at").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type CodexSessionFileRow = typeof codexSessionFiles.$inferSelect;
+export type NewCodexSessionFileRow = typeof codexSessionFiles.$inferInsert;
+
+/**
+ * Latest known Codex usage-limit snapshot per account/project/limit scope.
+ */
+export const codexLimitHeads = sqliteTable("codex_limit_heads", {
+  headKey: text("head_key").primaryKey(),
+  accountFingerprint: text("account_fingerprint").notNull(),
+  projectRoot: text("project_root"),
+  limitId: text("limit_id").notNull(),
+  model: text("model"),
+  source: text("source").notNull().default("codex"),
+  snapshotJson: text("snapshot_json").notNull(),
+  observedAt: text("observed_at").notNull(),
+  sessionId: text("session_id"),
+  filePath: text("file_path"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type CodexLimitHeadRow = typeof codexLimitHeads.$inferSelect;
+export type NewCodexLimitHeadRow = typeof codexLimitHeads.$inferInsert;
+
+/**
+ * Bounded recent Codex limit snapshots used for diagnostics/history.
+ */
+export const codexLimitHistory = sqliteTable("codex_limit_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  headKey: text("head_key").notNull(),
+  accountFingerprint: text("account_fingerprint").notNull(),
+  projectRoot: text("project_root"),
+  limitId: text("limit_id").notNull(),
+  model: text("model"),
+  snapshotJson: text("snapshot_json").notNull(),
+  observedAt: text("observed_at").notNull(),
+  sessionId: text("session_id"),
+  filePath: text("file_path"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type CodexLimitHistoryRow = typeof codexLimitHistory.$inferSelect;
+export type NewCodexLimitHistoryRow = typeof codexLimitHistory.$inferInsert;
+
+/**
+ * Generic index cursor/watermark state for Codex reconcile pipeline.
+ */
+export const codexIndexCursors = sqliteTable("codex_index_cursors", {
+  cursorKey: text("cursor_key").primaryKey(),
+  cursorValue: text("cursor_value"),
+  cursorJson: text("cursor_json"),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type CodexIndexCursorRow = typeof codexIndexCursors.$inferSelect;
+export type NewCodexIndexCursorRow = typeof codexIndexCursors.$inferInsert;

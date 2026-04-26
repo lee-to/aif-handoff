@@ -3,9 +3,9 @@
 // script in ./k6 sequentially, aggregates summaries, exits non-zero if any
 // threshold fails. Called from the root `ai:load` script and from CI.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
@@ -34,8 +34,8 @@ async function waitForApi(url, deadline) {
 /** Run a single k6 script and write its JSON summary to reports/. */
 function runK6(scriptPath) {
   return new Promise((resolvePromise) => {
-    const scriptName = scriptPath.replace(/\.js$/, "");
-    const summaryPath = join(reportsDir, `${scriptName.split("/").pop()}.summary.json`);
+    const scriptName = basename(scriptPath, ".js");
+    const summaryPath = join(reportsDir, `${scriptName}.summary.json`);
     const child = spawn(
       "k6",
       ["run", `--summary-export=${summaryPath}`, `--env`, `AIF_API_URL=${API_URL}`, scriptPath],
@@ -58,7 +58,10 @@ async function ensureK6Installed() {
 }
 
 function spawnDevStack() {
-  const child = spawn("npm", ["run", "dev"], {
+  const command = process.platform === "win32" ? "cmd.exe" : "npm";
+  const args =
+    process.platform === "win32" ? ["/d", "/s", "/c", "npm", "run", "dev"] : ["run", "dev"];
+  const child = spawn(command, args, {
     cwd: repoRoot,
     stdio: "ignore",
     detached: true,
@@ -66,6 +69,21 @@ function spawnDevStack() {
   });
   child.unref();
   return child;
+}
+
+function stopDevStack(child) {
+  if (!child?.pid) return;
+
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
+    return;
+  }
+
+  try {
+    process.kill(-child.pid);
+  } catch {
+    // dev stack may have already exited
+  }
 }
 
 async function main() {
@@ -91,7 +109,7 @@ async function main() {
     const booted = await waitForApi(API_URL, Date.now() + HEALTH_TIMEOUT_MS);
     if (!booted) {
       console.error(`[ai:load] API did not come up within ${HEALTH_TIMEOUT_MS}ms. Abort.`);
-      if (devProcess?.pid) process.kill(-devProcess.pid);
+      stopDevStack(devProcess);
       process.exit(1);
     }
   }
@@ -123,13 +141,7 @@ async function main() {
     ),
   );
 
-  if (devProcess?.pid) {
-    try {
-      process.kill(-devProcess.pid);
-    } catch {
-      // dev stack may have already exited
-    }
-  }
+  stopDevStack(devProcess);
 
   if (failed.length > 0) {
     console.error(`[ai:load] ${failed.length} of ${results.length} k6 scripts failed thresholds.`);

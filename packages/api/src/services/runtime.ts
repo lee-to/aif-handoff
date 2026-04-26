@@ -178,6 +178,20 @@ function broadcastRuntimeLimitUpdate(input: {
   runtimeLimitBroadcastCache.set(broadcastCacheKey, input.signature);
 }
 
+export function notifyRuntimeLimitProjectUpdate(input: {
+  projectId: string;
+  runtimeProfileId: string;
+  signature: string;
+  taskId?: string | null;
+}): void {
+  broadcastRuntimeLimitUpdate({
+    projectId: input.projectId,
+    runtimeProfileId: input.runtimeProfileId,
+    signature: input.signature,
+    taskId: input.taskId ?? null,
+  });
+}
+
 function broadcastRuntimeUsageRefresh(event: DbUsageEvent): void {
   const projectId = event.context.projectId ?? null;
   const runtimeProfileId = event.profileId ?? null;

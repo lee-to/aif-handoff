@@ -194,11 +194,27 @@ export type {
 } from "./adapters/codex/index.js";
 
 export {
+  buildCodexAuthFingerprint,
+  classifyCodexSessionFileStatus,
+  findCodexSessionFileInfoById,
   getCodexAuthIdentity,
+  listCodexSessionFileInfos,
   listLatestCodexLimitSnapshots,
+  normalizeCodexProjectPath,
+  readCodexSessionEventsFromFile,
+  readCodexSessionLimitSnapshotsFromAppend,
+  readCodexSessionLimitSnapshotsFromFile,
+  readCodexSessionMetaFromFile,
+  readCodexSnapshotAccountFingerprint,
+  readLatestCodexSessionLimitSnapshotFromFile,
   getLatestCodexModelLimitSnapshot,
   selectPreferredCodexLimitSnapshot,
   type CodexAuthIdentity,
+  type CodexAppendLimitSnapshotsResult,
+  type CodexIndexedFileState,
+  type CodexSessionFileInfo,
+  type CodexSessionFileStatus,
+  type CodexSessionMeta,
 } from "./adapters/codex/sessions.js";
 export {
   ClaudeProviderFamily,

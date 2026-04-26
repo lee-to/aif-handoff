@@ -861,4 +861,23 @@ describe("runtime service", () => {
       },
     });
   });
+
+  it("exposes an explicit project-level runtime-limit broadcast helper", async () => {
+    const runtimeService = await loadRuntimeService();
+
+    runtimeService.notifyRuntimeLimitProjectUpdate({
+      projectId: "proj-1",
+      runtimeProfileId: "profile-1",
+      signature: "sig-1",
+    });
+
+    expect(mockBroadcast).toHaveBeenCalledWith({
+      type: "project:runtime_limit_updated",
+      payload: {
+        projectId: "proj-1",
+        runtimeProfileId: "profile-1",
+        taskId: null,
+      },
+    });
+  });
 });

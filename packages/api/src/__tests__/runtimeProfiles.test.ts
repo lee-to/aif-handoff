@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { createTestDb } from "@aif/shared/server";
 import {
   appSettings,
+  codexLimitHeads,
   projects,
   resetEnvCache,
   runtimeProfiles,
@@ -17,8 +18,9 @@ const mockValidateConnection = vi.fn();
 const mockListModels = vi.fn();
 const mockListRuntimes = vi.fn();
 const mockGetCodexAuthIdentity = vi.fn();
-const mockListLatestCodexLimitSnapshots = vi.fn();
+const mockBuildCodexAuthFingerprint = vi.fn();
 const mockResolveClaudeProviderIdentity = vi.fn();
+const mockListCodexLimitHeadsForOverlayCall = vi.fn();
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
@@ -28,13 +30,25 @@ vi.mock("@aif/shared/server", async (importOriginal) => {
   };
 });
 
+vi.mock("@aif/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/data")>();
+  return {
+    ...actual,
+    listCodexLimitHeadsForOverlay: (
+      ...args: Parameters<typeof actual.listCodexLimitHeadsForOverlay>
+    ) => {
+      mockListCodexLimitHeadsForOverlayCall(...args);
+      return actual.listCodexLimitHeadsForOverlay(...args);
+    },
+  };
+});
+
 vi.mock("@aif/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/runtime")>();
   return {
     ...actual,
     getCodexAuthIdentity: (...args: unknown[]) => mockGetCodexAuthIdentity(...args),
-    listLatestCodexLimitSnapshots: (...args: unknown[]) =>
-      mockListLatestCodexLimitSnapshots(...args),
+    buildCodexAuthFingerprint: (...args: unknown[]) => mockBuildCodexAuthFingerprint(...args),
     resolveClaudeProviderIdentity: (...args: unknown[]) =>
       mockResolveClaudeProviderIdentity(...args),
   };
@@ -53,11 +67,59 @@ vi.mock("../services/runtime.js", () => ({
 }));
 
 const { runtimeProfilesRouter } = await import("../routes/runtimeProfiles.js");
+const { clearCodexOverlayCache, invalidateCodexOverlayCache } =
+  await import("../services/codexOverlayCache.js");
 
 function createApp() {
   const app = new Hono();
   app.route("/runtime-profiles", runtimeProfilesRouter);
   return app;
+}
+
+function buildCodexHeadKey(input: {
+  accountFingerprint: string;
+  projectRoot: string | null;
+  limitId: string;
+  model: string | null;
+}): string {
+  return JSON.stringify([
+    input.accountFingerprint,
+    input.projectRoot ?? "",
+    input.limitId,
+    input.model ?? "",
+  ]);
+}
+
+function buildCodexSnapshot(input: {
+  checkedAt: string;
+  profileId: string | null;
+  limitId: string;
+  windows: Array<{
+    scope: "time";
+    name: string;
+    percentRemaining: number;
+    resetAt: string;
+    warningThreshold?: number;
+  }>;
+}): Record<string, unknown> {
+  return {
+    source: "sdk_event",
+    status: "ok",
+    precision: "exact",
+    checkedAt: input.checkedAt,
+    providerId: "openai",
+    runtimeId: "codex",
+    profileId: input.profileId,
+    primaryScope: "time",
+    resetAt: input.windows[0]?.resetAt ?? null,
+    retryAfterSeconds: null,
+    warningThreshold: 10,
+    windows: input.windows,
+    providerMeta: {
+      limitId: input.limitId,
+      planType: "pro",
+    },
+  };
 }
 
 describe("runtimeProfiles API", () => {
@@ -77,10 +139,12 @@ describe("runtimeProfiles API", () => {
     mockListModels.mockReset();
     mockListRuntimes.mockReset();
     mockGetCodexAuthIdentity.mockReset();
-    mockListLatestCodexLimitSnapshots.mockReset();
+    mockBuildCodexAuthFingerprint.mockReset();
     mockResolveClaudeProviderIdentity.mockReset();
+    mockListCodexLimitHeadsForOverlayCall.mockReset();
+    clearCodexOverlayCache();
     mockGetCodexAuthIdentity.mockResolvedValue(null);
-    mockListLatestCodexLimitSnapshots.mockResolvedValue([]);
+    mockBuildCodexAuthFingerprint.mockReturnValue("codex-fp-default");
     mockResolveClaudeProviderIdentity.mockResolvedValue({
       providerFamily: "anthropic-native",
       providerLabel: "Anthropic",
@@ -196,7 +260,8 @@ describe("runtimeProfiles API", () => {
 
       const listRes = await app.request("/runtime-profiles?includeGlobal=true&enabledOnly=false");
       expect(listRes.status).toBe(200);
-      expect(mockListLatestCodexLimitSnapshots).not.toHaveBeenCalled();
+      expect(mockBuildCodexAuthFingerprint).not.toHaveBeenCalled();
+      expect(mockGetCodexAuthIdentity).not.toHaveBeenCalled();
       expect(mockResolveClaudeProviderIdentity).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) {
@@ -420,35 +485,8 @@ describe("runtimeProfiles API", () => {
     expect(body[0].runtimeLimitSnapshot.providerMeta).not.toHaveProperty("accountEmail");
   });
 
-  it("refreshes local Codex quota snapshots from the live session store when newer pool state exists", async () => {
-    mockListLatestCodexLimitSnapshots.mockResolvedValue([
-      {
-        source: "sdk_event",
-        status: "ok",
-        precision: "exact",
-        checkedAt: "2026-04-19T09:26:34.000Z",
-        providerId: "openai",
-        runtimeId: "codex",
-        profileId: "profile-codex-spark",
-        primaryScope: "time",
-        resetAt: "2026-04-19T12:16:40.000Z",
-        retryAfterSeconds: null,
-        warningThreshold: 10,
-        windows: [
-          {
-            scope: "time",
-            name: "5h",
-            percentRemaining: 100,
-            resetAt: "2026-04-19T12:16:40.000Z",
-            warningThreshold: 10,
-          },
-        ],
-        providerMeta: {
-          limitId: "codex",
-          planType: "pro",
-        },
-      },
-    ]);
+  it("refreshes local Codex quota snapshots from the indexed DB when newer pool state exists", async () => {
+    mockBuildCodexAuthFingerprint.mockReturnValue("codex-fp-1");
 
     const db = testDb.current;
     db.insert(projects)
@@ -495,20 +533,44 @@ describe("runtimeProfiles API", () => {
         runtimeLimitUpdatedAt: "2026-04-18T12:57:51.489Z",
       })
       .run();
+    db.insert(codexLimitHeads)
+      .values({
+        headKey: buildCodexHeadKey({
+          accountFingerprint: "codex-fp-1",
+          projectRoot: "/tmp/project-1",
+          limitId: "codex",
+          model: "gpt-5.3-codex-spark",
+        }),
+        accountFingerprint: "codex-fp-1",
+        projectRoot: "/tmp/project-1",
+        limitId: "codex",
+        model: "gpt-5.3-codex-spark",
+        source: "codex",
+        snapshotJson: JSON.stringify(
+          buildCodexSnapshot({
+            checkedAt: "2026-04-19T09:26:34.000Z",
+            profileId: "profile-codex-spark",
+            limitId: "codex",
+            windows: [
+              {
+                scope: "time",
+                name: "5h",
+                percentRemaining: 100,
+                resetAt: "2026-04-19T12:16:40.000Z",
+                warningThreshold: 10,
+              },
+            ],
+          }),
+        ),
+        observedAt: "2026-04-19T09:26:34.000Z",
+        sessionId: "codex-session-1",
+        filePath: "/tmp/project-1/.codex/sessions/a.jsonl",
+      })
+      .run();
 
     const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(mockListLatestCodexLimitSnapshots).toHaveBeenNthCalledWith(1, {
-      runtimeId: "codex",
-      providerId: "openai",
-      projectRoot: "/tmp/project-1",
-    });
-    expect(mockListLatestCodexLimitSnapshots).toHaveBeenNthCalledWith(2, {
-      runtimeId: "codex",
-      providerId: "openai",
-      projectRoot: null,
-    });
     expect(body[0]).toEqual(
       expect.objectContaining({
         runtimeLimitUpdatedAt: "2026-04-19T09:26:34.000Z",
@@ -521,78 +583,131 @@ describe("runtimeProfiles API", () => {
         }),
       }),
     );
-    expect(body[0].runtimeLimitSnapshot.providerMeta).not.toHaveProperty("accountEmail");
   });
 
-  it("prefers the non-default live Codex pool for Spark profiles when multiple pools are available", async () => {
-    mockListLatestCodexLimitSnapshots.mockResolvedValue([
-      {
-        source: "sdk_event",
-        status: "ok",
-        precision: "exact",
-        checkedAt: "2026-04-19T11:41:50.135Z",
-        providerId: "openai",
+  it("caches indexed Codex overlays across runtime profile requests until invalidated", async () => {
+    mockBuildCodexAuthFingerprint.mockReturnValue("codex-fp-1");
+
+    const db = testDb.current;
+    db.insert(projects)
+      .values({
+        id: "project-1",
+        name: "Project One",
+        rootPath: "/tmp/project-1",
+      })
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-codex-cache",
+        projectId: "project-1",
+        name: "Codex Cached",
         runtimeId: "codex",
-        profileId: "profile-codex-spark",
-        primaryScope: "time",
-        resetAt: "2026-04-19T13:04:58.000Z",
-        retryAfterSeconds: null,
-        warningThreshold: 10,
-        windows: [
-          {
-            scope: "time",
-            name: "5h",
-            percentRemaining: 94,
-            resetAt: "2026-04-19T13:04:58.000Z",
-            warningThreshold: 10,
-          },
-          {
-            scope: "time",
-            name: "7d",
-            percentRemaining: 91,
-            resetAt: "2026-04-23T16:55:37.000Z",
-            warningThreshold: 10,
-          },
-        ],
-        providerMeta: {
+        providerId: "openai",
+        transport: "sdk",
+        defaultModel: "gpt-5.4",
+        enabled: true,
+      })
+      .run();
+    db.insert(codexLimitHeads)
+      .values({
+        headKey: buildCodexHeadKey({
+          accountFingerprint: "codex-fp-1",
+          projectRoot: "/tmp/project-1",
           limitId: "codex",
-          planType: "pro",
-        },
-      },
-      {
-        source: "sdk_event",
-        status: "ok",
-        precision: "exact",
-        checkedAt: "2026-04-19T11:42:09.849Z",
-        providerId: "openai",
+          model: "gpt-5.4",
+        }),
+        accountFingerprint: "codex-fp-1",
+        projectRoot: "/tmp/project-1",
+        limitId: "codex",
+        model: "gpt-5.4",
+        source: "codex",
+        snapshotJson: JSON.stringify(
+          buildCodexSnapshot({
+            checkedAt: "2026-04-19T09:26:34.000Z",
+            profileId: null,
+            limitId: "codex",
+            windows: [
+              {
+                scope: "time",
+                name: "5h",
+                percentRemaining: 100,
+                resetAt: "2026-04-19T12:16:40.000Z",
+              },
+            ],
+          }),
+        ),
+        observedAt: "2026-04-19T09:26:34.000Z",
+        sessionId: "codex-session-cache",
+        filePath: "/tmp/project-1/.codex/sessions/cache.jsonl",
+      })
+      .run();
+
+    const first = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    const second = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(mockListCodexLimitHeadsForOverlayCall).toHaveBeenCalledTimes(1);
+
+    invalidateCodexOverlayCache();
+    const third = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(third.status).toBe(200);
+    expect(mockListCodexLimitHeadsForOverlayCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to the persisted Codex profile snapshot when no indexed overlay is ready", async () => {
+    mockBuildCodexAuthFingerprint.mockReturnValue("codex-fp-1");
+
+    const db = testDb.current;
+    db.insert(projects)
+      .values({
+        id: "project-1",
+        name: "Project One",
+        rootPath: "/tmp/project-1",
+      })
+      .run();
+    db.insert(runtimeProfiles)
+      .values({
+        id: "profile-codex-stale",
+        projectId: "project-1",
+        name: "Codex Stale",
         runtimeId: "codex",
-        profileId: "profile-codex-spark",
-        primaryScope: "time",
-        resetAt: "2026-04-19T15:09:46.000Z",
-        retryAfterSeconds: null,
-        warningThreshold: 10,
-        windows: [
-          {
-            scope: "time",
-            name: "5h",
-            percentRemaining: 100,
-            resetAt: "2026-04-19T15:09:46.000Z",
-            warningThreshold: 10,
-          },
-          {
-            scope: "time",
-            name: "7d",
-            percentRemaining: 70,
-            resetAt: "2026-04-25T15:57:46.000Z",
-            warningThreshold: 10,
-          },
-        ],
-        providerMeta: {
-          limitId: "codex_bengalfox",
-          planType: "pro",
-        },
-      },
-    ]);
+        providerId: "openai",
+        transport: "sdk",
+        defaultModel: "gpt-5.4",
+        enabled: true,
+        runtimeLimitSnapshotJson: JSON.stringify(
+          buildCodexSnapshot({
+            checkedAt: "2026-04-18T09:00:00.000Z",
+            profileId: "profile-codex-stale",
+            limitId: "codex",
+            windows: [
+              {
+                scope: "time",
+                name: "5h",
+                percentRemaining: 42,
+                resetAt: "2026-04-18T12:00:00.000Z",
+              },
+            ],
+          }),
+        ),
+        runtimeLimitUpdatedAt: "2026-04-18T09:00:00.000Z",
+      })
+      .run();
+
+    const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body[0].runtimeLimitSnapshot).toEqual(
+      expect.objectContaining({
+        checkedAt: "2026-04-18T09:00:00.000Z",
+        profileId: "profile-codex-stale",
+      }),
+    );
+    expect(mockListCodexLimitHeadsForOverlayCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers the non-default indexed Codex pool for Spark profiles when multiple pools are available", async () => {
+    mockBuildCodexAuthFingerprint.mockReturnValue("codex-fp-1");
 
     const db = testDb.current;
     db.insert(projects)
@@ -626,6 +741,84 @@ describe("runtimeProfiles API", () => {
         },
       ])
       .run();
+    db.insert(codexLimitHeads)
+      .values([
+        {
+          headKey: buildCodexHeadKey({
+            accountFingerprint: "codex-fp-1",
+            projectRoot: "/tmp/project-1",
+            limitId: "codex",
+            model: "gpt-5.4",
+          }),
+          accountFingerprint: "codex-fp-1",
+          projectRoot: "/tmp/project-1",
+          limitId: "codex",
+          model: "gpt-5.4",
+          source: "codex",
+          snapshotJson: JSON.stringify(
+            buildCodexSnapshot({
+              checkedAt: "2026-04-19T11:41:50.135Z",
+              profileId: null,
+              limitId: "codex",
+              windows: [
+                {
+                  scope: "time",
+                  name: "5h",
+                  percentRemaining: 94,
+                  resetAt: "2026-04-19T13:04:58.000Z",
+                },
+                {
+                  scope: "time",
+                  name: "7d",
+                  percentRemaining: 91,
+                  resetAt: "2026-04-23T16:55:37.000Z",
+                },
+              ],
+            }),
+          ),
+          observedAt: "2026-04-19T11:41:50.135Z",
+          sessionId: "codex-main",
+          filePath: "/tmp/project-1/.codex/sessions/main.jsonl",
+        },
+        {
+          headKey: buildCodexHeadKey({
+            accountFingerprint: "codex-fp-1",
+            projectRoot: "/tmp/project-1",
+            limitId: "codex_bengalfox",
+            model: "gpt-5.3-codex-spark",
+          }),
+          accountFingerprint: "codex-fp-1",
+          projectRoot: "/tmp/project-1",
+          limitId: "codex_bengalfox",
+          model: "gpt-5.3-codex-spark",
+          source: "codex",
+          snapshotJson: JSON.stringify(
+            buildCodexSnapshot({
+              checkedAt: "2026-04-19T11:42:09.849Z",
+              profileId: null,
+              limitId: "codex_bengalfox",
+              windows: [
+                {
+                  scope: "time",
+                  name: "5h",
+                  percentRemaining: 100,
+                  resetAt: "2026-04-19T15:09:46.000Z",
+                },
+                {
+                  scope: "time",
+                  name: "7d",
+                  percentRemaining: 70,
+                  resetAt: "2026-04-25T15:57:46.000Z",
+                },
+              ],
+            }),
+          ),
+          observedAt: "2026-04-19T11:42:09.849Z",
+          sessionId: "codex-spark",
+          filePath: "/tmp/project-1/.codex/sessions/spark.jsonl",
+        },
+      ])
+      .run();
 
     const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
     expect(res.status).toBe(200);
@@ -634,93 +827,16 @@ describe("runtimeProfiles API", () => {
       (profile: { id: string }) => profile.id === "profile-codex-spark",
     );
     const mainProfile = body.find((profile: { id: string }) => profile.id === "profile-codex-main");
-    expect(mockListLatestCodexLimitSnapshots).toHaveBeenCalledTimes(2);
     expect(sparkProfile.runtimeLimitSnapshot.profileId).toBe("profile-codex-spark");
     expect(sparkProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex_bengalfox");
-    expect(sparkProfile.runtimeLimitSnapshot.windows[0].percentRemaining).toBe(100);
     expect(sparkProfile.runtimeLimitSnapshot.windows[1].percentRemaining).toBe(70);
     expect(mainProfile.runtimeLimitSnapshot.profileId).toBe("profile-codex-main");
     expect(mainProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex");
-    expect(mainProfile.runtimeLimitSnapshot.windows[0].percentRemaining).toBe(94);
+    expect(mainProfile.runtimeLimitSnapshot.windows[1].percentRemaining).toBe(91);
   });
 
-  it("falls back to account-wide live Codex pools when the project root has no matching local sessions", async () => {
-    mockListLatestCodexLimitSnapshots.mockImplementation(
-      async (input: { projectRoot?: string | null; profileId?: string }) => {
-        if (input.projectRoot) {
-          return [];
-        }
-
-        return [
-          {
-            source: "sdk_event",
-            status: "ok",
-            precision: "exact",
-            checkedAt: "2026-04-19T13:19:23.773Z",
-            providerId: "openai",
-            runtimeId: "codex",
-            profileId: input.profileId ?? null,
-            primaryScope: "time",
-            resetAt: "2026-04-19T18:06:04.000Z",
-            retryAfterSeconds: null,
-            warningThreshold: 10,
-            windows: [
-              {
-                scope: "time",
-                name: "5h",
-                percentRemaining: 100,
-                resetAt: "2026-04-19T18:06:04.000Z",
-                warningThreshold: 10,
-              },
-              {
-                scope: "time",
-                name: "7d",
-                percentRemaining: 91,
-                resetAt: "2026-04-23T16:55:37.000Z",
-                warningThreshold: 10,
-              },
-            ],
-            providerMeta: {
-              limitId: "codex",
-              planType: "pro",
-            },
-          },
-          {
-            source: "sdk_event",
-            status: "ok",
-            precision: "exact",
-            checkedAt: "2026-04-19T13:19:58.695Z",
-            providerId: "openai",
-            runtimeId: "codex",
-            profileId: input.profileId ?? null,
-            primaryScope: "time",
-            resetAt: "2026-04-19T15:09:46.000Z",
-            retryAfterSeconds: null,
-            warningThreshold: 10,
-            windows: [
-              {
-                scope: "time",
-                name: "5h",
-                percentRemaining: 100,
-                resetAt: "2026-04-19T15:09:46.000Z",
-                warningThreshold: 10,
-              },
-              {
-                scope: "time",
-                name: "7d",
-                percentRemaining: 70,
-                resetAt: "2026-04-25T12:57:46.000Z",
-                warningThreshold: 10,
-              },
-            ],
-            providerMeta: {
-              limitId: "codex_bengalfox",
-              planType: "pro",
-            },
-          },
-        ];
-      },
-    );
+  it("falls back to global indexed Codex pools when the project root has no matching scoped head", async () => {
+    mockBuildCodexAuthFingerprint.mockReturnValue("codex-fp-1");
 
     const db = testDb.current;
     db.insert(projects)
@@ -754,6 +870,84 @@ describe("runtimeProfiles API", () => {
         },
       ])
       .run();
+    db.insert(codexLimitHeads)
+      .values([
+        {
+          headKey: buildCodexHeadKey({
+            accountFingerprint: "codex-fp-1",
+            projectRoot: null,
+            limitId: "codex",
+            model: "gpt-5.4",
+          }),
+          accountFingerprint: "codex-fp-1",
+          projectRoot: null,
+          limitId: "codex",
+          model: "gpt-5.4",
+          source: "codex",
+          snapshotJson: JSON.stringify(
+            buildCodexSnapshot({
+              checkedAt: "2026-04-19T13:19:23.773Z",
+              profileId: null,
+              limitId: "codex",
+              windows: [
+                {
+                  scope: "time",
+                  name: "5h",
+                  percentRemaining: 100,
+                  resetAt: "2026-04-19T18:06:04.000Z",
+                },
+                {
+                  scope: "time",
+                  name: "7d",
+                  percentRemaining: 91,
+                  resetAt: "2026-04-23T16:55:37.000Z",
+                },
+              ],
+            }),
+          ),
+          observedAt: "2026-04-19T13:19:23.773Z",
+          sessionId: "global-main",
+          filePath: "/tmp/global-main.jsonl",
+        },
+        {
+          headKey: buildCodexHeadKey({
+            accountFingerprint: "codex-fp-1",
+            projectRoot: null,
+            limitId: "codex_bengalfox",
+            model: "gpt-5.3-codex-spark",
+          }),
+          accountFingerprint: "codex-fp-1",
+          projectRoot: null,
+          limitId: "codex_bengalfox",
+          model: "gpt-5.3-codex-spark",
+          source: "codex",
+          snapshotJson: JSON.stringify(
+            buildCodexSnapshot({
+              checkedAt: "2026-04-19T13:19:58.695Z",
+              profileId: null,
+              limitId: "codex_bengalfox",
+              windows: [
+                {
+                  scope: "time",
+                  name: "5h",
+                  percentRemaining: 100,
+                  resetAt: "2026-04-19T15:09:46.000Z",
+                },
+                {
+                  scope: "time",
+                  name: "7d",
+                  percentRemaining: 70,
+                  resetAt: "2026-04-25T12:57:46.000Z",
+                },
+              ],
+            }),
+          ),
+          observedAt: "2026-04-19T13:19:58.695Z",
+          sessionId: "global-spark",
+          filePath: "/tmp/global-spark.jsonl",
+        },
+      ])
+      .run();
 
     const res = await app.request("/runtime-profiles?projectId=project-1&includeGlobal=true");
     expect(res.status).toBe(200);
@@ -762,7 +956,6 @@ describe("runtimeProfiles API", () => {
       (profile: { id: string }) => profile.id === "profile-codex-spark",
     );
     const mainProfile = body.find((profile: { id: string }) => profile.id === "profile-codex-main");
-    expect(mockListLatestCodexLimitSnapshots).toHaveBeenCalledTimes(2);
     expect(sparkProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex_bengalfox");
     expect(sparkProfile.runtimeLimitSnapshot.windows[1].percentRemaining).toBe(70);
     expect(mainProfile.runtimeLimitSnapshot.providerMeta.limitId).toBe("codex");

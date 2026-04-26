@@ -59,28 +59,28 @@ The API exposes effective selection endpoints:
 
 ## Supported Runtimes
 
-| Runtime      | Provider     | Transports    | Resume         | Sessions       | Agent Defs    | Usage Reporting               | Light Model         | Status                    |
-| ------------ | ------------ | ------------- | -------------- | -------------- | ------------- | ----------------------------- | ------------------- | ------------------------- |
-| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI)  | Yes (SDK/CLI)  | Yes (SDK/CLI) | `FULL` (all transports)       | `claude-haiku-3-5`  | Built-in                  |
-| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK only) | Yes (SDK only) | No            | `FULL` SDK/API, `PARTIAL` CLI | default             | Built-in                  |
-| `opencode`   | `opencode`   | API           | Yes            | Yes            | No            | `NONE`                        | null (configurable) | Built-in                  |
-| `openrouter` | `openrouter` | API           | No             | No             | No            | `FULL`                        | null (configurable) | Built-in                  |
-| Custom       | Any          | Any           | Configurable   | Configurable   | Configurable  | Must declare                  | Configurable        | Via `AIF_RUNTIME_MODULES` |
+| Runtime      | Provider     | Transports    | Resume        | Sessions             | Agent Defs    | Usage Reporting               | Light Model         | Status                    |
+| ------------ | ------------ | ------------- | ------------- | -------------------- | ------------- | ----------------------------- | ------------------- | ------------------------- |
+| `claude`     | `anthropic`  | SDK, CLI, API | Yes (SDK/CLI) | Yes (SDK/CLI)        | Yes (SDK/CLI) | `FULL` (all transports)       | `claude-haiku-3-5`  | Built-in                  |
+| `codex`      | `openai`     | SDK, CLI, API | Yes (SDK/CLI) | Yes (SDK/App Server) | No            | `FULL` SDK/API, `PARTIAL` CLI | default             | Built-in                  |
+| `opencode`   | `opencode`   | API           | Yes           | Yes                  | No            | `NONE`                        | null (configurable) | Built-in                  |
+| `openrouter` | `openrouter` | API           | No            | No                   | No            | `FULL`                        | null (configurable) | Built-in                  |
+| Custom       | Any          | Any           | Configurable  | Configurable         | Configurable  | Must declare                  | Configurable        | Via `AIF_RUNTIME_MODULES` |
 
-Capabilities are **transport-aware**: the same adapter may expose different capabilities depending on the selected transport. For example, the Codex adapter supports resume/sessions via SDK transport but not via CLI. Use `resolveAdapterCapabilities(adapter, transport)` to get the effective set.
+Capabilities are **transport-aware**: the same adapter may expose different capabilities depending on the selected transport. For example, Codex supports resume on SDK/CLI, while session discovery remains SDK/App Server-only. Use `resolveAdapterCapabilities(adapter, transport)` to get the effective set.
 
 ### Runtime-limit observability
 
 Runtime-limit auto-pause depends on what each provider/transport can actually surface. The runtime layer normalizes these inputs into the shared `runtimeLimitSnapshot` contract and marks each snapshot as either `exact` or `heuristic`.
 
-| Runtime / transport | Limit source                            | Precision   | Notes                                                                                                                                          |
-| ------------------- | --------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude SDK / CLI    | Claude `rate_limit_event`               | `heuristic` | Structured qualitative status with reset timestamps (`status`, `resetsAt`, `overageStatus`, `isUsingOverage`, ...)                             |
-| Claude API          | Anthropic rate-limit headers            | `exact`     | Exact request/token limits and reset times from `anthropic-ratelimit-*` + `retry-after`                                                        |
-| Codex API           | OpenAI-compatible rate-limit headers    | `exact`     | Exact request/token limits and reset times from `x-ratelimit-*` + `retry-after`                                                                |
-| Codex SDK / CLI     | Codex session `token_count.rate_limits` | `exact`     | Reads the persisted Codex session log (`~/.codex/sessions/...jsonl`) and normalizes the latest `5h` / `7d` percentage windows plus reset times |
-| OpenRouter API      | OpenAI-compatible rate-limit headers    | `exact`     | Uses `x-ratelimit-*` / `retry-after` when the upstream provides them                                                                           |
-| OpenCode API        | structured error metadata               | `heuristic` | Preserves `resetAt` / retry hints on rate-limit errors, but no proactive normalized snapshot is emitted today                                  |
+| Runtime / transport | Limit source                            | Precision   | Notes                                                                                                                                                                                                         |
+| ------------------- | --------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude SDK / CLI    | Claude `rate_limit_event`               | `heuristic` | Structured qualitative status with reset timestamps (`status`, `resetsAt`, `overageStatus`, `isUsingOverage`, ...)                                                                                            |
+| Claude API          | Anthropic rate-limit headers            | `exact`     | Exact request/token limits and reset times from `anthropic-ratelimit-*` + `retry-after`                                                                                                                       |
+| Codex API           | OpenAI-compatible rate-limit headers    | `exact`     | Exact request/token limits and reset times from `x-ratelimit-*` + `retry-after`                                                                                                                               |
+| Codex SDK / CLI     | Codex session `token_count.rate_limits` | `exact`     | API background indexing tails persisted Codex session logs into SQLite (`codex_limit_heads`/`codex_limit_history`); `/runtime-profiles` overlays read from that index instead of per-request filesystem scans |
+| OpenRouter API      | OpenAI-compatible rate-limit headers    | `exact`     | Uses `x-ratelimit-*` / `retry-after` when the upstream provides them                                                                                                                                          |
+| OpenCode API        | structured error metadata               | `heuristic` | Preserves `resetAt` / retry hints on rate-limit errors, but no proactive normalized snapshot is emitted today                                                                                                 |
 
 Auto-pause semantics follow the precision:
 

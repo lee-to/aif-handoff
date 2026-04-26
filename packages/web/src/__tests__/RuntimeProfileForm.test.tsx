@@ -50,6 +50,13 @@ function createDeferredResult() {
   return { promise, resolve };
 }
 
+async function flushModelDiscoveryDebounce() {
+  await act(async () => {
+    vi.advanceTimersByTime(350);
+    await Promise.resolve();
+  });
+}
+
 describe("RuntimeProfileForm", () => {
   beforeEach(() => {
     mockRuntimeModels.isPending = false;
@@ -65,6 +72,7 @@ describe("RuntimeProfileForm", () => {
   });
 
   it("uses runtime default transport, keeps manual model input, and stores codex effort separately", async () => {
+    vi.useFakeTimers();
     mockRuntimeModels.mutateAsync.mockResolvedValue({
       models: [
         {
@@ -100,18 +108,19 @@ describe("RuntimeProfileForm", () => {
 
     expect(screen.getByText("Leave empty to auto-fill from selected runtime")).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(mockRuntimeModels.mutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          projectId: "project-1",
-          profile: expect.objectContaining({
-            runtimeId: "codex",
-            transport: "cli",
-          }),
-          forceRefresh: false,
+    await flushModelDiscoveryDebounce();
+    expect(mockRuntimeModels.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "project-1",
+        profile: expect.objectContaining({
+          runtimeId: "codex",
+          transport: "cli",
         }),
-      );
-    });
+        forceRefresh: false,
+      }),
+    );
+    expect(screen.getByDisplayValue("gpt-5.4")).toBeInTheDocument();
+    vi.useRealTimers();
 
     fireEvent.change(screen.getByDisplayValue("gpt-5.4"), {
       target: { value: "gpt-5.4-custom" },
@@ -121,7 +130,7 @@ describe("RuntimeProfileForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "XHIGH" }));
     fireEvent.click(screen.getByRole("button", { name: /create profile/i }));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "Codex",

@@ -39,6 +39,9 @@ const {
   resolveEffectiveRuntimeProfile,
   toTaskResponse,
   evaluateRuntimeLimitGate,
+  upsertCodexLimitHeads,
+  listCodexLimitHeadsForOverlay,
+  findPreferredCodexLimitHeadForOverlay,
 } = dataModule;
 
 const dataModuleWithAppSettings = dataModule as unknown as {
@@ -901,6 +904,123 @@ describe("runtime profiles data layer", () => {
       defaultReviewRuntimeProfileId: null,
       defaultChatRuntimeProfileId: null,
     });
+  });
+
+  it("lists Codex limit-head overlays with project scope preferred over global", () => {
+    upsertCodexLimitHeads([
+      {
+        accountFingerprint: "acct-1",
+        projectRoot: null,
+        limitId: "codex",
+        snapshot: {
+          ...makeLimitSnapshot(),
+          runtimeId: "codex",
+          providerId: "openai",
+          checkedAt: "2026-04-23T10:00:00.000Z",
+        },
+        observedAt: "2026-04-23T10:00:00.000Z",
+      },
+      {
+        accountFingerprint: "acct-1",
+        projectRoot: "/tmp/test",
+        limitId: "codex",
+        snapshot: {
+          ...makeLimitSnapshot(),
+          runtimeId: "codex",
+          providerId: "openai",
+          checkedAt: "2026-04-23T12:00:00.000Z",
+        },
+        observedAt: "2026-04-23T12:00:00.000Z",
+      },
+    ]);
+
+    const rows = listCodexLimitHeadsForOverlay({
+      accountFingerprint: "acct-1",
+      projectRoot: "/tmp/test",
+      includeGlobalFallback: true,
+      limitId: "codex",
+      limit: 5,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].projectRoot).toBe("/tmp/test");
+    expect(rows[1].projectRoot).toBeNull();
+    expect(rows[0].snapshot?.providerId).toBe("openai");
+  });
+
+  it("normalizes Codex project roots for limit-head overlay lookups", () => {
+    upsertCodexLimitHeads([
+      {
+        accountFingerprint: "acct-normalized",
+        projectRoot: "C:\\Projects\\AIF\\",
+        limitId: "codex",
+        snapshot: {
+          ...makeLimitSnapshot(),
+          runtimeId: "codex",
+          providerId: "openai",
+          checkedAt: "2026-04-23T12:00:00.000Z",
+        },
+        observedAt: "2026-04-23T12:00:00.000Z",
+      },
+    ]);
+
+    const rows = listCodexLimitHeadsForOverlay({
+      accountFingerprint: "acct-normalized",
+      projectRoot: "c:/projects/aif",
+      includeGlobalFallback: false,
+      limitId: "codex",
+      limit: 5,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].projectRoot).toBe("c:/projects/aif");
+  });
+
+  it("finds preferred Codex overlay head and supports disabling global fallback", () => {
+    upsertCodexLimitHeads([
+      {
+        accountFingerprint: "acct-2",
+        projectRoot: null,
+        limitId: "codex",
+        snapshot: {
+          ...makeLimitSnapshot(),
+          runtimeId: "codex",
+          providerId: "openai",
+          checkedAt: "2026-04-23T09:00:00.000Z",
+        },
+        observedAt: "2026-04-23T09:00:00.000Z",
+      },
+      {
+        accountFingerprint: "acct-2",
+        projectRoot: "/tmp/test",
+        limitId: "codex",
+        snapshot: {
+          ...makeLimitSnapshot(),
+          runtimeId: "codex",
+          providerId: "openai",
+          checkedAt: "2026-04-23T11:00:00.000Z",
+        },
+        observedAt: "2026-04-23T11:00:00.000Z",
+      },
+    ]);
+
+    const preferred = findPreferredCodexLimitHeadForOverlay({
+      accountFingerprint: "acct-2",
+      projectRoot: "/tmp/test",
+      includeGlobalFallback: true,
+      limitId: "codex",
+    });
+    expect(preferred).not.toBeNull();
+    expect(preferred?.projectRoot).toBe("/tmp/test");
+
+    const strictRows = listCodexLimitHeadsForOverlay({
+      accountFingerprint: "acct-2",
+      projectRoot: "/tmp/test",
+      includeGlobalFallback: false,
+      limitId: "codex",
+    });
+    expect(strictRows).toHaveLength(1);
+    expect(strictRows[0].projectRoot).toBe("/tmp/test");
   });
 
   it("resolves task override first", () => {

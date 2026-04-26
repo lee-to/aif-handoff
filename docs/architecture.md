@@ -88,6 +88,7 @@ Runtime-limit state is normalized once in `@aif/runtime` and then persisted in S
 - adapters translate provider-specific quota signals into a shared `runtimeLimitSnapshot` contract;
 - `runtime_profiles.runtime_limit_snapshot_json` stores the latest authoritative profile-level state;
 - `tasks.runtime_limit_snapshot_json` stores a task-level copy when work is blocked by quota pressure or hard exhaustion.
+- API runs a background Codex indexer that reconciles `~/.codex/sessions` into SQLite read-model tables (`codex_sessions`, `codex_limit_heads`, `codex_limit_history`, `codex_index_cursors`) so hot endpoints (`/chat/sessions`, `/runtime-profiles`) use DB reads instead of request-path filesystem scans.
 
 The source is explicit in the snapshot (`provider_api`, `sdk_event`, `api_headers`, `turn_usage`) so upper layers do not need adapter-specific branching.
 
@@ -290,6 +291,9 @@ Key tables:
 - **runtime_profiles** — project-scoped or global runtime/provider profiles with non-secret transport/model config plus authoritative runtime-limit state (`runtime_limit_snapshot_json`, `runtime_limit_updated_at`)
 - **projects** — project metadata plus default runtime profile ids for tasks and chat
 - **chat_sessions / chat_messages** — persisted chat state with runtime profile/session linkage
+- **codex_sessions** — indexed Codex session metadata keyed by runtime session id and source file state
+- **codex_limit_heads / codex_limit_history** — latest and recent normalized Codex limit snapshots keyed by account fingerprint/project scope/limit id
+- **codex_index_cursors** — per-indexer progress/watermark state for incremental reconcile
 - **task_comments** — human/agent comments with optional attachments
 
 ### Indexes
@@ -303,6 +307,9 @@ Runtime index bootstrap creates the following indexes via `CREATE INDEX IF NOT E
 - `idx_tasks_project_status` — composite for ordered task-list queries
 - `idx_task_comments_task_id` — comment lookups by task
 - `idx_tasks_locked` — parallel execution: find unlocked or stale-locked tasks
+- `idx_codex_sessions_project_root_updated` / `idx_codex_sessions_file_path` — local Codex session listing and session-id/file-path lookup
+- `idx_codex_limit_heads_lookup` — account/project/limit scoped head overlay queries
+- `idx_codex_limit_history_head` / `idx_codex_limit_history_account` — bounded recent limit history by head and account scope
 
 ## See Also
 

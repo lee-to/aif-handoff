@@ -10,7 +10,10 @@ import { runtimeProfilesRouter } from "./routes/runtimeProfiles.js";
 import { codexAuthRouter } from "./routes/codexAuth.js";
 import { setupWebSocket, closeAllWebSocketClients } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
+import { trackApiLoad } from "./middleware/apiLoad.js";
 import { startServer } from "./serverBootstrap.js";
+import { createCodexIndexService } from "./services/codexIndex.js";
+import { createGracefulShutdownHandler } from "./shutdown.js";
 
 const log = logger("server");
 const startTime = Date.now();
@@ -27,6 +30,7 @@ app.use(
     origin: process.env.CORS_ORIGIN || "http://localhost:5180",
   }),
 );
+app.use("*", trackApiLoad);
 app.use("*", requestLogger);
 
 // Health check
@@ -77,15 +81,15 @@ app.route("/chat", chatRouter);
 app.route("/settings", settingsRoutes);
 app.route("/runtime-profiles", runtimeProfilesRouter);
 
-// Codex OAuth login proxy (feature-flagged — see AIF_ENABLE_CODEX_LOGIN_PROXY).
+// Codex OAuth login proxy (feature-flagged; see AIF_ENABLE_CODEX_LOGIN_PROXY).
 // The /auth/codex/capabilities endpoint is always registered so the frontend can
 // discover whether the feature is available; the mutating endpoints register only
 // when the flag is true.
 if (getEnv().AIF_ENABLE_CODEX_LOGIN_PROXY) {
-  log.info("Codex login proxy enabled — mounting /auth/codex routes");
+  log.info("Codex login proxy enabled - mounting /auth/codex routes");
   app.route("/auth/codex", codexAuthRouter);
 } else {
-  log.debug("Codex login proxy disabled — mounting capabilities endpoint only");
+  log.debug("Codex login proxy disabled - mounting capabilities endpoint only");
   const disabledRouter = new Hono();
   disabledRouter.get("/capabilities", (c) =>
     c.json({ loginProxyEnabled: false, loopbackPort: getEnv().AIF_CODEX_LOGIN_LOOPBACK_PORT }),
@@ -98,35 +102,41 @@ const port = Number(process.env.PORT) || 3009;
 
 // Ensure data layer / DB is ready
 listProjects();
+const codexIndexService = createCodexIndexService();
 
 const server = startServer({
   fetch: app.fetch,
   port,
   injectWebSocket,
+  onStarted() {
+    void codexIndexService.start();
+  },
   logger: log,
 });
 
 // ---------------------------------------------------------------------------
-// Graceful shutdown: close HTTP server + terminate WS clients so Ctrl+C /
-// tsx-watch reload frees port 3009 without a second signal. Without this the
-// open WS connections keep the event loop alive and the next restart hits
-// EADDRINUSE.
+// Graceful shutdown: stop the Codex indexer, close HTTP server, and terminate
+// WS clients so Ctrl+C / tsx-watch reload frees port 3009 without a second
+// signal. Without this the open WS connections keep the event loop alive and
+// the next restart hits EADDRINUSE.
 // ---------------------------------------------------------------------------
-let shuttingDown = false;
-function onShutdown(signal: string): void {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  log.info({ signal }, "Shutdown signal received — terminating WS + exiting");
-  closeAllWebSocketClients();
-  // Fire-and-forget server.close so any in-flight response can drain, but
-  // don't wait for its callback — tsx watch + turbo race on Ctrl+C and
-  // print "Previous process hasn't exited yet. Force killing..." if the
-  // child exit is delayed even briefly. Exit synchronously instead.
-  server.close();
-  process.exit(0);
-}
+const onShutdown = createGracefulShutdownHandler({
+  logger: log,
+  stopCodexIndex: () => codexIndexService.stop(),
+  closeWebSockets: closeAllWebSocketClients,
+  closeServer: () => {
+    server.close();
+  },
+  exitProcess: (code) => {
+    process.exit(code);
+  },
+});
 
-process.on("SIGINT", () => onShutdown("SIGINT"));
-process.on("SIGTERM", () => onShutdown("SIGTERM"));
+process.on("SIGINT", () => {
+  void onShutdown("SIGINT");
+});
+process.on("SIGTERM", () => {
+  void onShutdown("SIGTERM");
+});
 
 export { app, server };

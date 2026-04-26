@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -31,7 +32,7 @@ const AUTH_FILE = join(homedir(), ".codex", "auth.json");
 const SESSION_FILE_PATTERN =
   /(?:^|[/\\])rollout-[^/\\]*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
-interface CodexSessionMeta {
+export interface CodexSessionMeta {
   id: string;
   model?: string;
   prompt?: string;
@@ -39,6 +40,33 @@ interface CodexSessionMeta {
   createdAt: string;
   updatedAt: string;
   filePath?: string;
+}
+
+export interface CodexSessionFileInfo {
+  filePath: string;
+  birthtimeMs: number;
+  mtimeMs: number;
+  size: number;
+}
+
+export interface ListCodexSessionFileInfosInput {
+  sessionsDir?: string;
+  limitNewest?: number;
+  modifiedAfterMs?: number;
+}
+
+export interface CodexIndexedFileState {
+  sizeBytes: number;
+  mtimeMs: number;
+  importVersion: number;
+}
+
+export type CodexSessionFileStatus = "new" | "unchanged" | "appended" | "rewrite" | "missing";
+
+export interface CodexAppendLimitSnapshotsResult {
+  snapshots: RuntimeLimitSnapshot[];
+  parsedOffset: number;
+  pendingTail: string;
 }
 
 interface CodexSessionRateLimitWindow {
@@ -74,12 +102,18 @@ const DEFAULT_WARNING_THRESHOLD = 10;
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
 const DEFAULT_CODEX_LIMIT_ID = "codex";
 const SESSION_META_CACHE_TTL_MS = 30_000;
+const SESSION_META_FILE_CACHE_TTL_MS = 300_000;
 const SESSION_LIMIT_SNAPSHOT_CACHE_TTL_MS = 60_000;
 const LIMIT_SNAPSHOT_SESSION_SCAN_LIMIT = 50;
+const LIMIT_SNAPSHOT_TAIL_CHUNK_BYTES = 64 * 1024;
 
 const sessionMetasCache = createRuntimeMemoryCache<CodexSessionMeta[]>({
   defaultTtlMs: SESSION_META_CACHE_TTL_MS,
   maxSize: 1,
+});
+const sessionMetaByFileCache = createRuntimeMemoryCache<CodexSessionMeta>({
+  defaultTtlMs: SESSION_META_FILE_CACHE_TTL_MS,
+  maxSize: 20_000,
 });
 const sessionLimitSnapshotsCache = createRuntimeMemoryCache<RuntimeLimitSnapshot[]>({
   defaultTtlMs: SESSION_LIMIT_SNAPSHOT_CACHE_TTL_MS,
@@ -232,17 +266,67 @@ export async function getCodexAuthIdentity(): Promise<CodexAuthIdentity | null> 
   };
 }
 
+export function buildCodexAuthFingerprint(
+  identity: CodexAuthIdentity | null | undefined,
+): string | null {
+  if (!identity) {
+    return null;
+  }
+
+  const accountId = identity.accountId?.trim().toLowerCase() ?? "";
+  const accountEmail = identity.accountEmail?.trim().toLowerCase() ?? "";
+  const accountName = identity.accountName?.trim().toLowerCase() ?? "";
+  const authMode = identity.authMode?.trim().toLowerCase() ?? "";
+  const planType = identity.planType?.trim().toLowerCase() ?? "";
+  const stableValue = `${accountId}|${accountEmail}|${accountName}|${authMode}|${planType}`;
+  if (!stableValue.replace(/\|/g, "")) {
+    return null;
+  }
+
+  return createHash("sha256").update(stableValue).digest("hex");
+}
+
+export function readCodexSnapshotAccountFingerprint(
+  snapshot: RuntimeLimitSnapshot | null | undefined,
+): string | null {
+  const providerMeta = asRecord(snapshot?.providerMeta);
+  const embedded = readString(providerMeta?.accountFingerprint);
+  if (embedded) {
+    return embedded;
+  }
+
+  return buildCodexAuthFingerprint({
+    accountId: readString(providerMeta?.accountId) ?? null,
+    authMode: readString(providerMeta?.authMode) ?? null,
+    accountName: readString(providerMeta?.accountName) ?? null,
+    accountEmail: readString(providerMeta?.accountEmail) ?? null,
+    planType: readString(providerMeta?.planType) ?? null,
+  });
+}
+
 function sessionIdFromFilePath(filePath: string): string | null {
   const match = SESSION_FILE_PATTERN.exec(filePath);
   return match?.[1] ?? null;
 }
 
-function normalizePath(value: string | undefined): string | null {
+function readDateMs(value: Date | number | undefined, fallbackMs: number): number {
+  if (value instanceof Date) {
+    const timestamp = value.getTime();
+    return Number.isFinite(timestamp) ? timestamp : fallbackMs;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? value : fallbackMs;
+}
+
+export function normalizeCodexProjectPath(value: string | undefined | null): string | null {
   if (!value) return null;
   return value
     .replace(/[\\/]+/g, "/")
     .replace(/\/$/, "")
     .toLowerCase();
+}
+
+function normalizePath(value: string | undefined): string | null {
+  return normalizeCodexProjectPath(value);
 }
 
 function normalizeSessionResetAt(value: unknown): string | null {
@@ -361,6 +445,7 @@ function buildCodexLimitSnapshot(
     .map((window) => window.resetAt)
     .find((value): value is string => typeof value === "string" && value.length > 0);
   const credits = asRecord(rateLimits.credits) as CodexSessionCredits | null;
+  const accountFingerprint = buildCodexAuthFingerprint(input.authIdentity);
 
   return {
     source: RuntimeLimitSource.SDK_EVENT,
@@ -383,6 +468,7 @@ function buildCodexLimitSnapshot(
       authMode: input.authIdentity?.authMode ?? null,
       accountName: input.authIdentity?.accountName ?? null,
       accountEmail: input.authIdentity?.accountEmail ?? null,
+      accountFingerprint,
       credits: {
         hasCredits: readBoolean(credits?.has_credits),
         unlimited: readBoolean(credits?.unlimited),
@@ -409,7 +495,37 @@ function mapToRuntimeSession(
   };
 }
 
-async function listSessionFiles(dir: string): Promise<string[]> {
+function readSessionDayDirectoryEndMs(dir: string): number | null {
+  const normalized = dir.replace(/[\\/]+/g, "/");
+  const match = /(?:^|\/)(\d{4})\/(\d{2})\/(\d{2})$/.exec(normalized);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const startMs = Date.UTC(year, monthIndex, day);
+  if (!Number.isFinite(startMs)) {
+    return null;
+  }
+  return startMs + 24 * 60 * 60 * 1000 - 1;
+}
+
+function shouldSkipSessionDirectory(dir: string, modifiedAfterMs: number | null): boolean {
+  if (modifiedAfterMs == null) {
+    return false;
+  }
+  const dayEndMs = readSessionDayDirectoryEndMs(dir);
+  return dayEndMs != null && dayEndMs < modifiedAfterMs;
+}
+
+async function collectSessionFileInfos(
+  dir: string,
+  input: {
+    modifiedAfterMs: number | null;
+  },
+): Promise<CodexSessionFileInfo[]> {
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -417,20 +533,64 @@ async function listSessionFiles(dir: string): Promise<string[]> {
     return [];
   }
 
-  const files: string[] = [];
+  const files: CodexSessionFileInfo[] = [];
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await listSessionFiles(fullPath)));
+      if (!shouldSkipSessionDirectory(fullPath, input.modifiedAfterMs)) {
+        files.push(...(await collectSessionFileInfos(fullPath, input)));
+      }
       continue;
     }
 
-    if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-      files.push(fullPath);
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+      continue;
+    }
+
+    try {
+      const info = await stat(fullPath);
+      const mtimeMs = readDateMs(info.mtime, Date.now());
+      if (input.modifiedAfterMs != null && mtimeMs < input.modifiedAfterMs) {
+        continue;
+      }
+      files.push({
+        filePath: fullPath,
+        birthtimeMs: readDateMs(info.birthtime, mtimeMs),
+        mtimeMs,
+        size: typeof info.size === "number" && Number.isFinite(info.size) ? info.size : 0,
+      });
+    } catch {
+      // Session files can disappear while Codex rotates or cleans them up.
     }
   }
 
   return files;
+}
+
+async function listSessionFileInfos(
+  dir: string,
+  input: {
+    limitNewest?: number;
+    modifiedAfterMs?: number;
+  } = {},
+): Promise<CodexSessionFileInfo[]> {
+  const modifiedAfterMs =
+    typeof input.modifiedAfterMs === "number" && Number.isFinite(input.modifiedAfterMs)
+      ? Math.max(0, input.modifiedAfterMs)
+      : null;
+  const files = await collectSessionFileInfos(dir, { modifiedAfterMs });
+  files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const limitNewest =
+    typeof input.limitNewest === "number" && Number.isFinite(input.limitNewest)
+      ? Math.max(0, Math.trunc(input.limitNewest))
+      : null;
+  return limitNewest == null ? files : files.slice(0, limitNewest);
+}
+
+export async function listCodexSessionFileInfos(
+  input?: ListCodexSessionFileInfosInput,
+): Promise<CodexSessionFileInfo[]> {
+  return await listSessionFileInfos(input?.sessionsDir ?? SESSIONS_DIR, input);
 }
 
 // Cap streamed-meta reads: session_meta/turn_context sit on the first handful
@@ -439,20 +599,46 @@ async function listSessionFiles(dir: string): Promise<string[]> {
 // force megabytes of needless I/O when just rendering the sessions list.
 const SESSION_META_MAX_BYTES = 64 * 1024;
 
-async function readSessionMetaFromFile(filePath: string): Promise<CodexSessionMeta | null> {
-  const fallbackId = sessionIdFromFilePath(filePath);
+async function readSessionMetaFromFile(
+  fileInfoOrPath: CodexSessionFileInfo | string,
+): Promise<CodexSessionMeta | null> {
+  let fileInfo: CodexSessionFileInfo;
+  if (typeof fileInfoOrPath === "string") {
+    let info: Awaited<ReturnType<typeof stat>>;
+    try {
+      info = await stat(fileInfoOrPath);
+    } catch {
+      return null;
+    }
+    const mtimeMs = readDateMs(info.mtime, Date.now());
+    fileInfo = {
+      filePath: fileInfoOrPath,
+      birthtimeMs: readDateMs(info.birthtime, mtimeMs),
+      mtimeMs,
+      size: typeof info.size === "number" && Number.isFinite(info.size) ? info.size : 0,
+    };
+  } else {
+    fileInfo = fileInfoOrPath;
+  }
+
+  const fallbackId = sessionIdFromFilePath(fileInfo.filePath);
   if (!fallbackId) return null;
 
-  const info = await stat(filePath);
+  const cacheKey = `${fileInfo.filePath}|${fileInfo.mtimeMs}|${fileInfo.size}`;
+  const cached = sessionMetaByFileCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   let resolvedId = fallbackId;
-  let createdAt = info.birthtime.toISOString();
+  let createdAt = new Date(fileInfo.birthtimeMs).toISOString();
   let model: string | undefined;
   let prompt: string | undefined;
   let cwd: string | undefined;
 
   let stream: ReturnType<typeof createReadStream> | null = null;
   try {
-    stream = createReadStream(filePath, {
+    stream = createReadStream(fileInfo.filePath, {
       encoding: "utf-8",
       end: SESSION_META_MAX_BYTES - 1,
     });
@@ -495,22 +681,30 @@ async function readSessionMetaFromFile(filePath: string): Promise<CodexSessionMe
     return {
       id: fallbackId,
       createdAt,
-      updatedAt: info.mtime.toISOString(),
-      filePath,
+      updatedAt: new Date(fileInfo.mtimeMs).toISOString(),
+      filePath: fileInfo.filePath,
     };
   } finally {
     stream?.destroy();
   }
 
-  return {
+  const meta = {
     id: resolvedId,
     model,
     prompt,
     cwd,
     createdAt,
-    updatedAt: info.mtime.toISOString(),
-    filePath,
+    updatedAt: new Date(fileInfo.mtimeMs).toISOString(),
+    filePath: fileInfo.filePath,
   };
+  sessionMetaByFileCache.set(cacheKey, meta);
+  return meta;
+}
+
+export async function readCodexSessionMetaFromFile(
+  fileInfoOrPath: CodexSessionFileInfo | string,
+): Promise<CodexSessionMeta | null> {
+  return await readSessionMetaFromFile(fileInfoOrPath);
 }
 
 async function readSessionMetas(): Promise<CodexSessionMeta[]> {
@@ -519,9 +713,9 @@ async function readSessionMetas(): Promise<CodexSessionMeta[]> {
     return cached;
   }
 
-  const sessionFiles = await listSessionFiles(SESSIONS_DIR);
+  const sessionFiles = await listSessionFileInfos(SESSIONS_DIR);
   const sessions = (
-    await Promise.all(sessionFiles.map((filePath) => readSessionMetaFromFile(filePath)))
+    await Promise.all(sessionFiles.map((fileInfo) => readSessionMetaFromFile(fileInfo)))
   ).filter((session): session is CodexSessionMeta => Boolean(session));
 
   sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
@@ -529,36 +723,125 @@ async function readSessionMetas(): Promise<CodexSessionMeta[]> {
   return sessions;
 }
 
+async function readSessionMetasLazy(input: {
+  projectRoot?: string | null;
+  limit?: number | null;
+}): Promise<CodexSessionMeta[]> {
+  if (!input.projectRoot && !input.limit) {
+    return await readSessionMetas();
+  }
+
+  const normalizedProjectRoot = normalizePath(input.projectRoot ?? undefined);
+  const fileInfos = await listSessionFileInfos(SESSIONS_DIR);
+  const sessions: CodexSessionMeta[] = [];
+
+  for (const fileInfo of fileInfos) {
+    const session = await readSessionMetaFromFile(fileInfo);
+    if (!session) {
+      continue;
+    }
+    if (normalizedProjectRoot && normalizePath(session.cwd) !== normalizedProjectRoot) {
+      continue;
+    }
+
+    sessions.push(session);
+    if (input.limit && sessions.length >= input.limit) {
+      break;
+    }
+  }
+
+  return sessions;
+}
+
+async function findSessionFileInfoById(sessionId: string): Promise<CodexSessionFileInfo | null> {
+  const sessionFiles = await listSessionFileInfos(SESSIONS_DIR);
+  const filenameMatch = sessionFiles.find(
+    (fileInfo) => sessionIdFromFilePath(fileInfo.filePath) === sessionId,
+  );
+  if (filenameMatch) {
+    return filenameMatch;
+  }
+
+  for (const fileInfo of sessionFiles) {
+    const session = await readSessionMetaFromFile(fileInfo);
+    if (session?.id === sessionId) {
+      return fileInfo;
+    }
+  }
+
+  return null;
+}
+
+export async function findCodexSessionFileInfoById(
+  sessionId: string,
+): Promise<CodexSessionFileInfo | null> {
+  return await findSessionFileInfoById(sessionId);
+}
+
+export function classifyCodexSessionFileStatus(input: {
+  previous: CodexIndexedFileState | null;
+  current: CodexSessionFileInfo | null;
+  importVersion: number;
+}): CodexSessionFileStatus {
+  if (!input.current) {
+    return "missing";
+  }
+  if (!input.previous) {
+    return "new";
+  }
+  if (input.previous.importVersion !== input.importVersion) {
+    return "rewrite";
+  }
+  if (
+    input.previous.mtimeMs === input.current.mtimeMs &&
+    input.previous.sizeBytes === input.current.size
+  ) {
+    return "unchanged";
+  }
+  if (
+    input.current.size > input.previous.sizeBytes &&
+    input.current.mtimeMs >= input.previous.mtimeMs
+  ) {
+    return "appended";
+  }
+  return "rewrite";
+}
+
 export async function listCodexSdkSessions(
   input: RuntimeSessionListInput,
 ): Promise<RuntimeSession[]> {
-  const sessions = await readSessionMetas();
-  const projectRoot = normalizePath(input.projectRoot);
-  const filteredSessions = projectRoot
-    ? sessions.filter((session) => normalizePath(session.cwd) === projectRoot)
-    : sessions;
-  const mapped = filteredSessions.map((session) => mapToRuntimeSession(session, input.profileId));
-  return input.limit ? mapped.slice(0, input.limit) : mapped;
+  const sessions = await readSessionMetasLazy({
+    projectRoot: input.projectRoot,
+    limit: input.limit ?? null,
+  });
+  return sessions.map((session) => mapToRuntimeSession(session, input.profileId));
 }
 
 export async function getCodexSdkSession(
   input: RuntimeSessionGetInput,
 ): Promise<RuntimeSession | null> {
-  const session = (await readSessionMetas()).find((meta) => meta.id === input.sessionId);
+  const fileInfo = await findSessionFileInfoById(input.sessionId);
+  const session = fileInfo ? await readSessionMetaFromFile(fileInfo) : null;
   return session ? mapToRuntimeSession(session, input.profileId) : null;
 }
 
 export async function listCodexSdkSessionEvents(
   input: RuntimeSessionEventsInput,
 ): Promise<RuntimeEvent[]> {
-  const session = (await readSessionMetas()).find((meta) => meta.id === input.sessionId);
-  if (!session?.filePath) {
-    return [];
-  }
+  const fileInfo = await findSessionFileInfoById(input.sessionId);
+  if (!fileInfo) return [];
+  return await readSessionEventsFromFile(fileInfo, { limit: input.limit ?? undefined });
+}
+
+async function readSessionEventsFromFile(
+  fileInfoOrPath: CodexSessionFileInfo | string,
+  input: { limit?: number } = {},
+): Promise<RuntimeEvent[]> {
+  const filePath = typeof fileInfoOrPath === "string" ? fileInfoOrPath : fileInfoOrPath.filePath;
 
   let lines: string[];
   try {
-    const raw = await readFile(session.filePath, "utf-8");
+    const raw = await readFile(filePath, "utf-8");
     lines = raw.split("\n").filter((line) => line.trim().length > 0);
   } catch {
     return [];
@@ -600,6 +883,13 @@ export async function listCodexSdkSessionEvents(
   return input.limit ? events.slice(-input.limit) : events;
 }
 
+export async function readCodexSessionEventsFromFile(
+  fileInfoOrPath: CodexSessionFileInfo | string,
+  input: { limit?: number } = {},
+): Promise<RuntimeEvent[]> {
+  return await readSessionEventsFromFile(fileInfoOrPath, input);
+}
+
 export async function getCodexSessionLimitSnapshot(input: {
   sessionId: string;
   runtimeId: string;
@@ -634,37 +924,84 @@ function isSparkCodexModel(model: string | null | undefined): boolean {
   return normalized?.includes("spark") ?? false;
 }
 
-async function getCodexSessionLimitSnapshots(input: {
-  sessionId: string;
-  runtimeId: string;
-  providerId: string;
-  profileId?: string | null;
-}): Promise<RuntimeLimitSnapshot[]> {
-  const session = (await readSessionMetas()).find((meta) => meta.id === input.sessionId);
-  if (!session?.filePath) {
-    return [];
-  }
+async function readFileRange(input: {
+  filePath: string;
+  start: number;
+  end: number;
+}): Promise<string> {
+  let raw = "";
+  const stream = createReadStream(input.filePath, {
+    encoding: "utf-8",
+    start: input.start,
+    end: input.end,
+  });
 
-  const cacheKey = `${session.filePath}|${session.updatedAt}|${input.runtimeId}|${input.providerId}`;
-  const cached = sessionLimitSnapshotsCache.get(cacheKey);
-  if (cached) {
-    return cached.map((snapshot) => applySnapshotProfileId(snapshot, input.profileId));
-  }
-
-  let lines: string[];
   try {
-    const raw = await readFile(session.filePath, "utf-8");
-    lines = raw.split("\n").filter((line) => line.trim().length > 0);
-  } catch {
-    return [];
+    for await (const chunk of stream) {
+      raw += typeof chunk === "string" ? chunk : String(chunk);
+    }
+  } finally {
+    stream.destroy();
   }
 
-  const authIdentity = await getCodexAuthIdentity();
+  return raw;
+}
+
+async function* readJsonlLinesNewestFirst(fileInfo: CodexSessionFileInfo): AsyncGenerator<string> {
+  if (fileInfo.size <= 0) {
+    const raw = await readFile(fileInfo.filePath, "utf-8");
+    const lines = raw.split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      yield lines[index]!;
+    }
+    return;
+  }
+
+  let position = fileInfo.size;
+  let leadingPartial = "";
+
+  while (position > 0) {
+    const start = Math.max(0, position - LIMIT_SNAPSHOT_TAIL_CHUNK_BYTES);
+    const end = position - 1;
+    const chunk = await readFileRange({ filePath: fileInfo.filePath, start, end });
+    position = start;
+
+    const parts = `${chunk}${leadingPartial}`.split(/\r?\n/);
+    leadingPartial = parts.shift() ?? "";
+    for (let index = parts.length - 1; index >= 0; index -= 1) {
+      yield parts[index]!;
+    }
+  }
+
+  if (leadingPartial) {
+    yield leadingPartial;
+  }
+}
+
+function splitAppendedJsonlLines(raw: string): {
+  lines: string[];
+  pendingTail: string;
+} {
+  const lines = raw.split(/\r?\n/);
+  const pendingTail = lines.pop() ?? "";
+  return { lines, pendingTail };
+}
+
+function collectCodexLimitSnapshotsFromLines(
+  lines: Iterable<string>,
+  input: {
+    runtimeId: string;
+    providerId: string;
+    profileId?: string | null;
+    authIdentity?: CodexAuthIdentity | null;
+    keepLatestPerLimit: boolean;
+  },
+): RuntimeLimitSnapshot[] {
   const snapshotsByLimitId = new Map<string, RuntimeLimitSnapshot>();
   let latestUnknownSnapshot: RuntimeLimitSnapshot | null = null;
 
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const entry = parseJsonLine(lines[index]!);
+  for (const line of lines) {
+    const entry = parseJsonLine(line);
     if (!entry || readString(entry.type) !== "event_msg") continue;
 
     const payload = asRecord(entry.payload);
@@ -676,7 +1013,7 @@ async function getCodexSessionLimitSnapshots(input: {
       providerId: input.providerId,
       profileId: input.profileId ?? null,
       checkedAt: toIso(entry.timestamp as string | number | undefined),
-      authIdentity,
+      authIdentity: input.authIdentity,
     });
     if (!snapshot) {
       continue;
@@ -684,10 +1021,10 @@ async function getCodexSessionLimitSnapshots(input: {
 
     const limitId = readSnapshotLimitId(snapshot);
     if (!limitId) {
-      latestUnknownSnapshot ??= snapshot;
-      continue;
-    }
-    if (!snapshotsByLimitId.has(limitId)) {
+      latestUnknownSnapshot = input.keepLatestPerLimit
+        ? snapshot
+        : (latestUnknownSnapshot ?? snapshot);
+    } else if (input.keepLatestPerLimit || !snapshotsByLimitId.has(limitId)) {
       snapshotsByLimitId.set(limitId, snapshot);
     }
   }
@@ -699,9 +1036,145 @@ async function getCodexSessionLimitSnapshots(input: {
   snapshots.sort(
     (left, right) => parseTimestampMs(right.checkedAt) - parseTimestampMs(left.checkedAt),
   );
+  return snapshots;
+}
+
+export async function readCodexSessionLimitSnapshotsFromAppend(input: {
+  fileInfo: CodexSessionFileInfo;
+  startOffset: number;
+  pendingTail?: string | null;
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+  authIdentity?: CodexAuthIdentity | null;
+}): Promise<CodexAppendLimitSnapshotsResult> {
+  const previousTail = input.pendingTail ?? "";
+  const startOffset =
+    typeof input.startOffset === "number" && Number.isFinite(input.startOffset)
+      ? Math.max(0, Math.trunc(input.startOffset))
+      : 0;
+  if (input.fileInfo.size <= startOffset) {
+    return {
+      snapshots: [],
+      parsedOffset: input.fileInfo.size,
+      pendingTail: previousTail,
+    };
+  }
+
+  try {
+    const appended = await readFileRange({
+      filePath: input.fileInfo.filePath,
+      start: startOffset,
+      end: input.fileInfo.size - 1,
+    });
+    const { lines, pendingTail } = splitAppendedJsonlLines(`${previousTail}${appended}`);
+    const authIdentity = input.authIdentity ?? (await getCodexAuthIdentity());
+    return {
+      snapshots: collectCodexLimitSnapshotsFromLines(lines, {
+        runtimeId: input.runtimeId,
+        providerId: input.providerId,
+        profileId: input.profileId ?? null,
+        authIdentity,
+        keepLatestPerLimit: true,
+      }),
+      parsedOffset: input.fileInfo.size,
+      pendingTail,
+    };
+  } catch {
+    return {
+      snapshots: [],
+      parsedOffset: startOffset,
+      pendingTail: previousTail,
+    };
+  }
+}
+
+export async function readCodexSessionLimitSnapshotsFromFile(
+  fileInfo: CodexSessionFileInfo,
+  input: {
+    runtimeId: string;
+    providerId: string;
+    profileId?: string | null;
+    authIdentity?: CodexAuthIdentity | null;
+    fast?: boolean;
+  },
+): Promise<RuntimeLimitSnapshot[]> {
+  const mode = input.fast ? "fast" : "complete";
+  const cacheKey = `${mode}|${fileInfo.filePath}|${fileInfo.mtimeMs}|${fileInfo.size}|${input.runtimeId}|${input.providerId}`;
+  const cached = sessionLimitSnapshotsCache.get(cacheKey);
+  if (cached) {
+    return cached.map((snapshot) => applySnapshotProfileId(snapshot, input.profileId));
+  }
+
+  const authIdentity = input.authIdentity ?? (await getCodexAuthIdentity());
+  const lines: string[] = [];
+
+  try {
+    for await (const line of readJsonlLinesNewestFirst(fileInfo)) {
+      lines.push(line);
+
+      const entry = parseJsonLine(line);
+      const payload =
+        entry && readString(entry.type) === "event_msg" ? asRecord(entry.payload) : null;
+      const snapshot =
+        payload && readString(payload.type) === "token_count"
+          ? buildCodexLimitSnapshot(payload.rate_limits, {
+              runtimeId: input.runtimeId,
+              providerId: input.providerId,
+              profileId: input.profileId ?? null,
+              checkedAt: toIso(entry?.timestamp as string | number | undefined),
+              authIdentity,
+            })
+          : null;
+      if (input.fast && snapshot) {
+        break;
+      }
+    }
+  } catch {
+    return [];
+  }
+
+  const snapshots = collectCodexLimitSnapshotsFromLines(lines, {
+    runtimeId: input.runtimeId,
+    providerId: input.providerId,
+    profileId: input.profileId ?? null,
+    authIdentity,
+    keepLatestPerLimit: false,
+  });
   const normalizedSnapshots = snapshots.map((snapshot) => ({ ...snapshot, profileId: null }));
   sessionLimitSnapshotsCache.set(cacheKey, normalizedSnapshots);
   return normalizedSnapshots.map((snapshot) => applySnapshotProfileId(snapshot, input.profileId));
+}
+
+export async function readLatestCodexSessionLimitSnapshotFromFile(input: {
+  fileInfo: CodexSessionFileInfo;
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+  authIdentity?: CodexAuthIdentity | null;
+}): Promise<RuntimeLimitSnapshot | null> {
+  const snapshots = await readCodexSessionLimitSnapshotsFromFile(input.fileInfo, {
+    runtimeId: input.runtimeId,
+    providerId: input.providerId,
+    profileId: input.profileId ?? null,
+    authIdentity: input.authIdentity ?? null,
+    fast: true,
+  });
+  return snapshots[0] ?? null;
+}
+
+async function getCodexSessionLimitSnapshots(input: {
+  sessionId: string;
+  runtimeId: string;
+  providerId: string;
+  profileId?: string | null;
+}): Promise<RuntimeLimitSnapshot[]> {
+  const fileInfo = await findSessionFileInfoById(input.sessionId);
+  if (!fileInfo) {
+    return [];
+  }
+
+  return await readCodexSessionLimitSnapshotsFromFile(fileInfo, input);
 }
 
 export async function listLatestCodexLimitSnapshots(input: {
@@ -720,24 +1193,33 @@ export async function listLatestCodexLimitSnapshots(input: {
   if (cached) {
     return cached.map((snapshot) => applySnapshotProfileId(snapshot, input.profileId));
   }
-  const sessions = await readSessionMetas();
-  const matching = normalizedProjectRoot
-    ? sessions.filter((session) => normalizePath(session.cwd) === normalizedProjectRoot)
-    : sessions;
-  // readSessionMetas returns sessions sorted by updatedAt desc; rate_limits are
-  // point-in-time data carried by the most recent token_count events — old
-  // sessions contribute stale or duplicate pool entries, so cap the scan.
-  const candidates = matching.slice(0, LIMIT_SNAPSHOT_SESSION_SCAN_LIMIT);
-
+  const sessionFiles = await listSessionFileInfos(SESSIONS_DIR);
+  const candidates: CodexSessionFileInfo[] = [];
+  for (const fileInfo of sessionFiles) {
+    if (normalizedProjectRoot) {
+      const session = await readSessionMetaFromFile(fileInfo);
+      if (!session || normalizePath(session.cwd) !== normalizedProjectRoot) {
+        continue;
+      }
+    }
+    candidates.push(fileInfo);
+    if (candidates.length >= LIMIT_SNAPSHOT_SESSION_SCAN_LIMIT) {
+      break;
+    }
+  }
+  // Rate limits are point-in-time data in recent token_count events, so scan
+  // only the newest matching files instead of hydrating all session metadata.
   const latestSnapshotsByLimitId = new Map<string, RuntimeLimitSnapshot>();
   let latestUnknownSnapshot: RuntimeLimitSnapshot | null = null;
+  const authIdentity = await getCodexAuthIdentity();
 
-  for (const session of candidates) {
-    const snapshots = await getCodexSessionLimitSnapshots({
-      sessionId: session.id,
+  for (const fileInfo of candidates) {
+    const snapshots = await readCodexSessionLimitSnapshotsFromFile(fileInfo, {
       runtimeId: input.runtimeId,
       providerId: input.providerId,
       profileId: input.profileId ?? null,
+      authIdentity,
+      fast: true,
     });
     for (const snapshot of snapshots) {
       const limitId = readSnapshotLimitId(snapshot);
@@ -813,21 +1295,28 @@ export async function getLatestCodexModelLimitSnapshot(input: {
   }
 
   const normalizedProjectRoot = normalizePath(input.projectRoot ?? undefined);
-  const sessions = await readSessionMetas();
-  const candidates = sessions.filter((session) => {
-    if (normalizedProjectRoot && normalizePath(session.cwd) !== normalizedProjectRoot) {
-      return false;
-    }
-    return normalizeModelIdentifier(session.model ?? null) === targetModel;
-  });
+  const sessionFiles = await listSessionFileInfos(SESSIONS_DIR);
 
-  for (const session of candidates) {
-    const snapshot = await getCodexSessionLimitSnapshot({
-      sessionId: session.id,
-      runtimeId: input.runtimeId,
-      providerId: input.providerId,
-      profileId: input.profileId ?? null,
-    });
+  for (const fileInfo of sessionFiles) {
+    const session = await readSessionMetaFromFile(fileInfo);
+    if (!session) {
+      continue;
+    }
+    if (normalizedProjectRoot && normalizePath(session.cwd) !== normalizedProjectRoot) {
+      continue;
+    }
+    if (normalizeModelIdentifier(session.model ?? null) !== targetModel) {
+      continue;
+    }
+
+    const snapshot = (
+      await readCodexSessionLimitSnapshotsFromFile(fileInfo, {
+        runtimeId: input.runtimeId,
+        providerId: input.providerId,
+        profileId: input.profileId ?? null,
+        fast: true,
+      })
+    )[0];
     if (snapshot) {
       return snapshot;
     }

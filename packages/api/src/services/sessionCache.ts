@@ -16,6 +16,16 @@ const DEFAULT_TTL_MS = 10_000; // 10 seconds
 
 const cache = new Map<string, CacheEntry<unknown>>();
 
+function normalizeRuntimeId(runtimeId: string): string {
+  return runtimeId.trim().toLowerCase();
+}
+
+export function shouldUseSessionCacheForRuntime(runtimeId: string): boolean {
+  // Codex local-session reads are served from the DB index and should not
+  // reuse the legacy scan cache path.
+  return normalizeRuntimeId(runtimeId) !== "codex";
+}
+
 export function getCached<T>(key: string): T | undefined {
   const entry = cache.get(key);
   if (!entry) return undefined;
@@ -48,7 +58,7 @@ export function invalidateAllSessionCaches(): void {
  * `dir` may be empty for runtimes that don't require project-root scoping.
  */
 export function sessionCacheKey(runtimeId: string, profileId: string | null, dir?: string): string {
-  const normalizedRuntimeId = runtimeId.trim().toLowerCase();
+  const normalizedRuntimeId = normalizeRuntimeId(runtimeId);
   const normalizedProfileId = profileId?.trim() || "default";
   const normalizedDir = dir?.trim() || "none";
   return `runtime-sessions:${normalizedRuntimeId}:${normalizedProfileId}:${normalizedDir}`;

@@ -23,6 +23,46 @@ describe("db", () => {
     expect(db).toBeDefined();
   });
 
+  it("creates Codex index tables for fresh databases", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-codex-index-${Date.now()}-${Math.random()}.sqlite`);
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const sqlite = new Database(dbPath, { readonly: true });
+      const tableNames = sqlite
+        .prepare(
+          `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table'
+            AND name IN (
+              'codex_sessions',
+              'codex_session_files',
+              'codex_limit_heads',
+              'codex_limit_history',
+              'codex_index_cursors'
+            )
+        `,
+        )
+        .all() as Array<{ name: string }>;
+      sqlite.close();
+
+      expect(tableNames.map((row) => row.name).sort()).toEqual([
+        "codex_index_cursors",
+        "codex_limit_heads",
+        "codex_limit_history",
+        "codex_session_files",
+        "codex_sessions",
+      ]);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
+  });
+
   it("index bootstrap is idempotent — calling createTestDb twice does not throw", () => {
     // Each call runs ensureTables + ensureIndexes with CREATE INDEX IF NOT EXISTS
     const db1 = createTestDb();
@@ -348,7 +388,7 @@ describe("db", () => {
       expect(runtimeProfileColumns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
       );
-      expect(userVersion).toBe(15);
+      expect(userVersion).toBe(17);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
@@ -413,7 +453,7 @@ describe("db", () => {
       expect(profileColumns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
       );
-      expect(userVersion).toBe(15);
+      expect(userVersion).toBe(17);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);

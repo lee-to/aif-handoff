@@ -812,6 +812,49 @@ describe("Codex SDK session store parsing", () => {
     expect(latest?.providerMeta?.limitId).toBe("codex_bengalfox");
   });
 
+  it("filters Codex session file inventory by modified time and skips old dated directories", async () => {
+    const oldDir = join(sessionsRoot, "2026", "04", "01");
+    const recentDir = join(sessionsRoot, "2026", "04", "10");
+    const oldFile = join(oldDir, `rollout-2026-04-01T10-00-00-${olderSessionId}.jsonl`);
+    const recentFile = join(recentDir, `rollout-2026-04-10T10-00-00-${newerSessionId}.jsonl`);
+    readdirMock.mockImplementation(async (target: string) => {
+      switch (target) {
+        case sessionsRoot:
+          return [dirEntry("2026")];
+        case join(sessionsRoot, "2026"):
+          return [dirEntry("04")];
+        case join(sessionsRoot, "2026", "04"):
+          return [dirEntry("01"), dirEntry("10")];
+        case oldDir:
+          return [fileEntry(`rollout-2026-04-01T10-00-00-${olderSessionId}.jsonl`)];
+        case recentDir:
+          return [fileEntry(`rollout-2026-04-10T10-00-00-${newerSessionId}.jsonl`)];
+        default:
+          return [];
+      }
+    });
+    statMock.mockImplementation(async (target: string) => {
+      if (target === oldFile) {
+        throw new Error("Old dated session directory should not be statted");
+      }
+      if (target === recentFile) {
+        return {
+          birthtime: new Date("2026-04-10T10:00:00.000Z"),
+          mtime: new Date("2026-04-10T10:01:00.000Z"),
+          size: 10,
+        };
+      }
+      throw new Error(`Unexpected stat path: ${target}`);
+    });
+
+    const files = await sessionsModule.listCodexSessionFileInfos({
+      modifiedAfterMs: Date.parse("2026-04-03T00:00:00.000Z"),
+    });
+
+    expect(files.map((file) => file.filePath)).toEqual([recentFile]);
+    expect(statMock).not.toHaveBeenCalledWith(oldFile);
+  });
+
   it("parses appended limit snapshots from a stored offset and carries an incomplete tail", async () => {
     const appendFile = join(aprilDir, `rollout-2026-04-08T22-41-48-${newerSessionId}.jsonl`);
     const completeLine = JSON.stringify({

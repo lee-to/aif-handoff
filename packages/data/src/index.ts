@@ -9,6 +9,7 @@ import {
   isNotNull,
   isNull,
   like,
+  lt,
   lte,
   max,
   min,
@@ -2777,6 +2778,18 @@ export interface CodexLimitHeadScopeRow {
   filePath: string | null;
 }
 
+export interface PruneCodexLimitRowsBeforeObservedAtResult {
+  deletedScopes: CodexLimitHeadScopeRow[];
+  headRowsDeleted: number;
+  historyRowsDeleted: number;
+}
+
+export interface PruneStaleCodexSessionIndexRowsResult {
+  sessionRowsDeleted: number;
+  fileRowsDeleted: number;
+  linkedRowsRetained: number;
+}
+
 function normalizeCodexProjectRoot(projectRoot: string | null | undefined): string | null {
   if (typeof projectRoot !== "string") return null;
   const trimmed = projectRoot.trim();
@@ -3022,6 +3035,94 @@ export function deleteCodexSessionsByFilePaths(filePaths: string[]): number {
   return totalChanges;
 }
 
+export function deleteCodexSessionFilesByFilePaths(filePaths: string[]): number {
+  if (filePaths.length === 0) {
+    return 0;
+  }
+  let totalChanges = 0;
+  for (let i = 0; i < filePaths.length; i += CODEX_FILEPATH_IN_ARRAY_BATCH) {
+    const chunk = filePaths.slice(i, i + CODEX_FILEPATH_IN_ARRAY_BATCH);
+    const result = getDb()
+      .delete(codexSessionFiles)
+      .where(inArray(codexSessionFiles.filePath, chunk))
+      .run();
+    totalChanges += result.changes;
+  }
+  log.debug(
+    { requestedCount: filePaths.length, deletedRows: totalChanges },
+    "Deleted codex session-file rows by file paths",
+  );
+  return totalChanges;
+}
+
+export function pruneStaleCodexSessionIndexRows(input: {
+  mtimeBeforeMs: number;
+}): PruneStaleCodexSessionIndexRowsResult {
+  if (!Number.isFinite(input.mtimeBeforeMs)) {
+    return { sessionRowsDeleted: 0, fileRowsDeleted: 0, linkedRowsRetained: 0 };
+  }
+
+  const mtimeBeforeMs = Math.max(0, Math.trunc(input.mtimeBeforeMs));
+  const linkedRows = getDb()
+    .select({
+      runtimeSessionId: chatSessions.runtimeSessionId,
+      agentSessionId: chatSessions.agentSessionId,
+    })
+    .from(chatSessions)
+    .all();
+  const linkedSessionIds = new Set<string>();
+  for (const row of linkedRows) {
+    if (row.runtimeSessionId) linkedSessionIds.add(row.runtimeSessionId);
+    if (row.agentSessionId) linkedSessionIds.add(row.agentSessionId);
+  }
+
+  const staleSessionRows = getDb()
+    .select({ filePath: codexSessions.filePath, sessionId: codexSessions.sessionId })
+    .from(codexSessions)
+    .where(lt(codexSessions.mtimeMs, mtimeBeforeMs))
+    .all();
+  const staleFileRows = getDb()
+    .select({ filePath: codexSessionFiles.filePath, sessionId: codexSessionFiles.sessionId })
+    .from(codexSessionFiles)
+    .where(lt(codexSessionFiles.mtimeMs, mtimeBeforeMs))
+    .all();
+
+  const candidatePaths = new Set<string>();
+  const linkedPaths = new Set<string>();
+  const retainedLinkedSessionIds = new Set<string>();
+  for (const row of [...staleSessionRows, ...staleFileRows]) {
+    if (!row.filePath) {
+      continue;
+    }
+    candidatePaths.add(row.filePath);
+    if (row.sessionId != null && linkedSessionIds.has(row.sessionId)) {
+      retainedLinkedSessionIds.add(row.sessionId);
+      linkedPaths.add(row.filePath);
+    }
+  }
+
+  const filePaths = [...candidatePaths].filter((filePath) => !linkedPaths.has(filePath));
+  const sessionRowsDeleted = deleteCodexSessionsByFilePaths(filePaths);
+  const fileRowsDeleted = deleteCodexSessionFilesByFilePaths(filePaths);
+  log.debug(
+    {
+      mtimeBeforeMs,
+      candidateSessionRows: staleSessionRows.length,
+      candidateFileRows: staleFileRows.length,
+      deletedPathCount: filePaths.length,
+      sessionRowsDeleted,
+      fileRowsDeleted,
+      linkedRowsRetained: retainedLinkedSessionIds.size,
+    },
+    "Pruned stale codex session index rows",
+  );
+  return {
+    sessionRowsDeleted,
+    fileRowsDeleted,
+    linkedRowsRetained: retainedLinkedSessionIds.size,
+  };
+}
+
 export function listCodexLimitHeadScopesByFilePaths(
   filePaths: string[],
 ): CodexLimitHeadScopeRow[] {
@@ -3088,6 +3189,45 @@ export function deleteCodexLimitHistoryByFilePaths(filePaths: string[]): number 
     "Deleted codex limit-history rows by file paths",
   );
   return totalChanges;
+}
+
+export function pruneCodexLimitRowsBeforeObservedAt(
+  observedBefore: string,
+): PruneCodexLimitRowsBeforeObservedAtResult {
+  const trimmedObservedBefore = observedBefore.trim();
+  if (trimmedObservedBefore.length === 0) {
+    return { deletedScopes: [], headRowsDeleted: 0, historyRowsDeleted: 0 };
+  }
+
+  const deletedScopes = getDb()
+    .select({
+      headKey: codexLimitHeads.headKey,
+      projectRoot: codexLimitHeads.projectRoot,
+      observedAt: codexLimitHeads.observedAt,
+      filePath: codexLimitHeads.filePath,
+    })
+    .from(codexLimitHeads)
+    .where(lt(codexLimitHeads.observedAt, trimmedObservedBefore))
+    .all();
+  const headRowsDeleted = getDb()
+    .delete(codexLimitHeads)
+    .where(lt(codexLimitHeads.observedAt, trimmedObservedBefore))
+    .run().changes;
+  const historyRowsDeleted = getDb()
+    .delete(codexLimitHistory)
+    .where(lt(codexLimitHistory.observedAt, trimmedObservedBefore))
+    .run().changes;
+
+  log.debug(
+    {
+      observedBefore: trimmedObservedBefore,
+      deletedScopeCount: deletedScopes.length,
+      headRowsDeleted,
+      historyRowsDeleted,
+    },
+    "Pruned stale codex limit rows by observed time",
+  );
+  return { deletedScopes, headRowsDeleted, historyRowsDeleted };
 }
 
 export function upsertCodexLimitHeads(rows: UpsertCodexLimitHeadInput[]): number {

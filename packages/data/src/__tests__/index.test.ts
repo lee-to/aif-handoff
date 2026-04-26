@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { codexLimitHeads, codexLimitHistory, codexSessionFiles, codexSessions, projects, tasks } from "@aif/shared";
+import {
+  codexLimitHeads,
+  codexLimitHistory,
+  codexSessionFiles,
+  codexSessions,
+  projects,
+  tasks,
+} from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
@@ -59,12 +66,15 @@ const {
   listAutoQueueProjects,
   countActivePipelineTasksForProject,
   claimBacklogTaskForAdvance,
+  createChatSession,
   upsertCodexSessions,
   upsertCodexSessionFiles,
   upsertCodexLimitHeads,
   appendCodexLimitHistory,
   pruneCodexLimitHistoryByHead,
   pruneCodexLimitHistoryRetention,
+  pruneCodexLimitRowsBeforeObservedAt,
+  pruneStaleCodexSessionIndexRows,
   deleteCodexLimitHeadsByFilePaths,
   deleteCodexLimitHistoryByFilePaths,
   listCodexLimitHeadScopesByFilePaths,
@@ -1342,6 +1352,163 @@ describe("data layer", () => {
       const remainingHistory = testDb.current.select().from(codexLimitHistory).all();
       expect(remainingHeads).toHaveLength(0);
       expect(remainingHistory).toHaveLength(0);
+    });
+
+    it("deletes stale codex limit rows by observed time and returns deleted scopes", () => {
+      const oldSnapshot = makeCodexSnapshot("2026-04-10T10:00:00.000Z");
+      const freshSnapshot = makeCodexSnapshot("2026-04-20T10:00:00.000Z");
+      upsertCodexLimitHeads([
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex",
+          snapshot: oldSnapshot,
+          observedAt: oldSnapshot.checkedAt,
+          filePath: "/tmp/codex/old.jsonl",
+        },
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex_bengalfox",
+          snapshot: freshSnapshot,
+          observedAt: freshSnapshot.checkedAt,
+          filePath: "/tmp/codex/fresh.jsonl",
+        },
+      ]);
+      appendCodexLimitHistory([
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex",
+          snapshot: oldSnapshot,
+          observedAt: oldSnapshot.checkedAt,
+          filePath: "/tmp/codex/old.jsonl",
+        },
+        {
+          accountFingerprint: "acct-1",
+          projectRoot: "/tmp/test",
+          limitId: "codex_bengalfox",
+          snapshot: freshSnapshot,
+          observedAt: freshSnapshot.checkedAt,
+          filePath: "/tmp/codex/fresh.jsonl",
+        },
+      ]);
+
+      const result = pruneCodexLimitRowsBeforeObservedAt("2026-04-17T00:00:00.000Z");
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          headRowsDeleted: 1,
+          historyRowsDeleted: 1,
+          deletedScopes: [
+            expect.objectContaining({
+              projectRoot: "/tmp/test",
+              filePath: "/tmp/codex/old.jsonl",
+              observedAt: oldSnapshot.checkedAt,
+            }),
+          ],
+        }),
+      );
+      expect(testDb.current.select().from(codexLimitHeads).all()).toEqual([
+        expect.objectContaining({ filePath: "/tmp/codex/fresh.jsonl" }),
+      ]);
+      expect(testDb.current.select().from(codexLimitHistory).all()).toEqual([
+        expect.objectContaining({ filePath: "/tmp/codex/fresh.jsonl" }),
+      ]);
+    });
+
+    it("prunes stale codex session rows but keeps file lookups linked to saved web chats", () => {
+      createChatSession({
+        projectId: "proj-1",
+        title: "Linked runtime chat",
+        runtimeSessionId: "codex-linked",
+      });
+      upsertCodexSessions([
+        {
+          sessionId: "codex-linked",
+          filePath: "/tmp/codex/linked.jsonl",
+          projectRoot: "/tmp/test",
+          sourceUpdatedAt: "2026-04-01T10:00:00.000Z",
+          sizeBytes: 100,
+          mtimeMs: 100,
+        },
+        {
+          sessionId: "codex-unlinked",
+          filePath: "/tmp/codex/unlinked.jsonl",
+          projectRoot: "/tmp/test",
+          sourceUpdatedAt: "2026-04-01T10:00:00.000Z",
+          sizeBytes: 100,
+          mtimeMs: 100,
+        },
+        {
+          sessionId: "codex-fresh",
+          filePath: "/tmp/codex/fresh.jsonl",
+          projectRoot: "/tmp/test",
+          sourceUpdatedAt: "2026-04-20T10:00:00.000Z",
+          sizeBytes: 100,
+          mtimeMs: 1_000,
+        },
+      ]);
+      upsertCodexSessionFiles([
+        {
+          filePath: "/tmp/codex/linked.jsonl",
+          sessionId: null,
+          sizeBytes: 100,
+          mtimeMs: 100,
+          parsedOffset: 100,
+          pendingTail: "",
+          missing: false,
+          importVersion: 1,
+        },
+        {
+          filePath: "/tmp/codex/unlinked.jsonl",
+          sessionId: "codex-unlinked",
+          sizeBytes: 100,
+          mtimeMs: 100,
+          parsedOffset: 100,
+          pendingTail: "",
+          missing: false,
+          importVersion: 1,
+        },
+        {
+          filePath: "/tmp/codex/fresh.jsonl",
+          sessionId: "codex-fresh",
+          sizeBytes: 100,
+          mtimeMs: 1_000,
+          parsedOffset: 100,
+          pendingTail: "",
+          missing: false,
+          importVersion: 1,
+        },
+      ]);
+
+      const result = pruneStaleCodexSessionIndexRows({ mtimeBeforeMs: 500 });
+
+      expect(result).toEqual({
+        sessionRowsDeleted: 1,
+        fileRowsDeleted: 1,
+        linkedRowsRetained: 1,
+      });
+      expect(testDb.current.select().from(codexSessions).all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sessionId: "codex-linked" }),
+          expect.objectContaining({ sessionId: "codex-fresh" }),
+        ]),
+      );
+      expect(
+        testDb.current
+          .select()
+          .from(codexSessions)
+          .where(eq(codexSessions.sessionId, "codex-unlinked"))
+          .get(),
+      ).toBeUndefined();
+      expect(
+        testDb.current
+          .select()
+          .from(codexSessionFiles)
+          .where(eq(codexSessionFiles.filePath, "/tmp/codex/linked.jsonl"))
+          .get(),
+      ).toBeDefined();
     });
 
     it("upserts and resolves index cursors with parsed JSON", () => {

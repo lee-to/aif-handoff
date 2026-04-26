@@ -49,6 +49,12 @@ export interface CodexSessionFileInfo {
   size: number;
 }
 
+export interface ListCodexSessionFileInfosInput {
+  sessionsDir?: string;
+  limitNewest?: number;
+  modifiedAfterMs?: number;
+}
+
 export interface CodexIndexedFileState {
   sizeBytes: number;
   mtimeMs: number;
@@ -489,7 +495,37 @@ function mapToRuntimeSession(
   };
 }
 
-async function listSessionFileInfos(dir: string): Promise<CodexSessionFileInfo[]> {
+function readSessionDayDirectoryEndMs(dir: string): number | null {
+  const normalized = dir.replace(/[\\/]+/g, "/");
+  const match = /(?:^|\/)(\d{4})\/(\d{2})\/(\d{2})$/.exec(normalized);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const startMs = Date.UTC(year, monthIndex, day);
+  if (!Number.isFinite(startMs)) {
+    return null;
+  }
+  return startMs + 24 * 60 * 60 * 1000 - 1;
+}
+
+function shouldSkipSessionDirectory(dir: string, modifiedAfterMs: number | null): boolean {
+  if (modifiedAfterMs == null) {
+    return false;
+  }
+  const dayEndMs = readSessionDayDirectoryEndMs(dir);
+  return dayEndMs != null && dayEndMs < modifiedAfterMs;
+}
+
+async function collectSessionFileInfos(
+  dir: string,
+  input: {
+    modifiedAfterMs: number | null;
+  },
+): Promise<CodexSessionFileInfo[]> {
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -501,7 +537,9 @@ async function listSessionFileInfos(dir: string): Promise<CodexSessionFileInfo[]
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await listSessionFileInfos(fullPath)));
+      if (!shouldSkipSessionDirectory(fullPath, input.modifiedAfterMs)) {
+        files.push(...(await collectSessionFileInfos(fullPath, input)));
+      }
       continue;
     }
 
@@ -512,6 +550,9 @@ async function listSessionFileInfos(dir: string): Promise<CodexSessionFileInfo[]
     try {
       const info = await stat(fullPath);
       const mtimeMs = readDateMs(info.mtime, Date.now());
+      if (input.modifiedAfterMs != null && mtimeMs < input.modifiedAfterMs) {
+        continue;
+      }
       files.push({
         filePath: fullPath,
         birthtimeMs: readDateMs(info.birthtime, mtimeMs),
@@ -523,20 +564,33 @@ async function listSessionFileInfos(dir: string): Promise<CodexSessionFileInfo[]
     }
   }
 
-  files.sort((left, right) => right.mtimeMs - left.mtimeMs);
   return files;
 }
 
-export async function listCodexSessionFileInfos(input?: {
-  sessionsDir?: string;
-  limitNewest?: number;
-}): Promise<CodexSessionFileInfo[]> {
-  const files = await listSessionFileInfos(input?.sessionsDir ?? SESSIONS_DIR);
+async function listSessionFileInfos(
+  dir: string,
+  input: {
+    limitNewest?: number;
+    modifiedAfterMs?: number;
+  } = {},
+): Promise<CodexSessionFileInfo[]> {
+  const modifiedAfterMs =
+    typeof input.modifiedAfterMs === "number" && Number.isFinite(input.modifiedAfterMs)
+      ? Math.max(0, input.modifiedAfterMs)
+      : null;
+  const files = await collectSessionFileInfos(dir, { modifiedAfterMs });
+  files.sort((left, right) => right.mtimeMs - left.mtimeMs);
   const limitNewest =
-    typeof input?.limitNewest === "number" && Number.isFinite(input.limitNewest)
+    typeof input.limitNewest === "number" && Number.isFinite(input.limitNewest)
       ? Math.max(0, Math.trunc(input.limitNewest))
       : null;
   return limitNewest == null ? files : files.slice(0, limitNewest);
+}
+
+export async function listCodexSessionFileInfos(
+  input?: ListCodexSessionFileInfosInput,
+): Promise<CodexSessionFileInfo[]> {
+  return await listSessionFileInfos(input?.sessionsDir ?? SESSIONS_DIR, input);
 }
 
 // Cap streamed-meta reads: session_meta/turn_context sit on the first handful

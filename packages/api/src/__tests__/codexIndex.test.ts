@@ -11,6 +11,7 @@ const mockAppendCodexLimitHistory = vi.fn(() => 0);
 const mockBuildCodexLimitHeadKey = vi.fn(() => "head-key");
 const mockDeleteCodexLimitHeadsByFilePaths = vi.fn(() => 0);
 const mockDeleteCodexLimitHistoryByFilePaths = vi.fn(() => 0);
+const mockDeleteCodexSessionFilesByFilePaths = vi.fn(() => 0);
 const mockDeleteCodexSessionsByFilePaths = vi.fn(() => 0);
 const mockListCodexLimitHeadScopesByFilePaths = vi.fn(() => [] as Array<Record<string, unknown>>);
 const mockListCodexSessionFileStates = vi.fn(() => [] as Array<Record<string, unknown>>);
@@ -22,6 +23,16 @@ const mockListRuntimeProfileResponses = vi.fn(
 );
 const mockPruneCodexLimitHistoryByHead = vi.fn(() => 0);
 const mockPruneCodexLimitHistoryRetention = vi.fn(() => 0);
+const mockPruneCodexLimitRowsBeforeObservedAt = vi.fn(() => ({
+  deletedScopes: [] as Array<Record<string, unknown>>,
+  headRowsDeleted: 0,
+  historyRowsDeleted: 0,
+}));
+const mockPruneStaleCodexSessionIndexRows = vi.fn(() => ({
+  sessionRowsDeleted: 0,
+  fileRowsDeleted: 0,
+  linkedRowsRetained: 0,
+}));
 const mockUpsertCodexIndexCursor = vi.fn(() => undefined);
 const mockUpsertCodexLimitHeads = vi.fn(() => 0);
 const mockUpsertCodexSessionFiles = vi.fn(() => 0);
@@ -54,6 +65,7 @@ vi.mock("@aif/data", () => ({
   buildCodexLimitHeadKey: mockBuildCodexLimitHeadKey,
   deleteCodexLimitHeadsByFilePaths: mockDeleteCodexLimitHeadsByFilePaths,
   deleteCodexLimitHistoryByFilePaths: mockDeleteCodexLimitHistoryByFilePaths,
+  deleteCodexSessionFilesByFilePaths: mockDeleteCodexSessionFilesByFilePaths,
   deleteCodexSessionsByFilePaths: mockDeleteCodexSessionsByFilePaths,
   listCodexLimitHeadScopesByFilePaths: mockListCodexLimitHeadScopesByFilePaths,
   listCodexLimitHeadsForOverlay: mockListCodexLimitHeadsForOverlay,
@@ -63,6 +75,8 @@ vi.mock("@aif/data", () => ({
   listRuntimeProfileResponses: mockListRuntimeProfileResponses,
   pruneCodexLimitHistoryByHead: mockPruneCodexLimitHistoryByHead,
   pruneCodexLimitHistoryRetention: mockPruneCodexLimitHistoryRetention,
+  pruneCodexLimitRowsBeforeObservedAt: mockPruneCodexLimitRowsBeforeObservedAt,
+  pruneStaleCodexSessionIndexRows: mockPruneStaleCodexSessionIndexRows,
   upsertCodexIndexCursor: mockUpsertCodexIndexCursor,
   upsertCodexLimitHeads: mockUpsertCodexLimitHeads,
   upsertCodexSessionFiles: mockUpsertCodexSessionFiles,
@@ -116,6 +130,16 @@ describe("codex index service", () => {
       pendingTail: "",
     });
     mockListCodexLimitHeadScopesByFilePaths.mockReturnValue([]);
+    mockPruneCodexLimitRowsBeforeObservedAt.mockReturnValue({
+      deletedScopes: [],
+      headRowsDeleted: 0,
+      historyRowsDeleted: 0,
+    });
+    mockPruneStaleCodexSessionIndexRows.mockReturnValue({
+      sessionRowsDeleted: 0,
+      fileRowsDeleted: 0,
+      linkedRowsRetained: 0,
+    });
     mockListProjects.mockReturnValue([]);
     mockListRuntimeProfileResponses.mockReturnValue([]);
   });
@@ -138,11 +162,16 @@ describe("codex index service", () => {
     expect(mockListCodexSessionFileInfos).not.toHaveBeenCalled();
 
     await vi.runOnlyPendingTimersAsync();
-    expect(mockListCodexSessionFileInfos).toHaveBeenCalledWith({ limitNewest: 3 });
+    expect(mockListCodexSessionFileInfos).toHaveBeenCalledWith({
+      limitNewest: 3,
+      modifiedAfterMs: expect.any(Number),
+    });
 
     vi.advanceTimersByTime(1000);
     await vi.runOnlyPendingTimersAsync();
-    expect(mockListCodexSessionFileInfos).toHaveBeenCalledWith();
+    expect(mockListCodexSessionFileInfos).toHaveBeenCalledWith({
+      modifiedAfterMs: expect.any(Number),
+    });
   });
 
   it("head reconcile scans only newest files and reads prior state by those paths", async () => {
@@ -167,10 +196,14 @@ describe("codex index service", () => {
     const service = createCodexIndexService({ headFileLimit: 1 });
     await service.runReconcileOnce("manual-head", "head");
 
-    expect(mockListCodexSessionFileInfos).toHaveBeenCalledWith({ limitNewest: 1 });
+    expect(mockListCodexSessionFileInfos).toHaveBeenCalledWith({
+      limitNewest: 1,
+      modifiedAfterMs: expect.any(Number),
+    });
     expect(mockListCodexSessionFileStatesByPaths).toHaveBeenCalledWith([fileInfo.filePath]);
     expect(mockListCodexSessionFileStates).not.toHaveBeenCalled();
     expect(mockDeleteCodexSessionsByFilePaths).not.toHaveBeenCalled();
+    expect(mockDeleteCodexSessionFilesByFilePaths).not.toHaveBeenCalled();
     expect(mockDeleteCodexLimitHeadsByFilePaths).not.toHaveBeenCalled();
     expect(mockDeleteCodexLimitHistoryByFilePaths).not.toHaveBeenCalled();
   });
@@ -221,7 +254,7 @@ describe("codex index service", () => {
         filePath: "/tmp/codex/missing.jsonl",
         sessionId: "session-1",
         sizeBytes: 100,
-        mtimeMs: 100,
+        mtimeMs: Date.parse("2026-04-23T00:00:00.000Z"),
         parsedOffset: 100,
         pendingTail: "",
         missing: false,
@@ -238,11 +271,14 @@ describe("codex index service", () => {
 
     expect(summary.missingFiles).toBe(1);
     expect(mockDeleteCodexSessionsByFilePaths).toHaveBeenCalledWith(["/tmp/codex/missing.jsonl"]);
+    expect(mockDeleteCodexSessionFilesByFilePaths).toHaveBeenCalledWith([
+      "/tmp/codex/missing.jsonl",
+    ]);
     expect(mockDeleteCodexLimitHeadsByFilePaths).toHaveBeenCalledWith(["/tmp/codex/missing.jsonl"]);
     expect(mockDeleteCodexLimitHistoryByFilePaths).toHaveBeenCalledWith([
       "/tmp/codex/missing.jsonl",
     ]);
-    expect(mockUpsertCodexSessionFiles).toHaveBeenCalledWith(
+    expect(mockUpsertCodexSessionFiles).not.toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
           filePath: "/tmp/codex/missing.jsonl",
@@ -252,6 +288,66 @@ describe("codex index service", () => {
     );
   });
 
+  it("backfill scans only the Codex usage window and prunes stale unlinked index rows", async () => {
+    const { createCodexIndexService } = await loadService();
+    const oldRow = {
+      filePath: "/tmp/codex/old-linked.jsonl",
+      sessionId: "old-linked",
+      sizeBytes: 100,
+      mtimeMs: 100,
+      parsedOffset: 100,
+      pendingTail: "",
+      missing: false,
+      importVersion: 1,
+      lastSeenAt: "2026-04-01T00:00:00.000Z",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+    };
+    const scannedFile = {
+      filePath: "/tmp/codex/recent.jsonl",
+      birthtimeMs: 1000,
+      mtimeMs: 2000,
+      size: 300,
+    };
+    mockListCodexSessionFileStates.mockReturnValue([oldRow]);
+    mockListCodexSessionFileInfos.mockResolvedValue([scannedFile]);
+    mockPruneCodexLimitRowsBeforeObservedAt.mockReturnValue({
+      deletedScopes: [
+        {
+          headKey: "old-head",
+          projectRoot: "/tmp/project-1",
+          observedAt: "2026-04-01T00:00:00.000Z",
+          filePath: "/tmp/codex/old-linked.jsonl",
+        },
+      ],
+      headRowsDeleted: 1,
+      historyRowsDeleted: 2,
+    });
+    mockPruneStaleCodexSessionIndexRows.mockReturnValue({
+      sessionRowsDeleted: 1,
+      fileRowsDeleted: 1,
+      linkedRowsRetained: 1,
+    });
+    mockDeleteCodexLimitHeadsByFilePaths.mockReturnValue(0);
+    mockDeleteCodexLimitHistoryByFilePaths.mockReturnValue(0);
+
+    const service = createCodexIndexService({ usageScanWindowDays: 7 });
+    const summary = await service.runReconcileOnce("manual", "backfill");
+
+    expect(mockListCodexSessionFileInfos).toHaveBeenCalledWith({
+      modifiedAfterMs: expect.any(Number),
+    });
+    expect(mockDeleteCodexSessionsByFilePaths).not.toHaveBeenCalledWith([
+      "/tmp/codex/old-linked.jsonl",
+    ]);
+    expect(mockPruneCodexLimitRowsBeforeObservedAt).toHaveBeenCalledWith(expect.any(String));
+    expect(mockPruneStaleCodexSessionIndexRows).toHaveBeenCalledWith({
+      mtimeBeforeMs: expect.any(Number),
+    });
+    expect(summary.headRowsDeleted).toBe(1);
+    expect(summary.historyRowsDeleted).toBe(2);
+  });
+
   it("notifies visible project runtime profiles when stale limit heads are deleted without replacements", async () => {
     const { createCodexIndexService } = await loadService();
     mockListCodexSessionFileStates.mockReturnValue([
@@ -259,7 +355,7 @@ describe("codex index service", () => {
         filePath: "/tmp/project-1/.codex/sessions/deleted.jsonl",
         sessionId: "session-deleted",
         sizeBytes: 100,
-        mtimeMs: 100,
+        mtimeMs: Date.parse("2026-04-23T00:00:00.000Z"),
         parsedOffset: 100,
         pendingTail: "",
         missing: false,

@@ -3,6 +3,7 @@ import {
   buildCodexLimitHeadKey,
   deleteCodexLimitHeadsByFilePaths,
   deleteCodexLimitHistoryByFilePaths,
+  deleteCodexSessionFilesByFilePaths,
   deleteCodexSessionsByFilePaths,
   listCodexLimitHeadScopesByFilePaths,
   listCodexSessionFileStates,
@@ -10,6 +11,8 @@ import {
   listProjects,
   listRuntimeProfileResponses,
   pruneCodexLimitHistoryByHead,
+  pruneCodexLimitRowsBeforeObservedAt,
+  pruneStaleCodexSessionIndexRows,
   upsertCodexIndexCursor,
   upsertCodexLimitHeads,
   upsertCodexSessionFiles,
@@ -52,6 +55,8 @@ const DEFAULT_MIN_IDLE_MS = 1000;
 const DEFAULT_HEAD_WARMUP_DELAY_MS = 0;
 const DEFAULT_IDLE_RETRY_MS = 250;
 const DEFAULT_DB_FLUSH_BATCH_SIZE = 20;
+const DEFAULT_USAGE_SCAN_WINDOW_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
@@ -148,6 +153,7 @@ export interface CreateCodexIndexServiceOptions {
   dbFlushBatchSize?: number;
   historyRetentionPerHead?: number;
   importVersion?: number;
+  usageScanWindowDays?: number;
 }
 
 export function createCodexIndexService(
@@ -179,6 +185,11 @@ export function createCodexIndexService(
     options.dbFlushBatchSize,
     DEFAULT_DB_FLUSH_BATCH_SIZE,
   );
+  const usageScanWindowDays = readPositiveInteger(
+    options.usageScanWindowDays,
+    DEFAULT_USAGE_SCAN_WINDOW_DAYS,
+  );
+  const usageScanWindowMs = usageScanWindowDays * DAY_MS;
   const historyRetentionPerHead =
     options.historyRetentionPerHead ?? DEFAULT_HISTORY_RETENTION_PER_HEAD;
   const importVersion = options.importVersion ?? DEFAULT_IMPORT_VERSION;
@@ -386,6 +397,8 @@ export function createCodexIndexService(
     }
 
     const nowIso = new Date().toISOString();
+    const usageScanCutoffMs = Math.max(0, Date.now() - usageScanWindowMs);
+    const usageScanCutoffIso = new Date(usageScanCutoffMs).toISOString();
     const authIdentity = await getCodexAuthIdentity();
     const fallbackAccountFingerprint = buildCodexAuthFingerprint(authIdentity);
 
@@ -394,10 +407,11 @@ export function createCodexIndexService(
       return emptySummary(reason, { skippedForLoad: true });
     }
 
-    const files =
+    const files = await listCodexSessionFileInfos(
       mode === "head"
-        ? await listCodexSessionFileInfos({ limitNewest: headFileLimit })
-        : await listCodexSessionFileInfos();
+        ? { limitNewest: headFileLimit, modifiedAfterMs: usageScanCutoffMs }
+        : { modifiedAfterMs: usageScanCutoffMs },
+    );
     const previousStates =
       mode === "head"
         ? listCodexSessionFileStatesByPaths(files.map((file) => file.filePath))
@@ -537,26 +551,17 @@ export function createCodexIndexService(
     const missingPaths =
       mode === "backfill" && remainingBackfillFileBudget > 0
         ? previousStates
-            .filter((row) => !row.missing && !currentPathSet.has(row.filePath))
+            .filter(
+              (row) =>
+                !row.missing &&
+                row.mtimeMs >= usageScanCutoffMs &&
+                !currentPathSet.has(row.filePath),
+            )
             .slice(0, remainingBackfillFileBudget)
             .map((row) => row.filePath)
         : [];
     if (missingPaths.length > 0) {
       changedFiles += missingPaths.length;
-      const missingRows = previousStates
-        .filter((row) => missingPaths.includes(row.filePath))
-        .map<UpsertCodexSessionFileInput>((row) => ({
-          filePath: row.filePath,
-          sessionId: row.sessionId,
-          sizeBytes: row.sizeBytes,
-          mtimeMs: row.mtimeMs,
-          parsedOffset: row.parsedOffset,
-          pendingTail: row.pendingTail,
-          missing: true,
-          importVersion: row.importVersion,
-          lastSeenAt: nowIso,
-        }));
-      fileRows.push(...missingRows);
       staleLimitFilePaths.push(...missingPaths);
     }
 
@@ -584,6 +589,13 @@ export function createCodexIndexService(
     if (sessionRowsDeleted > 0) {
       await yieldToEventLoop();
     }
+    const sessionFileRowsDeleted =
+      uniqueStaleLimitFilePaths.length > 0
+        ? deleteCodexSessionFilesByFilePaths(uniqueStaleLimitFilePaths)
+        : 0;
+    if (sessionFileRowsDeleted > 0) {
+      await yieldToEventLoop();
+    }
     const headRowsDeleted =
       uniqueStaleLimitFilePaths.length > 0
         ? deleteCodexLimitHeadsByFilePaths(uniqueStaleLimitFilePaths)
@@ -598,12 +610,32 @@ export function createCodexIndexService(
     if (staleHistoryRowsDeleted > 0) {
       await yieldToEventLoop();
     }
+    const oldLimitPrune =
+      mode === "backfill"
+        ? pruneCodexLimitRowsBeforeObservedAt(usageScanCutoffIso)
+        : { deletedScopes: [], headRowsDeleted: 0, historyRowsDeleted: 0 };
+    if (oldLimitPrune.deletedScopes.length > 0) {
+      deletedLimitScopes.push(...oldLimitPrune.deletedScopes);
+    }
+    const oldSessionPrune =
+      mode === "backfill"
+        ? pruneStaleCodexSessionIndexRows({ mtimeBeforeMs: usageScanCutoffMs })
+        : { sessionRowsDeleted: 0, fileRowsDeleted: 0, linkedRowsRetained: 0 };
+    if (
+      oldLimitPrune.headRowsDeleted > 0 ||
+      oldLimitPrune.historyRowsDeleted > 0 ||
+      oldSessionPrune.sessionRowsDeleted > 0 ||
+      oldSessionPrune.fileRowsDeleted > 0
+    ) {
+      await yieldToEventLoop();
+    }
     if (uniqueStaleLimitFilePaths.length > 0) {
       log.debug(
         {
           reason,
           staleFileCount: uniqueStaleLimitFilePaths.length,
           deletedScopeCount: deletedLimitScopes.length,
+          sessionFileRowsDeleted,
           headRowsDeleted,
           historyRowsDeleted: staleHistoryRowsDeleted,
         },
@@ -643,7 +675,9 @@ export function createCodexIndexService(
         await yieldToEventLoop();
       }
     }
-    const historyRowsDeleted = staleHistoryRowsDeleted + retainedHistoryRowsDeleted;
+    const totalHeadRowsDeleted = headRowsDeleted + oldLimitPrune.headRowsDeleted;
+    const historyRowsDeleted =
+      staleHistoryRowsDeleted + oldLimitPrune.historyRowsDeleted + retainedHistoryRowsDeleted;
 
     const summary: CodexIndexReconcileSummary = {
       reason,
@@ -654,7 +688,7 @@ export function createCodexIndexService(
       fileRowsUpserted,
       headRowsUpserted,
       historyRowsAppended,
-      headRowsDeleted,
+      headRowsDeleted: totalHeadRowsDeleted,
       historyRowsDeleted,
       ...(skippedForLoad || interrupted ? { skippedForLoad: true } : {}),
       ...(truncated ? { truncated: true } : {}),
@@ -700,6 +734,9 @@ export function createCodexIndexService(
         historyRowsAppended: summary.historyRowsAppended,
         headRowsDeleted: summary.headRowsDeleted,
         historyRowsDeleted: summary.historyRowsDeleted,
+        staleSessionRowsDeleted: oldSessionPrune.sessionRowsDeleted,
+        staleSessionFileRowsDeleted: oldSessionPrune.fileRowsDeleted,
+        staleLinkedSessionRowsRetained: oldSessionPrune.linkedRowsRetained,
       },
       "Codex index reconcile finished",
     );
@@ -732,7 +769,7 @@ export function createCodexIndexService(
     scheduleHeadWarmupSoon();
     scheduleIdleBackfillLater();
     log.info(
-      { runtimeId, providerId, headFileLimit, backfillIntervalMs, minIdleMs },
+      { runtimeId, providerId, headFileLimit, backfillIntervalMs, minIdleMs, usageScanWindowDays },
       "Codex indexer idle reconcile loop started",
     );
   };

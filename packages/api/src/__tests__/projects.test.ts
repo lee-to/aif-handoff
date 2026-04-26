@@ -393,6 +393,92 @@ describe("projects API", () => {
     expect(refetched.defaultReviewRuntimeProfileId).toBe("profile-review");
   });
 
+  it("preserves project runtime defaults when update payload omits them", async () => {
+    testDb.current
+      .insert(runtimeProfiles)
+      .values([
+        {
+          id: "profile-task",
+          projectId: null,
+          name: "Task Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "profile-plan",
+          projectId: null,
+          name: "Plan Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "profile-review",
+          projectId: null,
+          name: "Review Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+        {
+          id: "profile-chat",
+          projectId: null,
+          name: "Chat Profile",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          enabled: true,
+        },
+      ])
+      .run();
+
+    const createRes = await app.request("/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Runtime Defaults",
+        rootPath: "/tmp/runtime-defaults-project",
+        defaultTaskRuntimeProfileId: "profile-task",
+        defaultPlanRuntimeProfileId: "profile-plan",
+        defaultReviewRuntimeProfileId: "profile-review",
+        defaultChatRuntimeProfileId: "profile-chat",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json();
+
+    const updateRes = await app.request(`/projects/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Runtime Defaults Renamed",
+        rootPath: "/tmp/runtime-defaults-project-renamed",
+      }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = await updateRes.json();
+    expect(updated.defaultTaskRuntimeProfileId).toBe("profile-task");
+    expect(updated.defaultPlanRuntimeProfileId).toBe("profile-plan");
+    expect(updated.defaultReviewRuntimeProfileId).toBe("profile-review");
+    expect(updated.defaultChatRuntimeProfileId).toBe("profile-chat");
+
+    const clearRes = await app.request(`/projects/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Runtime Defaults Renamed",
+        rootPath: "/tmp/runtime-defaults-project-renamed",
+        defaultPlanRuntimeProfileId: null,
+      }),
+    });
+    expect(clearRes.status).toBe(200);
+    const cleared = await clearRes.json();
+    expect(cleared.defaultTaskRuntimeProfileId).toBe("profile-task");
+    expect(cleared.defaultPlanRuntimeProfileId).toBeNull();
+    expect(cleared.defaultReviewRuntimeProfileId).toBe("profile-review");
+    expect(cleared.defaultChatRuntimeProfileId).toBe("profile-chat");
+  });
+
   it("rejects foreign project-owned runtime profile defaults on update", async () => {
     testDb.current
       .insert(runtimeProfiles)

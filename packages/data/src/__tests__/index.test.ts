@@ -384,6 +384,33 @@ describe("data layer", () => {
       expect(updated!.rootPath).toBe("/tmp/updated");
     });
 
+    it("updateProject preserves omitted runtime defaults and clears explicit nulls", () => {
+      const p = createProject({
+        name: "P",
+        rootPath: "/tmp/p",
+        defaultTaskRuntimeProfileId: "task-profile",
+        defaultPlanRuntimeProfileId: "plan-profile",
+        defaultReviewRuntimeProfileId: "review-profile",
+        defaultChatRuntimeProfileId: "chat-profile",
+      });
+
+      const renamed = updateProject(p!.id, { name: "Renamed", rootPath: "/tmp/renamed" });
+      expect(renamed!.defaultTaskRuntimeProfileId).toBe("task-profile");
+      expect(renamed!.defaultPlanRuntimeProfileId).toBe("plan-profile");
+      expect(renamed!.defaultReviewRuntimeProfileId).toBe("review-profile");
+      expect(renamed!.defaultChatRuntimeProfileId).toBe("chat-profile");
+
+      const cleared = updateProject(p!.id, {
+        name: "Renamed",
+        rootPath: "/tmp/renamed",
+        defaultPlanRuntimeProfileId: null,
+      });
+      expect(cleared!.defaultTaskRuntimeProfileId).toBe("task-profile");
+      expect(cleared!.defaultPlanRuntimeProfileId).toBeNull();
+      expect(cleared!.defaultReviewRuntimeProfileId).toBe("review-profile");
+      expect(cleared!.defaultChatRuntimeProfileId).toBe("chat-profile");
+    });
+
     it("deleteProject removes project", () => {
       const p = createProject({ name: "Del", rootPath: "/tmp/del" });
       deleteProject(p!.id);

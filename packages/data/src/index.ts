@@ -1098,32 +1098,42 @@ export function updateProject(
     defaultChatRuntimeProfileId?: string | null;
   },
 ): ProjectRow | undefined {
+  const patch: Partial<ProjectRow> = {
+    name: input.name,
+    rootPath: input.rootPath,
+    plannerMaxBudgetUsd: input.plannerMaxBudgetUsd ?? null,
+    planCheckerMaxBudgetUsd: input.planCheckerMaxBudgetUsd ?? null,
+    implementerMaxBudgetUsd: input.implementerMaxBudgetUsd ?? null,
+    reviewSidecarMaxBudgetUsd: input.reviewSidecarMaxBudgetUsd ?? null,
+    parallelEnabled: input.parallelEnabled ?? false,
+    updatedAt: new Date().toISOString(),
+  };
+  if (input.defaultTaskRuntimeProfileId !== undefined) {
+    patch.defaultTaskRuntimeProfileId = input.defaultTaskRuntimeProfileId;
+  }
+  if (input.defaultPlanRuntimeProfileId !== undefined) {
+    patch.defaultPlanRuntimeProfileId = input.defaultPlanRuntimeProfileId;
+  }
+  if (input.defaultReviewRuntimeProfileId !== undefined) {
+    patch.defaultReviewRuntimeProfileId = input.defaultReviewRuntimeProfileId;
+  }
+  if (input.defaultChatRuntimeProfileId !== undefined) {
+    patch.defaultChatRuntimeProfileId = input.defaultChatRuntimeProfileId;
+  }
+
   log.debug(
     {
       projectId: id,
-      defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
-      defaultPlanRuntimeProfileId: input.defaultPlanRuntimeProfileId ?? null,
-      defaultReviewRuntimeProfileId: input.defaultReviewRuntimeProfileId ?? null,
-      defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
+      defaultTaskRuntimeProfileId: patch.defaultTaskRuntimeProfileId ?? null,
+      defaultPlanRuntimeProfileId: patch.defaultPlanRuntimeProfileId ?? null,
+      defaultReviewRuntimeProfileId: patch.defaultReviewRuntimeProfileId ?? null,
+      defaultChatRuntimeProfileId: patch.defaultChatRuntimeProfileId ?? null,
     },
     "Updating project runtime defaults",
   );
   getDb()
     .update(projects)
-    .set({
-      name: input.name,
-      rootPath: input.rootPath,
-      plannerMaxBudgetUsd: input.plannerMaxBudgetUsd ?? null,
-      planCheckerMaxBudgetUsd: input.planCheckerMaxBudgetUsd ?? null,
-      implementerMaxBudgetUsd: input.implementerMaxBudgetUsd ?? null,
-      reviewSidecarMaxBudgetUsd: input.reviewSidecarMaxBudgetUsd ?? null,
-      parallelEnabled: input.parallelEnabled ?? false,
-      defaultTaskRuntimeProfileId: input.defaultTaskRuntimeProfileId ?? null,
-      defaultPlanRuntimeProfileId: input.defaultPlanRuntimeProfileId ?? null,
-      defaultReviewRuntimeProfileId: input.defaultReviewRuntimeProfileId ?? null,
-      defaultChatRuntimeProfileId: input.defaultChatRuntimeProfileId ?? null,
-      updatedAt: new Date().toISOString(),
-    })
+    .set(patch)
     .where(eq(projects.id, id))
     .run();
   return findProjectById(id);

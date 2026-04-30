@@ -153,11 +153,14 @@ export {
   assertWorkingTreeClean,
   branchExists,
   buildBranchName,
+  buildTaskWorktreePath,
   describeDirtyWorkingTree,
   ensureFeatureBranch,
+  ensureTaskWorktree,
   getCurrentBranch,
   isBranchIsolationError,
   isGitRepo,
+  projectSupportsTaskWorktrees,
   projectUsesSharedBranchIsolation,
   restorePersistedBranch,
   slugifyTitle,
@@ -165,6 +168,8 @@ export {
   workingTreeClean,
   type EnsureFeatureBranchInput,
   type EnsureFeatureBranchResult,
+  type EnsureTaskWorktreeInput,
+  type EnsureTaskWorktreeResult,
   type RestorePersistedBranchInput,
 } from "./gitIsolation.js";
 

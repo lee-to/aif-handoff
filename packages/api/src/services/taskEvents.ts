@@ -98,15 +98,16 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
   if (!project) {
     return { ok: false, status: 404, error: "Project not found for task" };
   }
+  const executionRoot = task.worktreePath ?? project.rootPath;
 
-  const branchError = restoreTaskBranchForMutation(task, project.rootPath);
+  const branchError = restoreTaskBranchForMutation(task, executionRoot);
   if (branchError) return branchError;
 
   const previousPlan = task.plan?.trim() ?? "";
   if (!previousPlan) {
     return { ok: false, status: 409, error: "fast_fix requires an existing plan on the task" };
   }
-  const cfg = getProjectConfig(project.rootPath);
+  const cfg = getProjectConfig(executionRoot);
   const effectivePlanPath = task.isFix ? cfg.paths.fix_plan : task.planPath || cfg.paths.plan;
 
   let firstAttempt = "";
@@ -117,7 +118,7 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
         taskTitle: task.title,
         taskDescription: task.description,
         latestComment,
-        projectRoot: project.rootPath,
+        projectRoot: executionRoot,
         planPath: effectivePlanPath,
         previousPlan,
         shouldTryFileUpdate: true,
@@ -137,7 +138,7 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
           taskTitle: task.title,
           taskDescription: task.description,
           latestComment,
-          projectRoot: project.rootPath,
+          projectRoot: executionRoot,
           planPath: effectivePlanPath,
           previousPlan,
           priorAttempt: firstAttempt || undefined,
@@ -158,13 +159,13 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
   // Post-run drift check: `runFastFixQuery` runs a runtime that may write to
   // disk (`@${planPath}` injection asks for file overwrite). A rogue skill
   // could `git checkout` mid-flow and persist plan/state on the wrong branch.
-  const driftError = assertTaskBranchPostRun(task, project.rootPath);
+  const driftError = assertTaskBranchPostRun(task, executionRoot);
   if (driftError) return driftError;
 
   const nowIso = new Date().toISOString();
   persistTaskPlanForTask({
     taskId: task.id,
-    projectRoot: project.rootPath,
+    projectRoot: executionRoot,
     isFix: task.isFix,
     planPath: task.planPath ?? undefined,
     planText: updatedPlan,
@@ -200,16 +201,17 @@ function handleRegularTransition(input: EventHandlerInput): EventHandlerResult {
     if (!project) {
       return { ok: false, status: 404, error: "Project not found for task" };
     }
+    const executionRoot = task.worktreePath ?? project.rootPath;
 
-    const branchError = restoreTaskBranchForMutation(task, project.rootPath);
+    const branchError = restoreTaskBranchForMutation(task, executionRoot);
     if (branchError) return branchError;
 
     // For fix tasks, always remove canonical FIX_PLAN.md.
     // For regular tasks, use configured planPath (defaults from config.yaml).
-    const cfg = getProjectConfig(project.rootPath);
+    const cfg = getProjectConfig(executionRoot);
     const planFilePath = task.isFix
-      ? resolve(project.rootPath, cfg.paths.fix_plan)
-      : resolve(project.rootPath, task.planPath || cfg.paths.plan);
+      ? resolve(executionRoot, cfg.paths.fix_plan)
+      : resolve(executionRoot, task.planPath || cfg.paths.plan);
 
     if (existsSync(planFilePath)) {
       unlinkSync(planFilePath);
@@ -252,8 +254,9 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
   //     feature branch from base, then we read the plan from that branch.
   // Fix tasks keep the legacy no-branch behavior.
   let boundBranchName: string | null = task.branchName ?? null;
+  let executionRoot = task.worktreePath ?? project.rootPath;
   if (!task.isFix && boundBranchName) {
-    const branchError = restoreTaskBranchForMutation(task, project.rootPath);
+    const branchError = restoreTaskBranchForMutation(task, executionRoot);
     if (branchError) return branchError;
   } else if (!task.isFix && !boundBranchName) {
     try {
@@ -275,10 +278,10 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
     }
   }
 
-  const cfg = getProjectConfig(project.rootPath);
+  const cfg = getProjectConfig(executionRoot);
   const planFilePath = task.isFix
-    ? resolve(project.rootPath, cfg.paths.fix_plan)
-    : resolve(project.rootPath, task.planPath || cfg.paths.plan);
+    ? resolve(executionRoot, cfg.paths.fix_plan)
+    : resolve(executionRoot, task.planPath || cfg.paths.plan);
 
   if (!existsSync(planFilePath)) {
     return { ok: false, status: 404, error: "Plan file not found on disk" };
@@ -293,7 +296,7 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
   persistTaskPlanForTask({
     taskId: input.taskId,
     planText: filePlan,
-    projectRoot: project.rootPath,
+    projectRoot: executionRoot,
     isFix: task.isFix,
     planPath: task.planPath ?? undefined,
     updatedAt: nowIso,

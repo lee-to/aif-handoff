@@ -1225,6 +1225,13 @@ describe("data layer", () => {
       expect(hasActiveBranchBoundTasksForProject("proj-1")).toBe(true);
     });
 
+    it("hasActiveBranchBoundTasksForProject ignores isolated worktree-bound tasks", () => {
+      const a = createTask({ projectId: "proj-1", title: "A", description: "" });
+      setTaskFields(a!.id, { branchName: "feature/a", worktreePath: "/tmp/a-worktree" });
+      updateTaskStatus(a!.id, "implementing");
+      expect(hasActiveBranchBoundTasksForProject("proj-1")).toBe(false);
+    });
+
     it("hasActiveBranchBoundTasksForProject true for a queued backlog task that already has branchName", () => {
       // accept_existing_plan / replan can leave a branch-bound task in
       // backlog briefly; serialization must already kick in.

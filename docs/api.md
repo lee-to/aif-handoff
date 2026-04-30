@@ -171,10 +171,9 @@ PUT /projects/:id
 
 **Response:** `200 OK` — the updated project object.
 
-**Errors:**
-
-- `400` — Parallel auto-queue is rejected when the project config has `git.create_branches=true`.
-  Disable parallel execution, disable auto-queue mode, or set `git.create_branches=false` before using both modes together.
+Parallel auto-queue with `git.create_branches=true` requires
+`AIF_TASK_WORKTREES_ENABLED=true`. With the default `false`, the API rejects
+that combination and the coordinator keeps branch-isolated projects serial.
 
 ### Check Roadmap Status
 
@@ -282,10 +281,9 @@ clients can update their board indicator.
 { "enabled": true }
 ```
 
-**Errors:**
-
-- `400` — Parallel auto-queue is rejected when the project config has `git.create_branches=true`.
-  Disable parallel execution, disable auto-queue mode, or set `git.create_branches=false` before using both modes together.
+Parallel auto-queue with `git.create_branches=true` requires
+`AIF_TASK_WORKTREES_ENABLED=true`. Queued full-mode tasks then receive isolated
+git worktrees when planning starts.
 
 ### Get Project Warmup State
 

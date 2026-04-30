@@ -3,6 +3,10 @@ import { tasks, projects, runtimeProfiles, resetEnvCache } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { RuntimeExecutionError } from "@aif/runtime";
 import { eq } from "drizzle-orm";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Flag defaults to false (opt-in). Coordinator tests assert on persisted
 // limitSnapshot, which requires the gate to be open.
@@ -133,6 +137,31 @@ describe("coordinator", () => {
     expect(runReviewer).toHaveBeenCalledWith("task-1", "/tmp/test");
     const task = db.select().from(tasks).where(eq(tasks.id, "task-1")).get();
     expect(task!.status).toBe("done");
+  });
+
+  it("should use task worktreePath as cwd for all downstream stages", async () => {
+    const db = testDb.current;
+    db.insert(tasks)
+      .values({
+        id: "task-worktree",
+        projectId: "test-project",
+        title: "Worktree task",
+        status: "planning",
+        branchName: "feature/worktree-task",
+        worktreePath: "/tmp/test-worktree",
+      })
+      .run();
+
+    await pollAndProcess();
+
+    expect(runPlanner).toHaveBeenCalledWith("task-worktree", "/tmp/test-worktree");
+    expect(runPlanChecker).toHaveBeenCalledWith("task-worktree", "/tmp/test-worktree");
+    expect(runImplementer).toHaveBeenCalledWith("task-worktree", "/tmp/test-worktree");
+    expect(runReviewer).toHaveBeenCalledWith("task-worktree", "/tmp/test-worktree");
+    expect(handleAutoReviewGate).toHaveBeenCalledWith({
+      taskId: "task-worktree",
+      projectRoot: "/tmp/test-worktree",
+    });
   });
 
   it("should ignore backlog tasks until human starts AI", async () => {
@@ -1187,6 +1216,55 @@ describe("coordinator", () => {
     // Both tasks should have been picked up by planner
     expect(runPlanner).toHaveBeenCalledWith("p-task-1", "/tmp/parallel");
     expect(runPlanner).toHaveBeenCalledWith("p-task-2", "/tmp/parallel");
+  });
+
+  it("should serialize branch-isolated parallel projects while task worktrees are disabled", async () => {
+    const db = testDb.current;
+    const rootPath = mkdtempSync(join(tmpdir(), "coordinator-branch-isolated-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: rootPath, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "t@t.local"], {
+      cwd: rootPath,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: rootPath, stdio: "ignore" });
+    writeFileSync(join(rootPath, "README.md"), "# t\n");
+    execFileSync("git", ["add", "README.md"], { cwd: rootPath, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd: rootPath,
+      stdio: "ignore",
+    });
+
+    db.insert(projects)
+      .values({
+        id: "parallel-branch-proj",
+        name: "Parallel Branch",
+        rootPath,
+        parallelEnabled: true,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "branch-task-1",
+        projectId: "parallel-branch-proj",
+        title: "T1",
+        status: "planning",
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "branch-task-2",
+        projectId: "parallel-branch-proj",
+        title: "T2",
+        status: "planning",
+      })
+      .run();
+
+    await pollAndProcess();
+
+    const plannerCalls = (runPlanner as any).mock.calls.filter(
+      ([, calledRoot]: [string, string]) => calledRoot === rootPath,
+    );
+    expect(plannerCalls).toHaveLength(1);
   });
 
   it("should process only 1 task at a time for non-parallel project", async () => {

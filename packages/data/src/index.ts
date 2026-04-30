@@ -152,6 +152,7 @@ export type TaskFieldsUpdate = {
   runtimeOptions?: Record<string, unknown> | null;
   position?: number;
   scheduledAt?: string | null;
+  worktreePath?: string | null;
 };
 
 function redactTaskTextForExternalUse(text: string | null | undefined): string | null {
@@ -1363,10 +1364,9 @@ export function countActivePipelineTasksForProject(projectId: string): number {
 
 /**
  * True if the project has at least one in-flight task with a persisted
- * `branchName`. Used by the auto-queue scheduler to keep parallel execution
- * disabled even after `git.create_branches` is toggled off mid-pipeline —
- * already-bound tasks still mutate the shared worktree on stage transitions
- * via `restorePersistedBranch`, so concurrent stages would race on HEAD.
+ * `branchName` but no isolated `worktreePath`. Used by the auto-queue
+ * scheduler to keep parallel execution disabled for legacy branch-bound
+ * tasks that still mutate the shared worktree on stage transitions.
  *
  * Includes `backlog` so a queued task whose branch was prepared (e.g. via
  * `accept_existing_plan`) does not let the scheduler open the parallel pool
@@ -1380,6 +1380,7 @@ export function hasActiveBranchBoundTasksForProject(projectId: string): boolean 
       and(
         eq(tasks.projectId, projectId),
         isNotNull(tasks.branchName),
+        isNull(tasks.worktreePath),
         inArray(tasks.status, [
           "backlog",
           "planning",

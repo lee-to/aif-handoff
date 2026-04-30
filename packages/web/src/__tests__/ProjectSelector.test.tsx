@@ -180,6 +180,17 @@ describe("ProjectSelector", () => {
       expect(screen.getByText("Auto-Queue Mode")).toBeDefined();
     });
 
+    it("shows the worktree rollout flag hint when parallel execution is enabled", () => {
+      mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+      render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+      fireEvent.click(screen.getByText("New project"));
+
+      fireEvent.click(screen.getAllByRole("switch")[0]);
+
+      expect(screen.getByText(/AIF_TASK_WORKTREES_ENABLED=true/i)).toBeDefined();
+    });
+
     it("shows error toast when enabling auto-queue fails after create", () => {
       mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
       mutateCreateProject.mockImplementation(

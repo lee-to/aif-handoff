@@ -147,6 +147,7 @@ export interface Task {
   runtimeLimitUpdatedAt?: string | null;
   scheduledAt: string | null;
   branchName: string | null;
+  worktreePath: string | null;
   createdAt: string;
   updatedAt: string;
 }

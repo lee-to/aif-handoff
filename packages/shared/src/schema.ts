@@ -103,6 +103,7 @@ export const tasks = sqliteTable("tasks", {
   lockedUntil: text("locked_until"),
   scheduledAt: text("scheduled_at"),
   branchName: text("branch_name"),
+  worktreePath: text("worktree_path"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),

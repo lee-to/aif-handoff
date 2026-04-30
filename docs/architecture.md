@@ -216,11 +216,20 @@ fills the pipeline up to a **pool depth**:
   window for early advance.
 - **Parallel project** (`parallelEnabled = true`): pool depth =
   `COORDINATOR_MAX_CONCURRENT_TASKS`. Auto-queue keeps that many tasks in
-  flight, advancing as soon as room frees up.
+  flight, advancing as soon as room frees up. For projects with
+  `git.create_branches=true`, this parallel branch-isolated path is available
+  only when `AIF_TASK_WORKTREES_ENABLED=true`; otherwise the project remains
+  serial and the API rejects parallel auto-queue for that combination.
+  When enabled, full-mode planning creates a sibling git worktree, stores its
+  absolute path in `tasks.worktree_path`, and downstream stages run from that
+  path. Legacy branch-bound tasks without `worktreePath` still force serial
+  execution until they leave the pipeline.
 
 The advance step:
 
-1. Compute `limit = parallelEnabled ? COORDINATOR_MAX_CONCURRENT_TASKS : 1`.
+1. Compute `limit = parallelEnabled ? COORDINATOR_MAX_CONCURRENT_TASKS : 1`,
+   then collapse it to `1` when branch isolation would use the shared project
+   root.
 2. Read `active = countActivePipelineTasksForProject(project)` — counts tasks
    in `planning`, `plan_ready`, `implementing`, `review`, or `blocked_external`.
    Backlog (source) and `done`/`verified` (terminal) do not count.
@@ -230,6 +239,10 @@ The advance step:
    `project:auto_queue_advanced` with the new task id.
 4. The fill loop runs in a single tick so a parallel project can start its
    full pool without waiting for additional poll cycles.
+
+Task worktrees are retained after `done` / `verified` so operators can inspect
+or commit follow-up changes. Handoff records the path but does not automatically
+remove the sibling worktree directory.
 
 Auto-queue and scheduled execution compose in the same poll cycle:
 `processDueScheduledTasks()` runs first and fires every backlog task whose

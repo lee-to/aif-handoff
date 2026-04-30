@@ -52,8 +52,6 @@ const log = logger("projects-route");
 
 export const projectsRouter = new Hono();
 
-const PARALLEL_AUTO_QUEUE_BRANCH_ERROR =
-  "Parallel auto-queue with git.create_branches=true is not supported without worktrees. Either disable parallel execution, disable auto-queue mode, or set git.create_branches=false for this project.";
 const WARMUP_PROMPT =
   "Study the current project context, including its structure, architecture layers, package boundaries, conventions, and relevant documentation, so this session can be forked for future tasks. Do not edit files. Do not summarize the context; if a final response is required, reply only that warmup is complete.";
 
@@ -61,19 +59,16 @@ function getWarmupEnabled(): boolean {
   return getEnv().AIF_WARMUP_ENABLED;
 }
 
-function validateParallelAutoQueueBranchConfig(input: {
+function rejectsParallelAutoQueueWithBranches(input: {
   rootPath: string;
   parallelEnabled: boolean;
   autoQueueMode: boolean;
 }): string | null {
+  if (getEnv().AIF_TASK_WORKTREES_ENABLED) return null;
   if (!input.parallelEnabled || !input.autoQueueMode) return null;
-
   const config = getProjectConfig(input.rootPath);
-  if (config.git.enabled && config.git.create_branches) {
-    return PARALLEL_AUTO_QUEUE_BRANCH_ERROR;
-  }
-
-  return null;
+  if (!config.git.enabled || !config.git.create_branches) return null;
+  return "Parallel auto-queue with git.create_branches=true requires AIF_TASK_WORKTREES_ENABLED=true";
 }
 
 function warmupScopeFromSupport(
@@ -252,14 +247,13 @@ projectsRouter.put("/:id", jsonValidator(createProjectSchema), async (c) => {
     return c.json(runtimeValidation, 400);
   }
 
-  const parallelAutoQueueError = validateParallelAutoQueueBranchConfig({
+  const unsupportedParallelAutoQueue = rejectsParallelAutoQueueWithBranches({
     rootPath: body.rootPath,
-    parallelEnabled: body.parallelEnabled ?? false,
+    parallelEnabled: body.parallelEnabled ?? existing.parallelEnabled,
     autoQueueMode: existing.autoQueueMode,
   });
-  if (parallelAutoQueueError) {
-    log.warn({ projectId: id }, "Rejected unsupported parallel auto-queue branch config");
-    return c.json({ error: parallelAutoQueueError }, 400);
+  if (unsupportedParallelAutoQueue) {
+    return c.json({ error: unsupportedParallelAutoQueue }, 400);
   }
 
   const { project: updated, pathError } = updateProject(id, body);
@@ -408,14 +402,13 @@ projectsRouter.patch("/:id/auto-queue-mode", jsonValidator(autoQueueModeSchema),
   const project = findProjectById(id);
   if (!project) return c.json({ error: "Project not found" }, 404);
 
-  const parallelAutoQueueError = validateParallelAutoQueueBranchConfig({
+  const unsupportedParallelAutoQueue = rejectsParallelAutoQueueWithBranches({
     rootPath: project.rootPath,
     parallelEnabled: project.parallelEnabled,
     autoQueueMode: enabled,
   });
-  if (parallelAutoQueueError) {
-    log.warn({ projectId: id }, "Rejected unsupported parallel auto-queue branch config");
-    return c.json({ error: parallelAutoQueueError }, 400);
+  if (unsupportedParallelAutoQueue) {
+    return c.json({ error: unsupportedParallelAutoQueue }, 400);
   }
 
   setAutoQueueMode(id, enabled);

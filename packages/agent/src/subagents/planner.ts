@@ -8,9 +8,15 @@ import {
   setTaskFields,
 } from "@aif/data";
 import { createRuntimeWorkflowSpec } from "@aif/runtime";
-import { logger, formatAttachmentsForPrompt, getProjectConfig } from "@aif/shared";
+import { logger, formatAttachmentsForPrompt, getEnv, getProjectConfig } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
-import { assertCurrentBranch, ensureFeatureBranch, restorePersistedBranch } from "../gitBranch.js";
+import {
+  assertCurrentBranch,
+  ensureFeatureBranch,
+  ensureTaskWorktree,
+  projectSupportsTaskWorktrees,
+  restorePersistedBranch,
+} from "../gitBranch.js";
 import { logActivity } from "../hooks.js";
 
 const log = logger("planner");
@@ -136,12 +142,13 @@ export async function runPlanner(taskId: string, projectRoot: string): Promise<v
   log.info({ taskId, title: task.title, isFix: task.isFix }, "Starting planning flow");
   const project = findProjectById(task.projectId);
   const plannerBudget = project?.plannerMaxBudgetUsd ?? null;
+  let executionRoot = task.worktreePath ?? projectRoot;
 
   const taskAttachmentsForPrompt = formatAttachmentsForPrompt(task.attachments);
   const commentsForPrompt = formatCommentsForPrompt(comments);
 
   const plannerMode = task.plannerMode || "full";
-  const planPath = normalizePlanPath(task.planPath, projectRoot);
+  const planPath = normalizePlanPath(task.planPath, executionRoot);
   const planDocs = task.planDocs ? "true" : "false";
   const planTests = task.planTests ? "true" : "false";
 
@@ -163,33 +170,75 @@ export async function runPlanner(taskId: string, projectRoot: string): Promise<v
   // blocked_external with retryAfter=null so an operator can inspect the work
   // tree instead of the stage silently reverting into a bad state.
   let preparedBranch: string | null = task.branchName ?? null;
-  if (!task.isFix && task.branchName) {
+  if (!task.isFix && task.worktreePath) {
+    if (task.branchName) {
+      restorePersistedBranch({
+        projectRoot: executionRoot,
+        taskId,
+        persistedBranchName: task.branchName,
+      });
+      preparedBranch = task.branchName;
+      logActivity(taskId, "Agent", `Restored task worktree branch: ${task.branchName}`);
+    }
+  } else if (!task.isFix && task.branchName) {
     restorePersistedBranch({
-      projectRoot,
+      projectRoot: executionRoot,
       taskId,
       persistedBranchName: task.branchName,
     });
     preparedBranch = task.branchName;
     logActivity(taskId, "Agent", `Restored feature branch: ${task.branchName}`);
   } else if (!task.isFix && plannerMode === "full") {
-    const branchResult = ensureFeatureBranch({
-      projectRoot,
-      taskId,
-      title: task.title,
-    });
-    if (branchResult.action !== "skipped" && branchResult.branchName) {
-      preparedBranch = branchResult.branchName;
-      setTaskFields(taskId, {
-        branchName: branchResult.branchName,
-        updatedAt: new Date().toISOString(),
-      });
-      logActivity(
+    const shouldCreateWorktree =
+      getEnv().AIF_TASK_WORKTREES_ENABLED &&
+      Boolean(project?.parallelEnabled) &&
+      projectSupportsTaskWorktrees(projectRoot);
+    if (shouldCreateWorktree) {
+      const worktreeResult = ensureTaskWorktree({
+        projectRoot,
         taskId,
-        "Agent",
-        `Feature branch ${branchResult.action}: ${branchResult.branchName}`,
-      );
-    } else if (branchResult.reason) {
-      log.debug({ taskId, reason: branchResult.reason }, "Branch creation skipped");
+        title: task.title,
+      });
+      if (
+        worktreeResult.action !== "skipped" &&
+        worktreeResult.branchName &&
+        worktreeResult.worktreePath
+      ) {
+        preparedBranch = worktreeResult.branchName;
+        executionRoot = worktreeResult.worktreePath;
+        setTaskFields(taskId, {
+          branchName: worktreeResult.branchName,
+          worktreePath: worktreeResult.worktreePath,
+          updatedAt: new Date().toISOString(),
+        });
+        logActivity(
+          taskId,
+          "Agent",
+          `Task worktree ${worktreeResult.action}: ${worktreeResult.worktreePath} (${worktreeResult.branchName})`,
+        );
+      } else if (worktreeResult.reason) {
+        log.debug({ taskId, reason: worktreeResult.reason }, "Worktree creation skipped");
+      }
+    } else {
+      const branchResult = ensureFeatureBranch({
+        projectRoot: executionRoot,
+        taskId,
+        title: task.title,
+      });
+      if (branchResult.action !== "skipped" && branchResult.branchName) {
+        preparedBranch = branchResult.branchName;
+        setTaskFields(taskId, {
+          branchName: branchResult.branchName,
+          updatedAt: new Date().toISOString(),
+        });
+        logActivity(
+          taskId,
+          "Agent",
+          `Feature branch ${branchResult.action}: ${branchResult.branchName}`,
+        );
+      } else if (branchResult.reason) {
+        log.debug({ taskId, reason: branchResult.reason }, "Branch creation skipped");
+      }
     }
   }
 
@@ -210,7 +259,7 @@ ${commentsForPrompt}`;
     ? `\nHANDOFF_BRANCH_PREPARED: 1\nHANDOFF_BRANCH_NAME: ${preparedBranch}`
     : "";
   const handoffContext = `HANDOFF_MODE: 1\nHANDOFF_TASK_ID: ${taskId}${handoffBranchLines}`;
-  const scopeConstraint = `IMPORTANT: Your working directory is ${projectRoot}\nAll files must be created and modified inside this directory. Do NOT navigate to parent directories or other projects.`;
+  const scopeConstraint = `IMPORTANT: Your working directory is ${executionRoot}\nAll files must be created and modified inside this directory. Do NOT navigate to parent directories or other projects.`;
   const plannerSlashCommand = `/aif-plan ${plannerMode} @${planPath} docs:${planDocs} tests:${planTests}`;
 
   if (task.isFix) {
@@ -270,7 +319,7 @@ ${taskContext}`;
 
   const { resultText: rawResult } = await executeSubagentQuery({
     taskId,
-    projectRoot,
+    projectRoot: executionRoot,
     agentName: executionName,
     prompt,
     profileMode: "plan",
@@ -287,16 +336,16 @@ ${taskContext}`;
   // belongs to the wrong HEAD. Surface as BranchIsolationError so the
   // coordinator blocks the task instead of committing the drift.
   if (preparedBranch) {
-    assertCurrentBranch(projectRoot, preparedBranch);
+    assertCurrentBranch(executionRoot, preparedBranch);
   }
 
-  const diskPlan = readPlanFromDisk(projectRoot, rawResult, !!task.isFix, planPath);
+  const diskPlan = readPlanFromDisk(executionRoot, rawResult, !!task.isFix, planPath);
   const resultText = diskPlan ?? normalizePlannerResult(rawResult);
 
   persistTaskPlanForTask({
     taskId,
     planText: resultText,
-    projectRoot,
+    projectRoot: executionRoot,
     isFix: task.isFix,
     planPath,
     updatedAt: new Date().toISOString(),

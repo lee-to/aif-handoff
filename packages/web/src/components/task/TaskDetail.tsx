@@ -88,6 +88,14 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                     />
                   </Section>
 
+                  {task.worktreePath && (
+                    <Section title="Worktree">
+                      <div className="rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-xs text-foreground break-all">
+                        {task.worktreePath}
+                      </div>
+                    </Section>
+                  )}
+
                   {(task.status === "backlog" || task.status === "done") && (
                     <TaskSettings
                       task={task}

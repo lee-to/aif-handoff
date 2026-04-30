@@ -12,6 +12,7 @@ const testDb = { current: createTestDb() };
 const mockBroadcast = vi.fn();
 const mockInternalBroadcastToken = { value: "" };
 const mockWarmupEnabled = { value: false };
+const mockTaskWorktreesEnabled = { value: false };
 const baseMockEnv = {
   AIF_DEFAULT_RUNTIME_ID: "claude",
   AIF_DEFAULT_PROVIDER_ID: "anthropic",
@@ -26,6 +27,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
       ...baseMockEnv,
       INTERNAL_BROADCAST_TOKEN: mockInternalBroadcastToken.value,
       AIF_WARMUP_ENABLED: mockWarmupEnabled.value,
+      AIF_TASK_WORKTREES_ENABLED: mockTaskWorktreesEnabled.value,
     }),
   };
 });
@@ -93,6 +95,7 @@ describe("projects API", () => {
     mockBroadcast.mockReset();
     mockInternalBroadcastToken.value = "";
     mockWarmupEnabled.value = false;
+    mockTaskWorktreesEnabled.value = false;
     mockResolveApiWarmupSupport.mockReset();
     const unsupportedWarmup = {
       supported: false,
@@ -269,8 +272,8 @@ describe("projects API", () => {
     expect(body.rootPath).toBe("/workspace/demo");
   });
 
-  it("rejects enabling parallel execution when auto-queue is already enabled and git.create_branches is true", async () => {
-    const rootPath = mkdtempSync(join(tmpdir(), "aif-parallel-auto-queue-"));
+  it("rejects enabling parallel execution when auto-queue is already enabled with git.create_branches=true and task worktrees are disabled", async () => {
+    const rootPath = mkdtempSync("/tmp/aif-parallel-auto-queue-");
     testDb.current
       .insert(projects)
       .values({
@@ -293,9 +296,35 @@ describe("projects API", () => {
 
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.error).toContain("Parallel auto-queue with git.create_branches=true");
-    expect(body.error).toContain("disable parallel execution");
-    expect(body.error).toContain("set git.create_branches=false");
+    expect(body.error).toContain("AIF_TASK_WORKTREES_ENABLED=true");
+  });
+
+  it("allows enabling parallel execution for branch-isolated auto-queue when task worktrees are enabled", async () => {
+    mockTaskWorktreesEnabled.value = true;
+    const rootPath = mkdtempSync("/tmp/aif-parallel-auto-queue-");
+    testDb.current
+      .insert(projects)
+      .values({
+        id: "branch-auto-queue-enabled",
+        name: "Branch Auto Queue",
+        rootPath,
+        autoQueueMode: true,
+      })
+      .run();
+
+    const res = await app.request("/projects/branch-auto-queue-enabled", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Branch Auto Queue",
+        rootPath,
+        parallelEnabled: true,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.parallelEnabled).toBe(true);
   });
 
   it("returns MCP servers from .mcp.json", async () => {
@@ -753,8 +782,8 @@ describe("projects API", () => {
       expect(await get.json()).toEqual({ enabled: true });
     });
 
-    it("PATCH rejects enabling auto-queue for parallel projects with git.create_branches=true", async () => {
-      const rootPath = mkdtempSync(join(tmpdir(), "aif-auto-queue-branch-"));
+    it("PATCH rejects enabling auto-queue for parallel projects with git.create_branches=true and task worktrees disabled", async () => {
+      const rootPath = mkdtempSync("/tmp/aif-auto-queue-branch-");
       testDb.current
         .insert(projects)
         .values({
@@ -773,8 +802,30 @@ describe("projects API", () => {
 
       expect(res.status).toBe(400);
       const body = await res.json();
-      expect(body.error).toContain("Parallel auto-queue with git.create_branches=true");
-      expect(body.error).toContain("disable auto-queue mode");
+      expect(body.error).toContain("AIF_TASK_WORKTREES_ENABLED=true");
+    });
+
+    it("PATCH allows enabling auto-queue for parallel branch-isolated projects when task worktrees are enabled", async () => {
+      mockTaskWorktreesEnabled.value = true;
+      const rootPath = mkdtempSync("/tmp/aif-auto-queue-branch-");
+      testDb.current
+        .insert(projects)
+        .values({
+          id: "p-branch-enabled",
+          name: "Branch Project",
+          rootPath,
+          parallelEnabled: true,
+        })
+        .run();
+
+      const res = await app.request("/projects/p-branch-enabled/auto-queue-mode", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ enabled: true });
     });
 
     it("PATCH allows parallel auto-queue when git.create_branches=false", async () => {

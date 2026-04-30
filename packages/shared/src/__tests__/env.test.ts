@@ -65,6 +65,7 @@ describe("env validation", () => {
     expect(result.AGENT_MAX_REVIEW_ITERATIONS).toBe(3);
     expect(result.AGENT_USE_SUBAGENTS).toBe(false);
     expect(result.AIF_WARMUP_ENABLED).toBe(false);
+    expect(result.AIF_TASK_WORKTREES_ENABLED).toBe(false);
   });
 
   it("should parse AIF_WARMUP_ENABLED boolean values", () => {

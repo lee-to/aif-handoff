@@ -74,6 +74,7 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
   }
 
   const task = taskId ? findTaskById(taskId) : null;
+  const executionRoot = task?.worktreePath ?? project.rootPath;
   if (task?.branchName && !task.isFix) {
     // task.branchName is a source-of-truth contract: commit MUST land on the
     // persisted branch or fail loud. `ensureFeatureBranch({switchOnly:true})`
@@ -85,7 +86,7 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
     // before any runtime call.
     try {
       restorePersistedBranch({
-        projectRoot: project.rootPath,
+        projectRoot: executionRoot,
         taskId: task.id,
         persistedBranchName: task.branchName,
       });
@@ -103,7 +104,7 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
     }
   }
 
-  const { git } = getProjectConfig(project.rootPath);
+  const { git } = getProjectConfig(executionRoot);
   const shouldPush = git.enabled && !git.skip_push_after_commit;
   const prompt = buildCommitPrompt(shouldPush);
 
@@ -111,7 +112,8 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
     {
       projectId,
       taskId,
-      projectRoot: project.rootPath,
+      projectRoot: executionRoot,
+      sourceProjectRoot: project.rootPath,
       skipPushAfterCommit: git.skip_push_after_commit,
       shouldPush,
       promptLength: prompt.length,
@@ -122,7 +124,7 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
   try {
     const { result } = await runApiRuntimeOneShot({
       projectId,
-      projectRoot: project.rootPath,
+      projectRoot: executionRoot,
       taskId,
       prompt,
       workflowKind: "commit",
@@ -137,7 +139,7 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
     // returning ok.
     if (task?.branchName && !task.isFix) {
       try {
-        assertCurrentBranch(project.rootPath, task.branchName);
+        assertCurrentBranch(executionRoot, task.branchName);
       } catch (err) {
         const message = isBranchIsolationError(err)
           ? `Branch isolation failure (${err.kind}): ${err.message}`

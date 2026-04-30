@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tasks, projects } from "@aif/shared";
@@ -19,6 +19,10 @@ vi.mock("@aif/shared/server", async (importOriginal) => {
 // Stub fetch so notifyProjectBroadcast doesn't try to hit the API.
 const originalFetch = global.fetch;
 const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+
+// Coordinator reads env at module load. This suite covers the rollout-on
+// auto-queue behavior for branch-isolated projects.
+vi.stubEnv("AIF_TASK_WORKTREES_ENABLED", "true");
 
 const { processAutoQueueAdvance, processDueScheduledTasks } = await import("../coordinator.js");
 const { findTaskById, setAutoQueueMode, updateTaskStatus, setTaskFields } =
@@ -298,6 +302,8 @@ describe("processAutoQueueAdvance", () => {
       writeFileSync(join(root, "README.md"), "# t\n");
       execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
       execFileSync("git", ["commit", "-m", "init", "--no-verify"], { cwd: root, stdio: "ignore" });
+      mkdirSync(join(root, ".ai-factory"), { recursive: true });
+      writeFileSync(join(root, ".ai-factory", "config.yaml"), "git:\n  create_branches: false\n");
 
       // Project points at a REAL git repo; seedProject uses /tmp/<id>,
       // so insert directly with the real path.
@@ -347,7 +353,7 @@ describe("processAutoQueueAdvance", () => {
       expect(findTaskById("t-clean-1")?.status).toBe("planning");
     });
 
-    it("forces parallel auto-queue to one task for branch-isolated git projects", () => {
+    it("fills the parallel pool for worktree-capable branch-isolated git projects", () => {
       const root = mkdtempSync(join(tmpdir(), "autoqueue-parallel-branch-"));
       execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
       execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root, stdio: "ignore" });
@@ -371,10 +377,10 @@ describe("processAutoQueueAdvance", () => {
       seedTask("t-branch-2", "parallel-branch", 200);
       seedTask("t-branch-3", "parallel-branch", 300);
 
-      expect(processAutoQueueAdvance()).toBe(1);
+      expect(processAutoQueueAdvance()).toBe(3);
       expect(findTaskById("t-branch-1")?.status).toBe("planning");
-      expect(findTaskById("t-branch-2")?.status).toBe("backlog");
-      expect(findTaskById("t-branch-3")?.status).toBe("backlog");
+      expect(findTaskById("t-branch-2")?.status).toBe("planning");
+      expect(findTaskById("t-branch-3")?.status).toBe("planning");
     });
   });
 });

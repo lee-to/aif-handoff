@@ -249,7 +249,7 @@ describe("codex index service", () => {
 
   it("marks missing files and deletes indexed session rows for vanished paths", async () => {
     const { createCodexIndexService } = await loadService();
-    const recentMtimeMs = Date.now() - 60_000;
+    const recentMtimeMs = Date.now() - 1000;
     const recentIso = new Date(recentMtimeMs).toISOString();
     mockListCodexSessionFileStates.mockReturnValue([
       {
@@ -352,7 +352,7 @@ describe("codex index service", () => {
 
   it("notifies visible project runtime profiles when stale limit heads are deleted without replacements", async () => {
     const { createCodexIndexService } = await loadService();
-    const recentMtimeMs = Date.now() - 60_000;
+    const recentMtimeMs = Date.now() - 1000;
     const recentIso = new Date(recentMtimeMs).toISOString();
     mockListCodexSessionFileStates.mockReturnValue([
       {

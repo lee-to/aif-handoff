@@ -365,6 +365,13 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
                 <p className="text-xs text-muted-foreground">
                   Experimental. Process multiple tasks per stage concurrently.
                 </p>
+                {parallelEnabled && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Branch-isolated projects need{" "}
+                    <code className="font-mono">AIF_TASK_WORKTREES_ENABLED=true</code> on the server
+                    to run parallel tasks in isolated worktrees.
+                  </p>
+                )}
               </div>
               <Switch checked={parallelEnabled} onCheckedChange={setParallelEnabled} />
             </div>

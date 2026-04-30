@@ -69,6 +69,7 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
     AGENT_FIRST_ACTIVITY_TIMEOUT_MS: 60_000,
     AIF_USAGE_LIMITS_ENABLED: false,
     AIF_WARMUP_ENABLED: false,
+    AIF_TASK_WORKTREES_ENABLED: false,
     AIF_ENABLE_CODEX_LOGIN_PROXY: false,
     AIF_CODEX_LOGIN_BROKER_PORT: 3010,
     AGENT_INTERNAL_URL: "http://agent:3010",

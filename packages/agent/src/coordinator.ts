@@ -31,6 +31,7 @@ import { runReviewer } from "./subagents/reviewer.js";
 import {
   describeDirtyWorkingTree,
   isGitRepo,
+  projectSupportsTaskWorktrees,
   projectUsesSharedBranchIsolation,
 } from "./gitBranch.js";
 import { flushActivityQueue } from "./hooks.js";
@@ -336,7 +337,10 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
   }
 
   if (_runtimeRegistry) {
-    const initResult = initProject({ projectRoot: project.rootPath, registry: _runtimeRegistry });
+    const initResult = initProject({
+      projectRoot: task.worktreePath ?? project.rootPath,
+      registry: _runtimeRegistry,
+    });
     if (!initResult.ok) {
       log.error(
         { taskId: task.id, projectId: task.projectId, error: initResult.error },
@@ -347,7 +351,13 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
   }
 
   log.info(
-    { taskId: task.id, title: task.title, stage: stage.label, projectRoot: project.rootPath },
+    {
+      taskId: task.id,
+      title: task.title,
+      stage: stage.label,
+      projectRoot: project.rootPath,
+      worktreePath: task.worktreePath ?? null,
+    },
     "Picked up task for processing",
   );
   const sourceStatus = task.status;
@@ -361,7 +371,8 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
   );
 
   try {
-    await runStageWithTimeout(stage.runner, task.id, project.rootPath, stage.label);
+    const executionRoot = task.worktreePath ?? project.rootPath;
+    await runStageWithTimeout(stage.runner, task.id, executionRoot, stage.label);
 
     flushActivityQueue(task.id);
 
@@ -381,7 +392,7 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
     if (stage.label === "reviewer") {
       const outcome = await handleAutoReviewGate({
         taskId: task.id,
-        projectRoot: project.rootPath,
+        projectRoot: task.worktreePath ?? project.rootPath,
       });
 
       if (outcome?.status === "manual_review_required") {
@@ -635,17 +646,18 @@ export function processAutoQueueAdvance(): number {
     //   - task state (any in-flight task already has a persisted branchName).
     //
     // Config alone is not enough: an operator can toggle `create_branches=off`
-    // mid-pipeline. `restorePersistedBranch` keeps switching HEAD for already
-    // bound tasks, so concurrent parallel stages would still race on the
-    // shared work tree. Until #86 introduces per-task worktrees, fall back to
-    // serial whenever EITHER signal says the project is shared-branch.
+    // mid-pipeline. Legacy branch-bound tasks without worktreePath still
+    // switch HEAD in the shared root, so they force serial execution. Projects
+    // that support task worktrees can keep the parallel pool open because the
+    // planner provisions an isolated cwd before mutating files.
     const usesSharedBranchIsolation =
-      projectUsesSharedBranchIsolation(project.rootPath) ||
+      (projectUsesSharedBranchIsolation(project.rootPath) &&
+        (!env.AIF_TASK_WORKTREES_ENABLED || !projectSupportsTaskWorktrees(project.rootPath))) ||
       hasActiveBranchBoundTasksForProject(project.id);
     if (project.parallelEnabled && usesSharedBranchIsolation) {
       log.warn(
         { projectId: project.id, projectRoot: project.rootPath },
-        "Auto-queue parallel pool disabled for git.create_branches project (or active branch-bound tasks) until per-task worktrees are available",
+        "Auto-queue parallel pool disabled while legacy branch-bound tasks without worktrees are active",
       );
     }
     const limit =
@@ -668,7 +680,10 @@ export function processAutoQueueAdvance(): number {
     // the next task now would let its planner create a feature branch
     // on top of stale changes (or fail checkout outright). Pause
     // auto-queue advance for this project until the work tree is clean.
-    if (isGitRepo(project.rootPath)) {
+    if (
+      isGitRepo(project.rootPath) &&
+      (!env.AIF_TASK_WORKTREES_ENABLED || !projectSupportsTaskWorktrees(project.rootPath))
+    ) {
       const dirty = describeDirtyWorkingTree(project.rootPath);
       if (dirty) {
         log.warn(
@@ -768,8 +783,8 @@ export async function pollAndProcess(): Promise<void> {
   const failedInCycle = new Set<string>();
 
   // Cache effective project concurrency settings to avoid repeated lookups.
-  // Branch-per-task isolation still mutates one shared projectRoot, so it must
-  // be serial until #86 introduces task-specific worktrees.
+  // Legacy branch-bound tasks without worktreePath still mutate one shared
+  // projectRoot, so those projects stay serial until the legacy task drains.
   const projectConcurrencyCache = new Map<string, { parallel: boolean; max: number }>();
   function resolveProjectConcurrency(projectId: string): { parallel: boolean; max: number } {
     let cached = projectConcurrencyCache.get(projectId);
@@ -778,7 +793,8 @@ export async function pollAndProcess(): Promise<void> {
       const configuredParallel = project?.parallelEnabled ?? false;
       // Mirror processAutoQueueAdvance: config OR task-state forces serial.
       const usesSharedBranchIsolation = project
-        ? projectUsesSharedBranchIsolation(project.rootPath) ||
+        ? (projectUsesSharedBranchIsolation(project.rootPath) &&
+            (!env.AIF_TASK_WORKTREES_ENABLED || !projectSupportsTaskWorktrees(project.rootPath))) ||
           hasActiveBranchBoundTasksForProject(projectId)
         : false;
       cached = {
@@ -788,7 +804,7 @@ export async function pollAndProcess(): Promise<void> {
       if (configuredParallel && usesSharedBranchIsolation) {
         log.warn(
           { projectId, projectRoot: project?.rootPath },
-          "Project parallel execution forced to serial because git.create_branches uses a shared worktree (or active branch-bound tasks remain)",
+          "Project parallel execution forced to serial while legacy branch-bound tasks without worktrees remain active",
         );
       }
       projectConcurrencyCache.set(projectId, cached);

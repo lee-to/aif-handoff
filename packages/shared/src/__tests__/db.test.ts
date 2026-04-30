@@ -394,12 +394,14 @@ describe("db", () => {
           "auto_review_state_json",
           "runtime_limit_snapshot_json",
           "runtime_limit_updated_at",
+          "branch_name",
+          "worktree_path",
         ]),
       );
       expect(runtimeProfileColumns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
       );
-      expect(userVersion).toBe(20);
+      expect(userVersion).toBe(21);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
@@ -453,7 +455,7 @@ describe("db", () => {
       migratedSqlite.close();
 
       expect(dirtyIndex).toBeUndefined();
-      expect(userVersion).toBe(20);
+      expect(userVersion).toBe(21);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
@@ -513,31 +515,35 @@ describe("db", () => {
       migratedSqlite.close();
 
       expect(taskColumns.map((column) => column.name)).toEqual(
-        expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
+        expect.arrayContaining([
+          "runtime_limit_snapshot_json",
+          "runtime_limit_updated_at",
+          "branch_name",
+          "worktree_path",
+        ]),
       );
       expect(profileColumns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
       );
-      expect(userVersion).toBe(20);
+      expect(userVersion).toBe(21);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
     }
   });
 
-  it("upgrades a v18 schema to current by adding tasks.branch_name and warmup sessions", () => {
+  it("upgrades a v18 schema to current by adding task git-isolation columns and warmup sessions", () => {
     closeDb();
     const dbPath = join(tmpdir(), `aif-shared-v18-to-v19-${Date.now()}-${Math.random()}.sqlite`);
     const sqlite = new Database(dbPath);
 
     // Minimal pre-v19 schema with the columns the v6→v18 migrations would have
     // produced. The point of this test is to lock the v19 contract: the
-    // upgrade must add `branch_name` and bump user_version to 19, while
-    // leaving every prior column (esp. the v15 runtime_limit recovery
-    // columns) intact. If this PR lands second after another migration
-    // merges to main, this test will fail and force the rebaser to bump to a
-    // free trailing version slot rather than silently re-using v19 with
-    // different SQL.
+    // upgrade must add `branch_name` and `worktree_path`, while leaving every
+    // prior column (esp. the v15 runtime_limit recovery columns) intact. If
+    // this PR lands second after another migration merges to main, this test
+    // will fail and force the rebaser to bump to a free trailing version slot
+    // rather than silently re-using an existing version with different SQL.
     sqlite.exec(`
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY,
@@ -578,6 +584,7 @@ describe("db", () => {
 
       const taskColumnNames = taskColumns.map((column) => column.name);
       expect(taskColumnNames).toContain("branch_name");
+      expect(taskColumnNames).toContain("worktree_path");
       expect(taskColumnNames).toEqual(
         expect.arrayContaining([
           "manual_review_required",
@@ -587,7 +594,7 @@ describe("db", () => {
         ]),
       );
       expect(warmupTable?.name).toBe("runtime_warmup_sessions");
-      expect(userVersion).toBe(20);
+      expect(userVersion).toBe(21);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
@@ -634,7 +641,7 @@ describe("db", () => {
         "idx_runtime_warmup_active_lookup",
         "idx_runtime_warmup_expires",
       ]);
-      expect(userVersion).toBe(20);
+      expect(userVersion).toBe(21);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);

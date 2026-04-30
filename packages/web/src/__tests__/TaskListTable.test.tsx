@@ -37,6 +37,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     sessionId: null,
     scheduledAt: null,
     branchName: null,
+    worktreePath: null,
     roadmapAlias: null,
     tags: [],
     status: "backlog",

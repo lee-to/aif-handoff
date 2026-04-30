@@ -51,6 +51,7 @@ const mockTask: Task = {
   sessionId: null,
   scheduledAt: null,
   branchName: null,
+  worktreePath: null,
   roadmapAlias: null,
   tags: [],
   status: "backlog",

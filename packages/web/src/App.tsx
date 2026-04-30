@@ -35,7 +35,7 @@ function AppContent() {
   useCommitToasts();
   const { theme, toggleTheme } = useTheme();
   const { data: projects } = useProjects();
-  const [project, setProject] = useState<Project | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -48,6 +48,10 @@ function AppContent() {
     const saved = readStorage(STORAGE_KEYS.VIEW_MODE);
     return saved === "list" ? "list" : "kanban";
   });
+  const project = useMemo(
+    () => projects?.find((candidate) => candidate.id === selectedProjectId) ?? null,
+    [projects, selectedProjectId],
+  );
   const { data: projectTasks } = useTasks(project?.id ?? null);
   const { data: allTasks } = useQuery<Task[]>({
     queryKey: ["tasks", "all"],
@@ -82,7 +86,7 @@ function AppContent() {
   // Restore state from URL or localStorage on initial load
   useEffect(() => {
     if (!projects?.length) return;
-    if (project) return;
+    if (selectedProjectId) return;
 
     const match = window.location.pathname.match(/^\/project\/([^/]+)(?:\/task\/([^/]+))?/);
     if (match) {
@@ -91,7 +95,7 @@ function AppContent() {
       const found = projects.find((p) => p.id === urlProjectId);
       if (found) {
         queueMicrotask(() => {
-          setProject(found);
+          setSelectedProjectId(found.id);
           writeStorage(STORAGE_KEYS.SELECTED_PROJECT, found.id);
           if (urlTaskId) setSelectedTaskId(urlTaskId);
         });
@@ -104,11 +108,11 @@ function AppContent() {
       const found = projects.find((p) => p.id === savedId);
       if (found) {
         queueMicrotask(() => {
-          setProject(found);
+          setSelectedProjectId(found.id);
         });
       }
     }
-  }, [projects, project]);
+  }, [projects, selectedProjectId]);
 
   // Handle browser back/forward
   useEffect(() => {
@@ -119,11 +123,12 @@ function AppContent() {
         const urlTaskId = match[2] ?? null;
         const found = projects?.find((p) => p.id === urlProjectId);
         if (found) {
-          setProject(found);
+          setSelectedProjectId(found.id);
           setSelectedTaskId(urlTaskId);
           return;
         }
       }
+      setSelectedProjectId(null);
       setSelectedTaskId(null);
     };
     window.addEventListener("popstate", onPopState);
@@ -139,7 +144,7 @@ function AppContent() {
   useKeyboardShortcut({ key: "KeyN", meta: true }, dispatchCreateTask);
 
   const handleSelectProject = useCallback((p: Project) => {
-    setProject(p);
+    setSelectedProjectId(p.id);
     setRuntimeSettingsOpen(false);
     writeStorage(STORAGE_KEYS.SELECTED_PROJECT, p.id);
     window.history.pushState(null, "", `/project/${p.id}`);
@@ -165,7 +170,7 @@ function AppContent() {
         selectedProject={project}
         onSelectProject={handleSelectProject}
         onDeselectProject={() => {
-          setProject(null);
+          setSelectedProjectId(null);
           setSelectedTaskId(null);
           setRuntimeSettingsOpen(false);
           removeStorage(STORAGE_KEYS.SELECTED_PROJECT);

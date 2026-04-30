@@ -64,6 +64,14 @@ describe("env validation", () => {
     expect(result.AGENT_CHAT_MAX_TURNS).toBe(50);
     expect(result.AGENT_MAX_REVIEW_ITERATIONS).toBe(3);
     expect(result.AGENT_USE_SUBAGENTS).toBe(false);
+    expect(result.AIF_WARMUP_ENABLED).toBe(false);
+  });
+
+  it("should parse AIF_WARMUP_ENABLED boolean values", () => {
+    expect(validateEnv({ AIF_WARMUP_ENABLED: "true" }).AIF_WARMUP_ENABLED).toBe(true);
+    expect(validateEnv({ AIF_WARMUP_ENABLED: "1" }).AIF_WARMUP_ENABLED).toBe(true);
+    expect(validateEnv({ AIF_WARMUP_ENABLED: "false" }).AIF_WARMUP_ENABLED).toBe(false);
+    expect(validateEnv({ AIF_WARMUP_ENABLED: "0" }).AIF_WARMUP_ENABLED).toBe(false);
   });
 
   it("should accept missing ANTHROPIC_API_KEY (uses ~/.claude/ auth)", () => {

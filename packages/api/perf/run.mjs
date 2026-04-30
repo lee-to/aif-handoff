@@ -60,12 +60,14 @@ async function ensureK6Installed() {
 function spawnDevStack() {
   const command = process.platform === "win32" ? "cmd.exe" : "npm";
   const args =
-    process.platform === "win32" ? ["/d", "/s", "/c", "npm", "run", "dev"] : ["run", "dev"];
+    process.platform === "win32"
+      ? ["/d", "/s", "/c", "npm", "run", "dev:perf"]
+      : ["run", "dev:perf"];
   const child = spawn(command, args, {
     cwd: repoRoot,
     stdio: "ignore",
     detached: true,
-    env: { ...process.env },
+    env: { ...process.env, AIF_ENABLE_CODEX_LOGIN_PROXY: "false" },
   });
   child.unref();
   return child;

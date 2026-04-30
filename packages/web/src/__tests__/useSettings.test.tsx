@@ -18,6 +18,7 @@ import {
   useSettings,
   useProjectDefaults,
   useUsageLimitsEnabled,
+  useWarmupEnabled,
   __resetUsageLimitsFlagCacheForTests,
 } from "../hooks/useSettings.js";
 
@@ -115,5 +116,27 @@ describe("useUsageLimitsEnabled", () => {
     const { result } = renderHook(() => useUsageLimitsEnabled());
     await waitFor(() => expect(mockGetSettings).toHaveBeenCalled());
     expect(result.current).toBe(true);
+  });
+});
+
+describe("useWarmupEnabled", () => {
+  beforeEach(() => {
+    mockGetSettings.mockReset();
+  });
+
+  it("returns false until settings load and then reflects warmupEnabled", async () => {
+    mockGetSettings.mockResolvedValue({
+      useSubagents: false,
+      maxReviewIterations: 3,
+      autoReviewStrategy: "full_re_review",
+      usageLimitsEnabled: true,
+      warmupEnabled: true,
+    });
+
+    const { result } = renderHook(() => useWarmupEnabled(), { wrapper: createWrapper() });
+
+    expect(result.current).toBe(false);
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(mockGetSettings).toHaveBeenCalledTimes(1);
   });
 });

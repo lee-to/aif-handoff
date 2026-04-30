@@ -80,6 +80,11 @@ export function useUsageLimitsEnabled(): boolean {
   return value;
 }
 
+export function useWarmupEnabled(): boolean {
+  const { data } = useSettings();
+  return data?.warmupEnabled ?? false;
+}
+
 /** Test-only: reset the module-level usage-limits cache between cases. */
 export function __resetUsageLimitsFlagCacheForTests(): void {
   cachedUsageLimitsEnabled = null;

@@ -5,6 +5,8 @@ import type { TaskMetricsSummary } from "@/lib/taskMetrics";
 
 let mockTheme = "dark";
 const mockToggleTheme = vi.fn();
+let mockWarmupEnabled = false;
+let mockWarmupData: { support: { supported: boolean } } | undefined;
 let mockEffectiveChatRuntime: {
   profile: {
     id: string;
@@ -39,6 +41,17 @@ vi.mock("@/hooks/useRuntimeProfiles", () => ({
   }),
 }));
 
+vi.mock("@/hooks/useSettings", () => ({
+  useUsageLimitsEnabled: () => true,
+  useWarmupEnabled: () => mockWarmupEnabled,
+}));
+
+vi.mock("@/hooks/useProjectWarmup", () => ({
+  useProjectWarmup: () => ({
+    data: mockWarmupData,
+  }),
+}));
+
 vi.mock("@/components/project/ProjectSelector", () => ({
   ProjectSelector: () => <div>Project selector</div>,
 }));
@@ -57,6 +70,10 @@ vi.mock("@/components/layout/RoadmapDialog", () => ({
 
 vi.mock("@/components/layout/GlobalSettingsDialog", () => ({
   GlobalSettingsDialog: () => null,
+}));
+
+vi.mock("@/components/project/WarmupDialog", () => ({
+  WarmupDialog: ({ open }: { open: boolean }) => (open ? <div>Warmup dialog open</div> : null),
 }));
 
 const { Header } = await import("@/components/layout/Header");
@@ -132,6 +149,34 @@ describe("Header", () => {
       },
     };
     mockRuntimeProfiles = [];
+    mockWarmupEnabled = false;
+    mockWarmupData = undefined;
+  });
+
+  it("hides the warmup entry point by default", () => {
+    renderHeader();
+
+    expect(screen.queryByRole("button", { name: "Runtime warmup" })).toBeNull();
+  });
+
+  it("hides the warmup entry point when no warmup runtime is supported", () => {
+    mockWarmupEnabled = true;
+    mockWarmupData = { support: { supported: false } };
+
+    renderHeader();
+
+    expect(screen.queryByRole("button", { name: "Runtime warmup" })).toBeNull();
+  });
+
+  it("opens the warmup dialog when the feature and runtime support are present", () => {
+    mockWarmupEnabled = true;
+    mockWarmupData = { support: { supported: true } };
+
+    renderHeader();
+
+    fireEvent.click(screen.getByRole("button", { name: "Runtime warmup" }));
+
+    expect(screen.getByText("Warmup dialog open")).toBeDefined();
   });
 
   it("opens runtime usage dialog and shows per-window quota entries for configured runtimes", () => {

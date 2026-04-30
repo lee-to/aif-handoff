@@ -169,6 +169,7 @@ describe("runtimeProfiles API", () => {
         defaultTransport: "sdk",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: true,
           supportsAgentDefinitions: true,
           supportsStreaming: true,

@@ -399,7 +399,7 @@ describe("db", () => {
       expect(runtimeProfileColumns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
       );
-      expect(userVersion).toBe(19);
+      expect(userVersion).toBe(20);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
@@ -453,7 +453,7 @@ describe("db", () => {
       migratedSqlite.close();
 
       expect(dirtyIndex).toBeUndefined();
-      expect(userVersion).toBe(19);
+      expect(userVersion).toBe(20);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
@@ -518,14 +518,14 @@ describe("db", () => {
       expect(profileColumns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["runtime_limit_snapshot_json", "runtime_limit_updated_at"]),
       );
-      expect(userVersion).toBe(19);
+      expect(userVersion).toBe(20);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);
     }
   });
 
-  it("upgrades a v18 schema to v19 by adding tasks.branch_name (without dropping prior columns)", () => {
+  it("upgrades a v18 schema to current by adding tasks.branch_name and warmup sessions", () => {
     closeDb();
     const dbPath = join(tmpdir(), `aif-shared-v18-to-v19-${Date.now()}-${Math.random()}.sqlite`);
     const sqlite = new Database(dbPath);
@@ -563,6 +563,16 @@ describe("db", () => {
       const taskColumns = migratedSqlite.prepare(`PRAGMA table_info(tasks)`).all() as Array<{
         name: string;
       }>;
+      const warmupTable = migratedSqlite
+        .prepare(
+          `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table'
+            AND name = 'runtime_warmup_sessions'
+        `,
+        )
+        .get() as { name: string } | undefined;
       const userVersion = migratedSqlite.pragma("user_version", { simple: true }) as number;
       migratedSqlite.close();
 
@@ -576,7 +586,55 @@ describe("db", () => {
           "runtime_limit_updated_at",
         ]),
       );
-      expect(userVersion).toBe(19);
+      expect(warmupTable?.name).toBe("runtime_warmup_sessions");
+      expect(userVersion).toBe(20);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
+  });
+
+  it("creates runtime warmup sessions table and lookup indexes for fresh databases", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-warmup-${Date.now()}-${Math.random()}.sqlite`);
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const sqlite = new Database(dbPath, { readonly: true });
+      const table = sqlite
+        .prepare(
+          `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table'
+            AND name = 'runtime_warmup_sessions'
+        `,
+        )
+        .get() as { name: string } | undefined;
+      const indexes = sqlite
+        .prepare(
+          `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'index'
+            AND name IN (
+              'idx_runtime_warmup_active_lookup',
+              'idx_runtime_warmup_expires'
+            )
+        `,
+        )
+        .all() as Array<{ name: string }>;
+      const userVersion = sqlite.pragma("user_version", { simple: true }) as number;
+      sqlite.close();
+
+      expect(table?.name).toBe("runtime_warmup_sessions");
+      expect(indexes.map((row) => row.name).sort()).toEqual([
+        "idx_runtime_warmup_active_lookup",
+        "idx_runtime_warmup_expires",
+      ]);
+      expect(userVersion).toBe(20);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);

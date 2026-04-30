@@ -79,6 +79,13 @@ export class CodexAppServerClient {
     return await this.request("thread/list", params);
   }
 
+  async forkThread(
+    params: CodexAppServerRequestMap["thread/fork"]["params"],
+  ): Promise<CodexAppServerRequestMap["thread/fork"]["result"]> {
+    await this.ensureInitialized();
+    return await this.request("thread/fork", params);
+  }
+
   async readThread(
     params: CodexAppServerRequestMap["thread/read"]["params"],
   ): Promise<CodexAppServerRequestMap["thread/read"]["result"]> {

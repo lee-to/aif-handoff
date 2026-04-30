@@ -15,9 +15,11 @@ import {
   type RuntimeRunResult,
   type RuntimeSession,
   type RuntimeSessionEventsInput,
+  type RuntimeSessionForkInput,
   type RuntimeSessionGetInput,
   type RuntimeSessionListInput,
 } from "../../types.js";
+import { RuntimeCapabilityError, RuntimeExecutionError } from "../../errors.js";
 import { diagnoseClaudeError } from "./diagnostics.js";
 import { getClaudeMcpStatus, installClaudeMcpServer, uninstallClaudeMcpServer } from "./mcp.js";
 import { initClaudeProject } from "./project.js";
@@ -98,6 +100,7 @@ function createFallbackLogger(): ClaudeRuntimeAdapterLogger {
 /** SDK transport has full capabilities. */
 const SDK_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: true,
+  supportsSessionFork: true,
   supportsSessionList: true,
   supportsAgentDefinitions: true,
   supportsStreaming: true,
@@ -114,6 +117,7 @@ const SDK_CAPABILITIES: RuntimeCapabilities = {
  */
 const CLI_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: true,
+  supportsSessionFork: true,
   supportsSessionList: true,
   supportsAgentDefinitions: true,
   supportsStreaming: false,
@@ -127,6 +131,7 @@ const CLI_CAPABILITIES: RuntimeCapabilities = {
 /** API transport — requires explicit key + baseUrl, no agent definitions. */
 const API_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: false,
+  supportsSessionFork: false,
   supportsSessionList: false,
   supportsAgentDefinitions: false,
   supportsStreaming: true,
@@ -140,6 +145,11 @@ function readStringOption(input: RuntimeConnectionValidationInput, key: string):
   const options = input.options ?? {};
   const raw = options[key];
   return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+function sessionIdSuffix(sessionId: string | null | undefined): string | null {
+  if (!sessionId) return null;
+  return sessionId.length <= 8 ? sessionId : sessionId.slice(-8);
 }
 
 function normalizeSdkExecutablePath(
@@ -495,6 +505,64 @@ export function createClaudeRuntimeAdapter(
     return runClaudeRuntime(input, logger, { pathToClaudeCodeExecutable: sdkExecutablePath });
   }
 
+  async function forkByTransport(input: RuntimeSessionForkInput): Promise<RuntimeRunResult> {
+    const transport = input.transport ?? RuntimeTransport.SDK;
+    if (transport === RuntimeTransport.API) {
+      logger.warn(
+        {
+          runtimeId,
+          profileId: input.profileId ?? null,
+          transport,
+          sourceSessionIdSuffix: sessionIdSuffix(input.sourceSessionId),
+          skipReason: "unsupported_transport",
+        },
+        "WARN [runtime:claude] Session fork requested for unsupported transport",
+      );
+      throw new RuntimeCapabilityError(
+        `Claude ${transport} transport does not support session fork`,
+      );
+    }
+
+    logger.debug(
+      {
+        runtimeId,
+        profileId: input.profileId ?? null,
+        transport,
+        sourceSessionIdSuffix: sessionIdSuffix(input.sourceSessionId),
+      },
+      "DEBUG [runtime:claude] Starting Claude session fork run",
+    );
+
+    try {
+      const result = await runByTransport(input);
+      logger.debug(
+        {
+          runtimeId,
+          profileId: input.profileId ?? null,
+          transport,
+          sourceSessionIdSuffix: sessionIdSuffix(input.sourceSessionId),
+          childSessionIdSuffix: sessionIdSuffix(result.sessionId ?? result.session?.id ?? null),
+        },
+        "DEBUG [runtime:claude] Claude session fork run completed",
+      );
+      return result;
+    } catch (error) {
+      logger.error(
+        {
+          runtimeId,
+          profileId: input.profileId ?? null,
+          transport,
+          sourceSessionIdSuffix: sessionIdSuffix(input.sourceSessionId),
+          category: error instanceof RuntimeExecutionError ? error.category : null,
+          adapterCode: error instanceof RuntimeExecutionError ? error.adapterCode : null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "ERROR [runtime:claude] Claude session fork run failed",
+      );
+      throw error;
+    }
+  }
+
   return {
     descriptor: {
       id: runtimeId,
@@ -525,6 +593,9 @@ export function createClaudeRuntimeAdapter(
     },
     async resume(input: RuntimeRunInput & { sessionId: string }): Promise<RuntimeRunResult> {
       return runByTransport({ ...input, resume: true });
+    },
+    async forkSession(input: RuntimeSessionForkInput): Promise<RuntimeRunResult> {
+      return forkByTransport(input);
     },
     async listSessions(input: RuntimeSessionListInput): Promise<RuntimeSession[]> {
       return listClaudeRuntimeSessions(input);

@@ -8,6 +8,7 @@ export {
   chatSessions,
   chatMessages,
   usageEvents,
+  runtimeWarmupSessions,
   codexSessions,
   codexSessionFiles,
   codexLimitHeads,
@@ -31,6 +32,9 @@ export type {
   NewChatMessageRow,
   UsageEventRow,
   NewUsageEventRow,
+  RuntimeWarmupSessionStatus,
+  RuntimeWarmupSessionRow,
+  NewRuntimeWarmupSessionRow,
   CodexSessionRow,
   NewCodexSessionRow,
   CodexSessionFileRow,
@@ -93,6 +97,7 @@ export {
   type RuntimeLimitWindow,
   type RuntimeLimitSnapshot,
   type RuntimeLimitEventPayload,
+  type WarmupBroadcastPayload,
   type ChatSessionSource,
   type ChatSession,
   type CreateChatSessionInput,
@@ -108,7 +113,17 @@ export { getEnv, validateEnv, resetEnvCache } from "./env.js";
 export type { Env } from "./env.js";
 
 // Constants
-export { STATUS_CONFIG, ORDERED_STATUSES } from "./constants.js";
+export {
+  STATUS_CONFIG,
+  ORDERED_STATUSES,
+  WARMUP_TARGETS,
+  WARMUP_WORKFLOW_KINDS,
+  DEFAULT_WARMUP_TARGET,
+  isWarmupWorkflowKind,
+  type WarmupTarget,
+  type WarmupWorkflowKind,
+  type WarmupProfileMode,
+} from "./constants.js";
 export { applyHumanTaskEvent, HUMAN_ACTIONS_BY_STATUS, CLEAN_STATE_RESET } from "./stateMachine.js";
 
 // Logger

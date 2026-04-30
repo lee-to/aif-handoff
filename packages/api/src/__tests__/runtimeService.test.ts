@@ -132,6 +132,7 @@ function createAdapter() {
       defaultTransport: "sdk",
       capabilities: {
         supportsResume: true,
+        supportsSessionFork: false,
         supportsSessionList: true,
         supportsAgentDefinitions: true,
         supportsStreaming: true,
@@ -368,6 +369,27 @@ describe("runtime service", () => {
     );
   });
 
+  it("resolves warmup support from the planner runtime defaults", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    adapter.descriptor.capabilities.supportsSessionFork = true;
+    Object.assign(adapter, { forkSession: vi.fn() });
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+    mockGetAppDefaultRuntimeProfileId.mockReturnValue("app-plan-default");
+
+    const support = await runtimeService.resolveApiWarmupSupport("proj-1");
+
+    expect(support.supported).toBe(true);
+    expect(mockGetAppDefaultRuntimeProfileId).toHaveBeenCalledWith("plan");
+    expect(mockResolveEffectiveRuntimeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "proj-1",
+        mode: "plan",
+        systemDefaultRuntimeProfileId: "app-plan-default",
+      }),
+    );
+  });
+
   it("prefers an explicit runtime profile id over effective chat defaults", async () => {
     const runtimeService = await loadRuntimeService();
     mockFindRuntimeProfileById.mockImplementation((id: string) =>
@@ -562,6 +584,36 @@ describe("runtime service", () => {
             _trustToken: Symbol.for("aif.runtime.trust"),
           }),
         }),
+      }),
+    );
+  });
+
+  it("can run one-shot queries against planner runtime defaults", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+    mockGetAppDefaultRuntimeProfileId.mockReturnValue("app-plan-default");
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      profileMode: "plan",
+      prompt: "warm planner context",
+      workflowKind: "planner",
+      usageContext: { source: "warmup" },
+    });
+
+    expect(mockGetAppDefaultRuntimeProfileId).toHaveBeenCalledWith("plan");
+    expect(mockResolveEffectiveRuntimeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "proj-1",
+        mode: "plan",
+        systemDefaultRuntimeProfileId: "app-plan-default",
+      }),
+    );
+    expect(adapter.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowKind: "planner",
       }),
     );
   });

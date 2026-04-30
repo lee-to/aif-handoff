@@ -35,14 +35,23 @@ const RUNTIME_ERROR_CATEGORIES = new Set<RuntimeErrorCategory>([
 const STRUCTURED_CODE_TO_CATEGORY: Record<string, RuntimeErrorCategory> = {
   AUTH: "auth",
   UNAUTHORIZED: "auth",
+  USAGE_LIMIT_EXCEEDED: "rate_limit",
+  SERVER_OVERLOADED: "rate_limit",
   PERMISSION_DENIED: "permission",
   RATE_LIMIT: "rate_limit",
   TIMEOUT: "timeout",
   MODEL_NOT_FOUND: "model_not_found",
   CONTEXT_LENGTH_EXCEEDED: "context_length",
+  CONTEXT_WINDOW_EXCEEDED: "context_length",
   CONTENT_FILTER: "content_filter",
   TRANSPORT_ERROR: "transport",
   STREAM_ERROR: "stream",
+  HTTP_CONNECTION_FAILED: "transport",
+  RESPONSE_STREAM_CONNECTION_FAILED: "stream",
+  RESPONSE_STREAM_DISCONNECTED: "stream",
+  BAD_REQUEST: "transport",
+  INTERNAL_SERVER_ERROR: "transport",
+  SANDBOX_ERROR: "permission",
 };
 
 interface CodexAppServerErrorInfo {
@@ -90,20 +99,21 @@ export function classifyCodexAppServerError(
 export function extractCodexAppServerErrorInfo(error: unknown): CodexAppServerErrorInfo {
   const fromJsonlError = error instanceof JsonlRpcResponseError ? asRecord(error.rpcData) : null;
   const fromDirectError = error && typeof error === "object" ? asRecord(error) : null;
-  const fromCodexInfo = asRecord(
-    fromJsonlError?.codexErrorInfo ?? fromDirectError?.codexErrorInfo ?? null,
-  );
+  const rawCodexInfo = fromJsonlError?.codexErrorInfo ?? fromDirectError?.codexErrorInfo ?? null;
+  const fromCodexInfo = asRecord(rawCodexInfo);
+  const codexInfoDetails = readCodexErrorInfoDetails(fromCodexInfo?.codexErrorInfo ?? rawCodexInfo);
   const providerMeta =
     fromJsonlError ??
     (fromDirectError && Object.keys(fromDirectError).length > 0 ? fromDirectError : null);
 
-  const category = readCategory(
-    fromCodexInfo?.category ??
-      fromJsonlError?.category ??
-      fromDirectError?.category ??
-      fromJsonlError?.errorCategory ??
-      fromDirectError?.errorCategory,
-  );
+  const category =
+    readCategory(
+      fromCodexInfo?.category ??
+        fromJsonlError?.category ??
+        fromDirectError?.category ??
+        fromJsonlError?.errorCategory ??
+        fromDirectError?.errorCategory,
+    ) ?? codexInfoDetails.category;
   const adapterCode = readString(
     fromCodexInfo?.adapterCode ??
       fromJsonlError?.adapterCode ??
@@ -112,7 +122,10 @@ export function extractCodexAppServerErrorInfo(error: unknown): CodexAppServerEr
       fromDirectError?.code,
   );
   const structuredCode = readString(
-    fromCodexInfo?.code ?? fromJsonlError?.codexCode ?? fromDirectError?.codexCode,
+    fromCodexInfo?.code ??
+      fromJsonlError?.codexCode ??
+      fromDirectError?.codexCode ??
+      codexInfoDetails.structuredCode,
   );
   const httpStatusCode = readNumber(
     fromCodexInfo?.httpStatusCode ??
@@ -120,7 +133,8 @@ export function extractCodexAppServerErrorInfo(error: unknown): CodexAppServerEr
       fromJsonlError?.httpStatusCode ??
       fromJsonlError?.httpStatus ??
       fromDirectError?.httpStatusCode ??
-      fromDirectError?.httpStatus,
+      fromDirectError?.httpStatus ??
+      codexInfoDetails.httpStatusCode,
   );
 
   return {
@@ -130,6 +144,49 @@ export function extractCodexAppServerErrorInfo(error: unknown): CodexAppServerEr
     httpStatusCode,
     providerMeta,
   };
+}
+
+function readCodexErrorInfoDetails(value: unknown): {
+  category: RuntimeErrorCategory | null;
+  structuredCode: string | null;
+  httpStatusCode: number | null;
+} {
+  const variant = readCodexErrorInfoVariant(value);
+  if (!variant) {
+    return { category: null, structuredCode: null, httpStatusCode: null };
+  }
+  const structuredCode = camelToUpperSnake(variant.name);
+  return {
+    category: STRUCTURED_CODE_TO_CATEGORY[structuredCode] ?? null,
+    structuredCode,
+    httpStatusCode: variant.httpStatusCode,
+  };
+}
+
+function readCodexErrorInfoVariant(value: unknown): {
+  name: string;
+  httpStatusCode: number | null;
+} | null {
+  const stringValue = readString(value);
+  if (stringValue) {
+    return { name: stringValue, httpStatusCode: null };
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const [name, detail] = Object.entries(record)[0] ?? [];
+  if (!name) {
+    return null;
+  }
+  return {
+    name,
+    httpStatusCode: readNumber(asRecord(detail)?.httpStatusCode),
+  };
+}
+
+function camelToUpperSnake(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

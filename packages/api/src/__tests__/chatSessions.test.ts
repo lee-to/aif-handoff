@@ -39,6 +39,7 @@ const runtimeAdapter: RuntimeAdapter = {
     defaultTransport: "sdk",
     capabilities: {
       supportsResume: true,
+      supportsSessionFork: false,
       supportsSessionList: true,
       supportsAgentDefinitions: true,
       supportsStreaming: true,

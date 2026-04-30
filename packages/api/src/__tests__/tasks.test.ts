@@ -76,6 +76,7 @@ function createAppWithSettings() {
       useSubagents: env.AGENT_USE_SUBAGENTS,
       maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
       autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
+      warmupEnabled: env.AIF_WARMUP_ENABLED,
     });
   });
   return app;
@@ -2455,6 +2456,7 @@ describe("tasks API", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(typeof body.useSubagents).toBe("boolean");
+      expect(typeof body.warmupEnabled).toBe("boolean");
       expect(["full_re_review", "closure_first"]).toContain(body.autoReviewStrategy);
     });
   });

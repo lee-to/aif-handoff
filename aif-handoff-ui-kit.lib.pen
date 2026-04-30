@@ -8429,7 +8429,7 @@
                       "ref": "TOJf1",
                       "name": "hdrCmd",
                       "x": 0,
-                      "y": 7.5,
+                      "y": 8.5,
                       "width": "fit_content",
                       "height": "fit_content",
                       "descendants": {
@@ -8464,7 +8464,7 @@
                       "ref": "VerDQ",
                       "name": "hdrSeg1",
                       "x": 66,
-                      "y": 3.5,
+                      "y": 4.5,
                       "width": "fit_content",
                       "height": "fit_content",
                       "descendants": {
@@ -8493,7 +8493,7 @@
                       "ref": "VerDQ",
                       "name": "hdrSeg2",
                       "x": 166,
-                      "y": 3.5,
+                      "y": 4.5,
                       "width": "fit_content",
                       "height": "fit_content",
                       "descendants": {
@@ -8671,6 +8671,12 @@
                           "fill": "$foreground"
                         }
                       ]
+                    },
+                    {
+                      "id": "yKwEL",
+                      "type": "ref",
+                      "ref": "c8T4z",
+                      "name": "HeaderWarmupButton"
                     }
                   ]
                 }
@@ -10407,6 +10413,386 @@
               ]
             }
           ]
+        },
+        {
+          "type": "frame",
+          "id": "sErFm",
+          "name": "Warmup Dialog Organism",
+          "width": 420,
+          "height": 540,
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "text",
+              "id": "72lEw",
+              "name": "warmupLabel",
+              "fill": "$muted-foreground",
+              "content": "RUNTIME WARMUP DIALOG",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": "$font-size-2xs",
+              "fontWeight": "600",
+              "letterSpacing": 1.5
+            },
+            {
+              "type": "frame",
+              "id": "xktdg",
+              "name": "WarmupDialog",
+              "width": "fill_container",
+              "height": 450,
+              "fill": "$card",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "bRzQX",
+                  "name": "TitleRow",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "iVCVu",
+                      "name": "FlameIcon",
+                      "fill": "$primary",
+                      "width": 16,
+                      "height": 16
+                    },
+                    {
+                      "type": "text",
+                      "id": "XoyxG",
+                      "name": "Title",
+                      "fill": "$foreground",
+                      "content": "Runtime Warmup",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "eWgFm",
+                  "name": "ProjectStatus",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Z70Mp",
+                      "name": "ProjectBlock",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "zfacd",
+                          "name": "ProjectName",
+                          "fill": "$foreground",
+                          "content": "Project One",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Gr1Bz",
+                          "name": "ProjectScope",
+                          "fill": "$muted-foreground",
+                          "content": "Planner context",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "fIqUX",
+                      "name": "ReadyBadge",
+                      "fill": "#10b98126",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#10b9814D"
+                      },
+                      "padding": [
+                        2,
+                        10
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "2jA2I",
+                          "name": "ReadyText",
+                          "fill": "#10b981",
+                          "content": "READY",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 11,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "7YoXr",
+                  "name": "RuntimeMetadata",
+                  "width": "fill_container",
+                  "height": 49,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "qlROu",
+                      "name": "RuntimeMeta",
+                      "width": "fill_container",
+                      "fill": "$background",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "AOHna",
+                          "name": "RuntimeLabel",
+                          "fill": "$muted-foreground",
+                          "content": "Runtime",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 10,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "OjPS9",
+                          "name": "RuntimeValue",
+                          "fill": "$foreground",
+                          "content": "claude/anthropic sdk",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "gIX5F",
+                      "name": "ModelMeta",
+                      "width": "fill_container",
+                      "fill": "$background",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "CqN1D",
+                          "name": "ModelLabel",
+                          "fill": "$muted-foreground",
+                          "content": "Model",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 10,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "VVPum",
+                          "name": "ModelValue",
+                          "fill": "$foreground",
+                          "content": "claude-sonnet",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "XC9eL",
+                  "name": "Lifetime",
+                  "width": "fill_container",
+                  "height": 49,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "mzCVZ",
+                      "name": "RemainingBox",
+                      "width": "fill_container",
+                      "fill": "$background",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "lseLY",
+                          "name": "RemainingLabel",
+                          "fill": "$muted-foreground",
+                          "content": "Remaining",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 10,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "YybIQ",
+                          "name": "RemainingValue",
+                          "fill": "$foreground",
+                          "content": "59m 59s",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "V03U6",
+                      "name": "TtlBox",
+                      "width": "fill_container",
+                      "fill": "$background",
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "$border"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "GZYRm",
+                          "name": "TtlLabel",
+                          "fill": "$muted-foreground",
+                          "content": "TTL",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 10,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "tolri",
+                          "name": "TtlValue",
+                          "fill": "$foreground",
+                          "content": "1h 0m",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "kFjHP",
+                  "name": "Summary",
+                  "width": "fill_container",
+                  "fill": "$background",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "$border"
+                  },
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": [
+                    8,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "n7w9N",
+                      "name": "SummaryLabel",
+                      "fill": "$muted-foreground",
+                      "content": "Summary",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "s7572",
+                      "name": "SummaryText",
+                      "fill": "$foreground",
+                      "content": "Seed context ready",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "r50fI",
+                  "name": "Controls",
+                  "width": "fill_container",
+                  "height": 36,
+                  "gap": 8,
+                  "alignItems": "end",
+                  "children": [
+                    {
+                      "id": "IhQbM",
+                      "type": "ref",
+                      "ref": "yA4l7",
+                      "name": "TtlInput",
+                      "width": "fill_container"
+                    },
+                    {
+                      "id": "ENP2u",
+                      "type": "ref",
+                      "ref": "c8T4z",
+                      "name": "RegenerateButton"
+                    },
+                    {
+                      "id": "OMk76",
+                      "type": "ref",
+                      "ref": "c8T4z",
+                      "name": "ClearButton"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -10614,7 +11000,7 @@
                       "ref": "TOJf1",
                       "name": "hdrCmd",
                       "x": 0,
-                      "y": 7.5,
+                      "y": 8.5,
                       "width": "fit_content",
                       "height": "fit_content",
                       "descendants": {
@@ -10649,7 +11035,7 @@
                       "ref": "VerDQ",
                       "name": "hdrSeg1",
                       "x": 66,
-                      "y": 3.5,
+                      "y": 4.5,
                       "width": "fit_content",
                       "height": "fit_content",
                       "descendants": {
@@ -10678,7 +11064,7 @@
                       "ref": "VerDQ",
                       "name": "hdrSeg2",
                       "x": 166,
-                      "y": 3.5,
+                      "y": 4.5,
                       "width": "fit_content",
                       "height": "fit_content",
                       "descendants": {
@@ -10856,6 +11242,12 @@
                           "fill": "$foreground"
                         }
                       ]
+                    },
+                    {
+                      "id": "9WmCb",
+                      "type": "ref",
+                      "ref": "c8T4z",
+                      "name": "HeaderWarmupButton"
                     }
                   ]
                 }
@@ -12579,6 +12971,297 @@
                       "height": "fit_content"
                     }
                   }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "X0YGd",
+      "x": 5000,
+      "y": 0,
+      "name": "Runtime Warmup UI Sync",
+      "width": 520,
+      "fill": "$background",
+      "stroke": {
+        "thickness": 1,
+        "fill": "$border"
+      },
+      "layout": "vertical",
+      "gap": 16,
+      "padding": 32,
+      "children": [
+        {
+          "type": "text",
+          "id": "YAOwK",
+          "name": "syncTitle",
+          "fill": "$foreground",
+          "content": "Runtime Warmup",
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 24,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "FWIIk",
+          "name": "syncSubtitle",
+          "fill": "$muted-foreground",
+          "content": "Header trigger + project warmup dialog",
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "atK5Q",
+          "name": "HeaderWarmupState",
+          "width": "fill_container",
+          "height": 56,
+          "fill": "$card",
+          "stroke": {
+            "thickness": 1,
+            "fill": "$border"
+          },
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "W9O9K",
+              "name": "HeaderLabel",
+              "fill": "$foreground",
+              "content": "Project selector",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "qj2fv",
+              "name": "WarmupHeaderButton",
+              "width": 96,
+              "height": 32,
+              "fill": "$background",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "KmWR5",
+                  "name": "WarmupButtonText",
+                  "fill": "$foreground",
+                  "content": "WARMUP",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 10,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "VnNHR",
+          "name": "WarmupDialog",
+          "width": 376,
+          "fill": "$card",
+          "stroke": {
+            "thickness": 1,
+            "fill": "$border"
+          },
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "uISbF",
+              "name": "DialogTitle",
+              "fill": "$foreground",
+              "content": "Runtime Warmup",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "qyvmA",
+              "name": "ReadyBadge",
+              "opacity": 0.2,
+              "fill": "$primary",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$primary"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "4nfYV",
+                  "name": "ReadyText",
+                  "fill": "$primary",
+                  "content": "READY",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 10,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "aBxmr",
+              "name": "ProjectText",
+              "fill": "$muted-foreground",
+              "content": "Project One · Planner context",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "KFxHs",
+              "name": "RuntimeMeta",
+              "width": "fill_container",
+              "height": 48,
+              "fill": "$background",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "yIF1W",
+                  "name": "RuntimeMetaText",
+                  "fill": "$foreground",
+                  "content": "Runtime\nclaude/anthropic sdk",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "IPzgP",
+              "name": "ModelMeta",
+              "width": "fill_container",
+              "height": 48,
+              "fill": "$background",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "x5UvD",
+                  "name": "ModelMetaText",
+                  "fill": "$foreground",
+                  "content": "Model\nclaude-sonnet",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "gfDCw",
+              "name": "LifetimeMeta",
+              "width": "fill_container",
+              "height": 48,
+              "fill": "$background",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "2FirU",
+                  "name": "LifetimeText",
+                  "fill": "$foreground",
+                  "content": "Remaining 59m 59s    TTL 1h 0m",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "jMJGJ",
+              "name": "TtlInput",
+              "width": "fill_container",
+              "height": 36,
+              "fill": "$background",
+              "stroke": {
+                "thickness": 1,
+                "fill": "$input"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "rU3d6",
+                  "name": "TtlInputText",
+                  "fill": "$foreground",
+                  "content": "3600",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "28Yo0",
+              "name": "RegenerateButton",
+              "width": "fill_container",
+              "height": 36,
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "f5iZ9",
+                  "name": "RegenerateText",
+                  "fill": "$foreground",
+                  "content": "Regenerate",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "4l7DL",
+              "name": "ClearButton",
+              "width": "fill_container",
+              "height": 36,
+              "stroke": {
+                "thickness": 1,
+                "fill": "$border"
+              },
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "8nCKT",
+                  "name": "ClearText",
+                  "fill": "$foreground",
+                  "content": "Clear",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
                 }
               ]
             }

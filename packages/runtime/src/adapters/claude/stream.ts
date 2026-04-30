@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { RuntimeLimitStatus } from "../../types.js";
 import type {
   RuntimeEvent,
   RuntimeLimitSnapshot,
@@ -267,6 +268,13 @@ export async function runClaudeQueryAttempt(
         },
         "Translated Claude rate_limit_event into runtime limit snapshot",
       );
+      if (snapshot.status === RuntimeLimitStatus.BLOCKED) {
+        throw classifyClaudeResultSubtype(
+          "rate_limit",
+          "Claude runtime reported a blocked limit state",
+          buildClaudeLimitErrorMetadata(snapshot),
+        );
+      }
       return;
     }
 

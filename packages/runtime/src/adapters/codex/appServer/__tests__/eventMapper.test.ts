@@ -205,6 +205,45 @@ describe("codex app-server event mapper", () => {
     expect(mapper.getThreadId()).toBe("thread-1");
   });
 
+  it("silently handles high-volume app-server progress notifications", () => {
+    const warn = vi.fn();
+    const debug = vi.fn();
+    const onEvent = vi.fn();
+    const mapper = new CodexAppServerEventMapper({
+      input: createInput({
+        execution: {
+          onEvent,
+        },
+      }),
+      logger: {
+        warn,
+        debug,
+      },
+    });
+
+    for (const method of [
+      "command/exec/outputDelta",
+      "item/commandExecution/outputDelta",
+      "item/commandExecution/terminalInteraction",
+      "item/fileChange/outputDelta",
+      "item/mcpToolCall/progress",
+      "item/plan/delta",
+      "item/autoApprovalReview/started",
+      "item/autoApprovalReview/completed",
+    ]) {
+      mapper.handleNotification(method, {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "chunk",
+      });
+    }
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(debug).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
   it("handles known account and thread status notifications without a logger", () => {
     const mapper = new CodexAppServerEventMapper({
       input: createInput(),

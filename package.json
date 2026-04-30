@@ -28,6 +28,7 @@
   "scripts": {
     "init": "npm run db:setup",
     "dev": "node ./scripts/dev.mjs",
+    "dev:perf": "turbo run dev:perf --filter @aif/api --filter @aif/web --filter @aif/agent",
     "build": "turbo build",
     "lint": "turbo lint",
     "test": "turbo test",

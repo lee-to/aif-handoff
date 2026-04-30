@@ -25,6 +25,13 @@ const REDACTED_APPROVAL_FIELDS = new Set([
   "internalReasoning",
 ]);
 
+interface CodexAppServerSystemError {
+  message: string;
+  payload: Record<string, unknown>;
+  serverName: string | null;
+  status: string | null;
+}
+
 export class CodexAppServerEventMapper {
   private readonly input: RuntimeRunInput;
   private readonly logger?: CodexAppServerEventMapperLogger;
@@ -39,6 +46,7 @@ export class CodexAppServerEventMapper {
   private turnId: string | null = null;
   private completed = false;
   private failedError: Error | null = null;
+  private latestSystemError: CodexAppServerSystemError | null = null;
 
   constructor(options: CodexAppServerEventMapperOptions) {
     this.input = options.input;
@@ -218,6 +226,17 @@ export class CodexAppServerEventMapper {
         return;
       }
 
+      case "command/exec/outputDelta":
+      case "item/commandExecution/outputDelta":
+      case "item/commandExecution/terminalInteraction":
+      case "item/fileChange/outputDelta":
+      case "item/mcpToolCall/progress":
+      case "item/plan/delta":
+      case "item/autoApprovalReview/started":
+      case "item/autoApprovalReview/completed": {
+        return;
+      }
+
       case "thread/tokenUsage/updated": {
         this.rawUsage = payload?.tokenUsage ?? payload;
         this.usage = normalizeUsageFromTokenUsage(payload);
@@ -248,11 +267,51 @@ export class CodexAppServerEventMapper {
         return;
       }
 
+      case "mcpServer/startupStatus/updated": {
+        const startupError = extractMcpStartupError(payload);
+        if (!startupError) {
+          this.logger?.debug?.(
+            {
+              runtimeId: this.input.runtimeId,
+              profileId: this.input.profileId ?? null,
+              transport: this.input.transport ?? "app-server",
+              serverName: readString(payload?.name) ?? null,
+              status: readString(payload?.status) ?? null,
+            },
+            "DEBUG [runtime:codex] App-server MCP server startup status updated",
+          );
+          return;
+        }
+
+        this.latestSystemError = startupError;
+        this.emit({
+          type: "warning",
+          timestamp: nowIso,
+          level: "warn",
+          message: startupError.message,
+          data: sanitizeApprovalPayload(payload) ?? undefined,
+        });
+        this.logger?.warn?.(
+          {
+            runtimeId: this.input.runtimeId,
+            profileId: this.input.profileId ?? null,
+            transport: this.input.transport ?? "app-server",
+            serverName: startupError.serverName,
+            status: startupError.status,
+            errorKeys: Object.keys(asRecord(payload?.error) ?? {}),
+          },
+          "WARN [runtime:codex] Codex app-server MCP server startup failed",
+        );
+        return;
+      }
+
       case "thread/status/changed": {
         const threadId = extractThreadId(payload);
         if (threadId) {
           this.threadId = threadId;
         }
+        const threadStatus = asRecord(payload?.status);
+        const threadStatusType = readString(threadStatus?.type);
         this.logger?.debug?.(
           {
             runtimeId: this.input.runtimeId,
@@ -263,6 +322,15 @@ export class CodexAppServerEventMapper {
           },
           "DEBUG [runtime:codex] App-server thread status changed",
         );
+        if (threadStatusType === "systemError" && !this.completed && !this.failedError) {
+          const systemError =
+            this.latestSystemError ??
+            createThreadSystemError(payload, "Codex app-server system error");
+          this.failTurn(
+            toErrorWithStructuredPayload(systemError.message, systemError.payload),
+            nowIso,
+          );
+        }
         return;
       }
 
@@ -297,8 +365,12 @@ export class CodexAppServerEventMapper {
 
       case "turn.failed":
       case "error": {
-        const message = readString(payload?.message) ?? "Codex turn failed";
-        this.failTurn(toErrorWithStructuredPayload(message, payload), nowIso);
+        const systemError = this.latestSystemError;
+        const message = readString(payload?.message) ?? systemError?.message ?? "Codex turn failed";
+        this.failTurn(
+          toErrorWithStructuredPayload(message, payload ?? systemError?.payload ?? null),
+          nowIso,
+        );
         return;
       }
 
@@ -384,8 +456,12 @@ export class CodexAppServerEventMapper {
 
     if (status === "failed") {
       const turnError = asRecord(turn?.error);
-      const message = readString(turnError?.message) ?? "Codex turn failed";
-      this.failTurn(toErrorWithStructuredPayload(message, turnError ?? payload), nowIso);
+      const systemError = this.latestSystemError;
+      const message = readString(turnError?.message) ?? systemError?.message ?? "Codex turn failed";
+      this.failTurn(
+        toErrorWithStructuredPayload(message, turnError ?? systemError?.payload ?? payload),
+        nowIso,
+      );
       return;
     }
 
@@ -556,6 +632,63 @@ function toErrorWithStructuredPayload(
     error.codexErrorInfo = payload;
   }
   return error;
+}
+
+function extractMcpStartupError(
+  payload: Record<string, unknown> | null,
+): CodexAppServerSystemError | null {
+  if (!payload) {
+    return null;
+  }
+
+  const error = payload.error;
+  const errorRecord = asRecord(error);
+  const rawMessage =
+    readString(error) ??
+    readString(errorRecord?.message) ??
+    readString(errorRecord?.error) ??
+    readString(errorRecord?.details) ??
+    readString(errorRecord?.reason);
+  if (!rawMessage) {
+    return null;
+  }
+
+  const serverName = readString(payload.name);
+  const status = readString(payload.status);
+  const message = serverName
+    ? `MCP server "${serverName}" failed to start: ${rawMessage}`
+    : `MCP server failed to start: ${rawMessage}`;
+  const category = readString(errorRecord?.category) ?? "transport";
+  const adapterCode = readString(errorRecord?.adapterCode) ?? "CODEX_TRANSPORT_ERROR";
+
+  return {
+    message,
+    payload: {
+      ...payload,
+      category,
+      adapterCode,
+      code: readString(errorRecord?.code) ?? "TRANSPORT_ERROR",
+    },
+    serverName: serverName ?? null,
+    status: status ?? null,
+  };
+}
+
+function createThreadSystemError(
+  payload: Record<string, unknown> | null,
+  message: string,
+): CodexAppServerSystemError {
+  return {
+    message,
+    payload: {
+      ...(payload ?? {}),
+      category: "transport",
+      adapterCode: "CODEX_TRANSPORT_ERROR",
+      code: "TRANSPORT_ERROR",
+    },
+    serverName: null,
+    status: readString(asRecord(payload?.status)?.type),
+  };
 }
 
 function extractThreadId(payload: Record<string, unknown> | null): string | null {

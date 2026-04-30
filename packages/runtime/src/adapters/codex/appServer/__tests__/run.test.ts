@@ -180,6 +180,40 @@ describe("codex app-server run transport", () => {
     expect(result.outputText).toContain("Hello from fake app-server");
   });
 
+  it("forks the source thread before starting the turn for forked runs", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const result = await runCodexAppServer(
+      createRunInput(
+        {
+          sourceSessionId: "thread-warm-source",
+        } as Partial<RuntimeRunInput>,
+        "fork-required",
+      ),
+      logger,
+    );
+
+    expect(result.sessionId).toBe("thread-warm-source-fork");
+    expect(result.outputText).toContain("Hello from fake app-server");
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceThreadIdSuffix: "m-source",
+      }),
+      "DEBUG [runtime:codex] Starting Codex app-server thread fork",
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceThreadIdSuffix: "m-source",
+        forkedThreadId: "thread-warm-source-fork",
+      }),
+      "INFO [runtime:codex] Codex app-server thread fork completed",
+    );
+  });
+
   it("sends turn/interrupt when AbortController is triggered", async () => {
     const abortController = new AbortController();
     const runPromise = runCodexAppServer(
@@ -296,6 +330,140 @@ describe("codex app-server run transport", () => {
       adapterCode: "CODEX_TRANSPORT_ERROR",
       category: "transport",
     });
+  });
+
+  it("surfaces MCP startup failures when the thread enters systemError", async () => {
+    const observedEvents: RuntimeEvent[] = [];
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await expect(
+      runCodexAppServer(
+        createRunInput(
+          {
+            execution: {
+              startTimeoutMs: 500,
+              runTimeoutMs: 5_000,
+              onEvent: (event) => {
+                observedEvents.push(event);
+              },
+            },
+          },
+          "mcp-startup-system-error",
+        ),
+        logger,
+      ),
+    ).rejects.toMatchObject({
+      message: 'MCP server "filesystem" failed to start: configured root is not readable',
+      adapterCode: "CODEX_TRANSPORT_ERROR",
+      category: "transport",
+    });
+
+    expect(observedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "warning",
+          message: 'MCP server "filesystem" failed to start: configured root is not readable',
+        }),
+        expect.objectContaining({
+          type: "result:error",
+          message: 'MCP server "filesystem" failed to start: configured root is not readable',
+        }),
+      ]),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverName: "filesystem",
+        status: "failed",
+      }),
+      "WARN [runtime:codex] Codex app-server MCP server startup failed",
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "WARN [runtime:codex] Unknown non-fatal app-server notification received",
+    );
+  });
+
+  it("reads thread state to enrich bare app-server system errors", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await expect(
+      runCodexAppServer(createRunInput({}, "system-error-thread-read"), logger),
+    ).rejects.toMatchObject({
+      message: "Provider rejected the request: invalid API key",
+      adapterCode: "CODEX_AUTH_ERROR",
+      category: "auth",
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        codexErrorInfo: "unauthorized",
+      }),
+      "WARN [runtime:codex] Enriched Codex app-server failure from thread state",
+    );
+  });
+
+  it("recursively reads thread state to enrich nested app-server system errors", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await expect(
+      runCodexAppServer(createRunInput({}, "system-error-thread-read-nested"), logger),
+    ).rejects.toMatchObject({
+      message: "Provider rejected nested request: nested invalid API key",
+      adapterCode: "CODEX_AUTH_ERROR",
+      category: "auth",
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        codexErrorInfo: { unauthorized: {} },
+      }),
+      "WARN [runtime:codex] Enriched Codex app-server failure from thread state",
+    );
+  });
+
+  it("logs thread read shape when app-server system errors have no persisted turn error", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await expect(
+      runCodexAppServer(createRunInput({}, "system-error-thread-read-empty"), logger),
+    ).rejects.toMatchObject({
+      adapterCode: "CODEX_TRANSPORT_ERROR",
+      category: "transport",
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        threadReadShape: expect.objectContaining({
+          turnsCount: 0,
+        }),
+      }),
+      "WARN [runtime:codex] Codex app-server thread read did not include a failed turn error",
+    );
   });
 
   it.each([

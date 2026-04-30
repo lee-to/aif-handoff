@@ -181,6 +181,7 @@ export function registerRuntimeModule(registry) {
       displayName: "From File",
       capabilities: {
         supportsResume: false,
+        supportsSessionFork: false,
         supportsSessionList: false,
         supportsAgentDefinitions: false,
         supportsStreaming: false,

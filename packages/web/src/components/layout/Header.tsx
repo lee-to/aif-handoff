@@ -1,11 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Moon, Sun, Command, ChartColumn, Cpu, Map, Settings, Activity } from "lucide-react";
+import {
+  Bell,
+  Moon,
+  Sun,
+  Command,
+  ChartColumn,
+  Cpu,
+  Map,
+  Settings,
+  Activity,
+  Flame,
+} from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { useEffectiveChatRuntime } from "@/hooks/useRuntimeProfiles";
-import { useUsageLimitsEnabled } from "@/hooks/useSettings";
+import { useUsageLimitsEnabled, useWarmupEnabled } from "@/hooks/useSettings";
+import { useProjectWarmup } from "@/hooks/useProjectWarmup";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProjectSelector } from "@/components/project/ProjectSelector";
+import { WarmupDialog } from "@/components/project/WarmupDialog";
 import type { Project } from "@aif/shared/browser";
 import type { TaskMetricsSummary } from "@/lib/taskMetrics";
 import { NotificationsDialog } from "./NotificationsDialog";
@@ -67,9 +80,18 @@ export function Header({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [metricsOpen, setMetricsOpen] = useState(false);
   const [roadmapOpen, setRoadmapOpen] = useState(false);
+  const [warmupOpen, setWarmupOpen] = useState(false);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
   const [runtimeUsageOpen, setRuntimeUsageOpen] = useState(false);
   const usageLimitsEnabled = useUsageLimitsEnabled();
+  const warmupEnabled = useWarmupEnabled();
+  const warmupQuery = useProjectWarmup(
+    selectedProject?.id ?? null,
+    warmupEnabled && Boolean(selectedProject),
+  );
+  const showWarmupButton = Boolean(
+    warmupEnabled && selectedProject && warmupQuery.data?.support.supported,
+  );
   const isCompact = density === "compact";
   const currentRuntimeProfileLabel = !selectedProject
     ? "No project"
@@ -191,6 +213,19 @@ export function Header({
             <Map className="h-3.5 w-3.5" />
             <span className="hidden md:inline">ROADMAP</span>
           </Button>
+          {showWarmupButton && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setWarmupOpen((v) => !v)}
+              className="gap-1 font-mono text-3xs"
+              aria-label="Runtime warmup"
+              title="Runtime warmup"
+            >
+              <Flame className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">WARMUP</span>
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -273,6 +308,12 @@ export function Header({
         onOpenChange={setRoadmapOpen}
         project={selectedProject}
         onImportComplete={onRoadmapImportComplete}
+      />
+      <WarmupDialog
+        open={warmupOpen && showWarmupButton}
+        onOpenChange={setWarmupOpen}
+        project={selectedProject}
+        enabled={warmupEnabled}
       />
       <GlobalSettingsDialog
         open={globalSettingsOpen}

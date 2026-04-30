@@ -2,6 +2,7 @@ import {
   bootstrapRuntimeRegistry,
   buildRuntimeLimitBroadcastCacheKey,
   buildRuntimeLimitCacheSignature,
+  checkRuntimeSessionForkSupport,
   checkRuntimeCapabilities,
   createRuntimeMemoryCache,
   createRuntimeModelDiscoveryService,
@@ -24,8 +25,10 @@ import {
   type RuntimeRegistry,
   type RuntimeUsageContext,
   type RuntimeWorkflowSpec,
+  type RuntimeSessionForkSkipReason,
 } from "@aif/runtime";
-import { getEnv, logger } from "@aif/shared";
+import { DEFAULT_WARMUP_TARGET, WARMUP_TARGETS, getEnv, logger } from "@aif/shared";
+import type { WarmupTarget } from "@aif/shared";
 import {
   clearRuntimeProfileLimitSnapshot,
   createDbUsageSink,
@@ -348,10 +351,23 @@ export interface RuntimeExecutionContext {
   selectionSource: "task_override" | "project_default" | "system_default" | "none" | "profile_id";
 }
 
+export interface ApiWarmupSupport {
+  supported: boolean;
+  skipReason?: RuntimeSessionForkSkipReason | "resolution_failed";
+  workflowKind: string;
+  profileMode: WarmupTarget["profileMode"];
+  runtimeId: string | null;
+  providerId: string | null;
+  runtimeProfileId: string | null;
+  transport: string | null;
+  model: string | null;
+  selectionSource: RuntimeExecutionContext["selectionSource"] | null;
+}
+
 export async function resolveApiRuntimeContext(input: {
   projectId?: string | null;
   taskId?: string | null;
-  mode: "task" | "chat";
+  mode: "task" | "plan" | "review" | "chat";
   workflow: RuntimeWorkflowSpec;
   modelOverride?: string | null;
   runtimeOptionsOverride?: Record<string, unknown> | null;
@@ -478,6 +494,86 @@ export function assertApiRuntimeCapabilities(input: {
   }
 }
 
+async function resolveApiWarmupSupportForTarget(
+  projectId: string,
+  target: WarmupTarget,
+): Promise<ApiWarmupSupport> {
+  const workflow = createRuntimeWorkflowSpec({
+    workflowKind: target.workflowKind,
+    prompt: "",
+    sessionReusePolicy: "new_session",
+  });
+
+  try {
+    const context = await resolveApiRuntimeContext({
+      projectId,
+      mode: target.profileMode,
+      workflow,
+    });
+    const capabilities = resolveAdapterCapabilities(
+      context.adapter,
+      context.resolvedProfile.transport,
+    );
+    const forkSupport = checkRuntimeSessionForkSupport({
+      runtimeId: context.resolvedProfile.runtimeId,
+      transport: context.resolvedProfile.transport,
+      capabilities,
+      hasForkSessionMethod: typeof context.adapter.forkSession === "function",
+      sourceSessionId: "__warmup_probe__",
+      logger: {
+        debug(runtimeContext, message) {
+          log.debug({ projectId, ...runtimeContext }, `[runtime-warmup] ${message}`);
+        },
+        warn(runtimeContext, message) {
+          log.warn({ projectId, ...runtimeContext }, `WARN [runtime-warmup] ${message}`);
+        },
+      },
+    });
+
+    return {
+      supported: forkSupport.ok,
+      ...(forkSupport.skipReason ? { skipReason: forkSupport.skipReason } : {}),
+      workflowKind: target.workflowKind,
+      profileMode: target.profileMode,
+      runtimeId: context.resolvedProfile.runtimeId,
+      providerId: context.resolvedProfile.providerId,
+      runtimeProfileId: context.resolvedProfile.profileId,
+      transport: context.resolvedProfile.transport,
+      model: context.resolvedProfile.model,
+      selectionSource: context.selectionSource,
+    };
+  } catch (error) {
+    log.warn({ projectId, err: error }, "Failed to resolve warmup runtime support");
+    return {
+      supported: false,
+      skipReason: "resolution_failed",
+      workflowKind: target.workflowKind,
+      profileMode: target.profileMode,
+      runtimeId: null,
+      providerId: null,
+      runtimeProfileId: null,
+      transport: null,
+      model: null,
+      selectionSource: null,
+    };
+  }
+}
+
+export async function resolveApiWarmupSupports(projectId: string): Promise<ApiWarmupSupport[]> {
+  return Promise.all(
+    WARMUP_TARGETS.map((target) => resolveApiWarmupSupportForTarget(projectId, target)),
+  );
+}
+
+export async function resolveApiWarmupSupport(projectId: string): Promise<ApiWarmupSupport> {
+  const supports = await resolveApiWarmupSupports(projectId);
+  return (
+    supports.find((support) => support.supported) ??
+    supports[0] ??
+    (await resolveApiWarmupSupportForTarget(projectId, DEFAULT_WARMUP_TARGET))
+  );
+}
+
 /**
  * Resolve the lightModel for the active runtime of a project/task.
  * Returns null if the adapter has no light model (use default).
@@ -508,6 +604,7 @@ export async function runApiRuntimeOneShot(input: {
   projectId: string;
   projectRoot: string;
   taskId?: string | null;
+  profileMode?: "task" | "plan" | "review" | "chat";
   prompt: string;
   workflowKind?: string;
   requiredCapabilities?: RuntimeCapabilityName[];
@@ -546,7 +643,7 @@ export async function runApiRuntimeOneShot(input: {
   const context = await resolveApiRuntimeContext({
     projectId: input.projectId,
     taskId: input.taskId,
-    mode: "task",
+    mode: input.profileMode ?? "task",
     workflow,
     modelOverride: input.modelOverride,
   });

@@ -80,6 +80,7 @@ export function buildAppRuntimeDefaultsResponse() {
 export async function buildSettingsOverview() {
   const env = getEnv();
   const appRuntimeDefaults = buildAppRuntimeDefaultsResponse();
+  log.debug({ warmupEnabled: env.AIF_WARMUP_ENABLED }, "Resolved warmup feature flag");
 
   try {
     const registry = await getApiRuntimeRegistry();
@@ -90,6 +91,7 @@ export async function buildSettingsOverview() {
       maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
       autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
       usageLimitsEnabled: env.AIF_USAGE_LIMITS_ENABLED,
+      warmupEnabled: env.AIF_WARMUP_ENABLED,
       runtimeReadiness: {
         availableRuntimeCount: registry.listRuntimes().length,
         runtimeProfileCount: runtimeProfiles.length,
@@ -111,6 +113,7 @@ export async function buildSettingsOverview() {
       maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
       autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
       usageLimitsEnabled: env.AIF_USAGE_LIMITS_ENABLED,
+      warmupEnabled: env.AIF_WARMUP_ENABLED,
       runtimeReadiness: {
         availableRuntimeCount: 0,
         runtimeProfileCount: allProfiles.length,

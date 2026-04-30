@@ -55,6 +55,7 @@ export {
   type RuntimeLimitWindow,
   type RuntimeLimitSnapshot,
   type RuntimeLimitEventPayload,
+  type WarmupBroadcastPayload,
   type ChatSessionSource,
   type ChatSession,
   type CreateChatSessionInput,
@@ -62,7 +63,17 @@ export {
   type ChatSessionMessage,
 } from "./types.js";
 
-export { STATUS_CONFIG, ORDERED_STATUSES } from "./constants.js";
+export {
+  STATUS_CONFIG,
+  ORDERED_STATUSES,
+  WARMUP_TARGETS,
+  WARMUP_WORKFLOW_KINDS,
+  DEFAULT_WARMUP_TARGET,
+  isWarmupWorkflowKind,
+  type WarmupTarget,
+  type WarmupWorkflowKind,
+  type WarmupProfileMode,
+} from "./constants.js";
 export { HUMAN_ACTIONS_BY_STATUS } from "./stateMachine.js";
 export { withTimeout } from "./withTimeout.js";
 export {

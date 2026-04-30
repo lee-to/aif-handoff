@@ -7,7 +7,29 @@ const persistRuntimeProfileLimitSnapshotMock = vi.fn();
 const clearRuntimeProfileLimitSnapshotMock = vi.fn();
 const notifyProjectRuntimeLimitBroadcastMock = vi.fn();
 const saveTaskSessionIdMock = vi.fn();
-const getTaskSessionIdMock = vi.fn(() => null);
+const getTaskSessionIdMock = vi.fn<(taskId: string) => string | null>(() => null);
+const expireStaleRuntimeWarmupSessionsMock = vi.fn(() => 0);
+const findActiveReadyRuntimeWarmupSessionMock = vi.fn<
+  () =>
+    | {
+        id: string;
+        projectId: string;
+        runtimeProfileId: string | null;
+        runtimeId: string;
+        providerId: string;
+        transport: string;
+        model: string | null;
+        sourceSessionId: string;
+        status: string;
+        ttlSeconds: number;
+        expiresAt: string;
+        summary: string | null;
+        errorMessage: string | null;
+        createdAt: string;
+        updatedAt: string;
+      }
+    | undefined
+>(() => undefined);
 const getAppDefaultRuntimeProfileIdMock = vi.fn<
   (mode: "task" | "plan" | "review" | "chat") => string | null
 >(() => null);
@@ -69,6 +91,8 @@ vi.mock("@aif/data", async (importOriginal) => {
     persistRuntimeProfileLimitSnapshot: persistRuntimeProfileLimitSnapshotMock,
     saveTaskSessionId: saveTaskSessionIdMock,
     getTaskSessionId: getTaskSessionIdMock,
+    expireStaleRuntimeWarmupSessions: expireStaleRuntimeWarmupSessionsMock,
+    findActiveReadyRuntimeWarmupSession: findActiveReadyRuntimeWarmupSessionMock,
     getAppDefaultRuntimeProfileId: getAppDefaultRuntimeProfileIdMock,
     findTaskById: findTaskByIdMock,
     resolveEffectiveRuntimeProfile: resolveEffectiveRuntimeProfileMock,
@@ -109,6 +133,7 @@ const baseMockEnv = {
   AGENT_USE_SUBAGENTS: true,
   AGENT_FIRST_ACTIVITY_TIMEOUT_MS: 60_000,
   AIF_USAGE_LIMITS_ENABLED: true,
+  AIF_WARMUP_ENABLED: false,
   TELEGRAM_BOT_TOKEN: undefined,
   TELEGRAM_USER_ID: undefined,
 };
@@ -152,6 +177,13 @@ vi.mock("../notifier.js", () => ({
 
 const { RuntimeExecutionError } = await import("@aif/runtime");
 const { executeSubagentQuery, resolveAdapterForTask } = await import("../subagentQuery.js");
+
+beforeEach(() => {
+  expireStaleRuntimeWarmupSessionsMock.mockReset();
+  expireStaleRuntimeWarmupSessionsMock.mockReturnValue(0);
+  findActiveReadyRuntimeWarmupSessionMock.mockReset();
+  findActiveReadyRuntimeWarmupSessionMock.mockReturnValue(undefined);
+});
 
 function makeDelayedSuccess(delayMs: number, result: string) {
   return async function* () {
@@ -513,6 +545,253 @@ describe("executeSubagentQuery session persistence policy", () => {
     });
 
     expect(saveTaskSessionIdMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeSubagentQuery planner warmup fork", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: vi.fn().mockResolvedValue({}),
+      }),
+    );
+    (globalThis as { __AIF_CLAUDE_QUERY_MOCK__?: typeof queryMock }).__AIF_CLAUDE_QUERY_MOCK__ =
+      queryMock;
+    queryMock.mockReset();
+    logActivityMock.mockReset();
+    saveTaskSessionIdMock.mockReset();
+    getTaskSessionIdMock.mockReset();
+    findTaskByIdMock.mockReset();
+    resolveEffectiveRuntimeProfileMock.mockReset();
+    getTaskSessionIdMock.mockReturnValue(null);
+    findTaskByIdMock.mockReturnValue({
+      id: "task-1",
+      projectId: "project-1",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+    });
+    resolveEffectiveRuntimeProfileMock.mockReturnValue({
+      source: "none",
+      profile: null,
+      taskRuntimeProfileId: null,
+      projectRuntimeProfileId: null,
+      systemRuntimeProfileId: null,
+    });
+    mockEnvOverrides.AIF_WARMUP_ENABLED = true;
+  });
+
+  afterEach(() => {
+    delete mockEnvOverrides.AIF_WARMUP_ENABLED;
+    vi.unstubAllGlobals();
+  });
+
+  it("forks an active planner warmup and persists the child session id", async () => {
+    findActiveReadyRuntimeWarmupSessionMock.mockReturnValue({
+      id: "warmup-1",
+      projectId: "project-1",
+      runtimeProfileId: null,
+      runtimeId: "claude",
+      providerId: "anthropic",
+      transport: "sdk",
+      model: null,
+      sourceSessionId: "warm-source-session",
+      status: "ready",
+      ttlSeconds: 600,
+      expiresAt: "2026-04-30T12:00:00.000Z",
+      summary: "summary",
+      errorMessage: null,
+      createdAt: "2026-04-30T11:00:00.000Z",
+      updatedAt: "2026-04-30T11:00:00.000Z",
+    });
+    queryMock.mockImplementation(makeSuccessWithSession("planner-child-session", "planned"));
+
+    const result = await executeSubagentQuery({
+      taskId: "task-1",
+      projectRoot: "/tmp/project",
+      agentName: "plan-coordinator",
+      prompt: "plan",
+      workflowKind: "planner",
+    });
+
+    expect(result.resultText).toBe("planned");
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBe("warm-source-session");
+    expect(callOptions.forkSession).toBe(true);
+    expect(saveTaskSessionIdMock).toHaveBeenCalledWith("task-1", "planner-child-session");
+  });
+
+  it("skips warmup when the task already has a persisted session", async () => {
+    getTaskSessionIdMock.mockReturnValue("existing-task-session");
+    queryMock.mockImplementation(makeSuccessWithSession("resumed-session", "done"));
+
+    await executeSubagentQuery({
+      taskId: "task-existing-session",
+      projectRoot: "/tmp/project",
+      agentName: "plan-coordinator",
+      prompt: "plan",
+      workflowKind: "planner",
+    });
+
+    expect(findActiveReadyRuntimeWarmupSessionMock).not.toHaveBeenCalled();
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBe("existing-task-session");
+    expect(callOptions.forkSession).toBeUndefined();
+  });
+
+  it("forks an active implementer warmup and then persists the child session id", async () => {
+    findActiveReadyRuntimeWarmupSessionMock.mockReturnValue({
+      id: "warmup-impl",
+      projectId: "project-1",
+      runtimeProfileId: null,
+      runtimeId: "claude",
+      providerId: "anthropic",
+      transport: "sdk",
+      model: null,
+      sourceSessionId: "warm-impl-source",
+      status: "ready",
+      ttlSeconds: 600,
+      expiresAt: "2026-04-30T12:00:00.000Z",
+      summary: "summary",
+      errorMessage: null,
+      createdAt: "2026-04-30T11:00:00.000Z",
+      updatedAt: "2026-04-30T11:00:00.000Z",
+    });
+    queryMock.mockImplementation(makeSuccessWithSession("impl-child-session", "done"));
+
+    await executeSubagentQuery({
+      taskId: "task-implementer",
+      projectRoot: "/tmp/project",
+      agentName: "implement-coordinator",
+      prompt: "implement",
+      workflowKind: "implementer",
+    });
+
+    expect(findActiveReadyRuntimeWarmupSessionMock).toHaveBeenCalledWith({
+      projectId: "project-1",
+      runtimeProfileId: null,
+      runtimeId: "claude",
+      providerId: "anthropic",
+      transport: "sdk",
+      model: null,
+    });
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBe("warm-impl-source");
+    expect(callOptions.forkSession).toBe(true);
+    expect(saveTaskSessionIdMock).toHaveBeenCalledWith("task-implementer", "impl-child-session");
+  });
+
+  it("uses standard resume for implementer when the task already has a session", async () => {
+    getTaskSessionIdMock.mockReturnValue("existing-impl-session");
+    queryMock.mockImplementation(makeSuccessWithSession("resumed-impl-session", "done"));
+
+    await executeSubagentQuery({
+      taskId: "task-implementer-resume",
+      projectRoot: "/tmp/project",
+      agentName: "implement-coordinator",
+      prompt: "implement",
+      workflowKind: "implementer",
+    });
+
+    expect(findActiveReadyRuntimeWarmupSessionMock).not.toHaveBeenCalled();
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBe("existing-impl-session");
+    expect(callOptions.forkSession).toBeUndefined();
+  });
+
+  it("forks an active review warmup for review-sidecar workflows", async () => {
+    findActiveReadyRuntimeWarmupSessionMock.mockReturnValue({
+      id: "warmup-review",
+      projectId: "project-1",
+      runtimeProfileId: null,
+      runtimeId: "claude",
+      providerId: "anthropic",
+      transport: "sdk",
+      model: null,
+      sourceSessionId: "warm-review-source",
+      status: "ready",
+      ttlSeconds: 600,
+      expiresAt: "2026-04-30T12:00:00.000Z",
+      summary: "summary",
+      errorMessage: null,
+      createdAt: "2026-04-30T11:00:00.000Z",
+      updatedAt: "2026-04-30T11:00:00.000Z",
+    });
+    queryMock.mockImplementation(makeSuccessWithSession("review-child-session", "reviewed"));
+
+    await executeSubagentQuery({
+      taskId: "task-review",
+      projectRoot: "/tmp/project",
+      agentName: "review-sidecar",
+      prompt: "review",
+      workflowKind: "reviewer",
+      profileMode: "review",
+    });
+
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBe("warm-review-source");
+    expect(callOptions.forkSession).toBe(true);
+    expect(saveTaskSessionIdMock).toHaveBeenCalledWith("task-review", "review-child-session");
+  });
+
+  it("skips warmup for non-stage helper workflows", async () => {
+    queryMock.mockImplementation(makeSuccessWithSession("helper-session", "done"));
+
+    await executeSubagentQuery({
+      taskId: "task-helper",
+      projectRoot: "/tmp/project",
+      agentName: "implement-checklist-sync",
+      prompt: "sync",
+      workflowKind: "implementer_checklist_sync",
+    });
+
+    expect(findActiveReadyRuntimeWarmupSessionMock).not.toHaveBeenCalled();
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.forkSession).toBeUndefined();
+  });
+
+  it("falls back to cold start when no matching warmup is active", async () => {
+    queryMock.mockImplementation(makeSuccessWithSession("cold-session", "planned"));
+
+    await executeSubagentQuery({
+      taskId: "task-cold",
+      projectRoot: "/tmp/project",
+      agentName: "plan-coordinator",
+      prompt: "plan",
+      workflowKind: "planner",
+    });
+
+    expect(findActiveReadyRuntimeWarmupSessionMock).toHaveBeenCalledWith({
+      projectId: "project-1",
+      runtimeProfileId: null,
+      runtimeId: "claude",
+      providerId: "anthropic",
+      transport: "sdk",
+      model: null,
+    });
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBeUndefined();
+    expect(callOptions.forkSession).toBeUndefined();
+  });
+
+  it("falls back to cold start when stale warmups were expired", async () => {
+    expireStaleRuntimeWarmupSessionsMock.mockReturnValue(1);
+    queryMock.mockImplementation(makeSuccessWithSession("cold-after-expire", "planned"));
+
+    await executeSubagentQuery({
+      taskId: "task-expired",
+      projectRoot: "/tmp/project",
+      agentName: "plan-coordinator",
+      prompt: "plan",
+      workflowKind: "planner",
+    });
+
+    expect(expireStaleRuntimeWarmupSessionsMock).toHaveBeenCalled();
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBeUndefined();
+    expect(callOptions.forkSession).toBeUndefined();
   });
 });
 

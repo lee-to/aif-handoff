@@ -21,6 +21,7 @@ describe("bootstrapRuntimeRegistry", () => {
     const claude = registry.resolveRuntime("claude");
 
     expect(claude.descriptor.capabilities.supportsResume).toBe(true);
+    expect(claude.descriptor.capabilities.supportsSessionFork).toBe(true);
     expect(claude.descriptor.capabilities.supportsSessionList).toBe(true);
     expect(claude.descriptor.capabilities.supportsAgentDefinitions).toBe(true);
     expect(claude.descriptor.lightModel).toBe("haiku");
@@ -31,6 +32,7 @@ describe("bootstrapRuntimeRegistry", () => {
     const codex = registry.resolveRuntime("codex");
 
     expect(codex.descriptor.capabilities.supportsResume).toBe(true);
+    expect(codex.descriptor.capabilities.supportsSessionFork).toBe(false);
     expect(codex.descriptor.capabilities.supportsSessionList).toBe(false);
     expect(codex.descriptor.lightModel).toBeNull();
   });
@@ -40,6 +42,7 @@ describe("bootstrapRuntimeRegistry", () => {
     const openrouter = registry.resolveRuntime("openrouter");
 
     expect(openrouter.descriptor.capabilities.supportsResume).toBe(false);
+    expect(openrouter.descriptor.capabilities.supportsSessionFork).toBe(false);
     expect(openrouter.descriptor.capabilities.supportsSessionList).toBe(false);
     expect(openrouter.descriptor.capabilities.supportsStreaming).toBe(true);
     expect(openrouter.descriptor.capabilities.supportsModelDiscovery).toBe(true);
@@ -96,12 +99,25 @@ describe("bootstrapRuntimeRegistry", () => {
       ).toBe(true);
     }
   });
+
+  it("every built-in adapter declares session fork support explicitly", async () => {
+    const registry = await bootstrapRuntimeRegistry();
+    const runtimes = registry.listRuntimes();
+    expect(runtimes.length).toBeGreaterThan(0);
+    for (const descriptor of runtimes) {
+      expect(
+        descriptor.capabilities.supportsSessionFork,
+        `runtime "${descriptor.id}" is missing supportsSessionFork capability`,
+      ).toBeTypeOf("boolean");
+    }
+  });
 });
 it("opencode adapter has expected capabilities", async () => {
   const registry = await bootstrapRuntimeRegistry();
   const opencode = registry.resolveRuntime("opencode");
 
   expect(opencode.descriptor.capabilities.supportsResume).toBe(true);
+  expect(opencode.descriptor.capabilities.supportsSessionFork).toBe(false);
   expect(opencode.descriptor.capabilities.supportsSessionList).toBe(true);
   expect(opencode.descriptor.capabilities.supportsStreaming).toBe(true);
   expect(opencode.descriptor.capabilities.supportsModelDiscovery).toBe(true);

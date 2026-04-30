@@ -40,6 +40,7 @@ const DEFAULT_OPENROUTER_MODELS: RuntimeModel[] = [
 
 const API_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: false,
+  supportsSessionFork: false,
   supportsSessionList: false,
   supportsAgentDefinitions: false,
   supportsStreaming: true,

@@ -233,6 +233,40 @@ export const usageEvents = sqliteTable("usage_events", {
 export type UsageEventRow = typeof usageEvents.$inferSelect;
 export type NewUsageEventRow = typeof usageEvents.$inferInsert;
 
+export type RuntimeWarmupSessionStatus = "creating" | "ready" | "failed" | "cleared" | "expired";
+
+/**
+ * Reusable seed sessions created ahead of task execution. A ready row can be
+ * forked by compatible runtimes until its TTL expires or a newer warmup
+ * clears it for the same runtime/profile/model scope.
+ */
+export const runtimeWarmupSessions = sqliteTable("runtime_warmup_sessions", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  projectId: text("project_id").notNull(),
+  runtimeProfileId: text("runtime_profile_id"),
+  runtimeId: text("runtime_id").notNull(),
+  providerId: text("provider_id").notNull(),
+  transport: text("transport"),
+  model: text("model"),
+  sourceSessionId: text("source_session_id"),
+  status: text("status").$type<RuntimeWarmupSessionStatus>().notNull().default("creating"),
+  ttlSeconds: integer("ttl_seconds").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  summary: text("summary"),
+  errorMessage: text("error_message"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type RuntimeWarmupSessionRow = typeof runtimeWarmupSessions.$inferSelect;
+export type NewRuntimeWarmupSessionRow = typeof runtimeWarmupSessions.$inferInsert;
+
 /**
  * Rebuildable Codex session index used by hot request paths.
  * Source of truth stays on disk (~/.codex/sessions/*.jsonl).

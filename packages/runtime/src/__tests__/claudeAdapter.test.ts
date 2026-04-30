@@ -267,6 +267,36 @@ describe("Claude runtime adapter", () => {
     });
   });
 
+  it("fails immediately when Claude SDK reports a blocked rate limit event", async () => {
+    queryMock.mockImplementation(async function* () {
+      yield {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed_warning",
+          overageStatus: "rejected",
+          overageResetsAt: 1_800_000_000,
+          rateLimitType: "overage",
+          utilization: 0.82,
+          isUsingOverage: true,
+        },
+      };
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: "runtime-session-after-limit",
+      };
+    });
+
+    const adapter = createClaudeRuntimeAdapter();
+
+    await expect(adapter.run(createRunInput())).rejects.toMatchObject({
+      name: "ClaudeRuntimeAdapterError",
+      category: "rate_limit",
+      adapterCode: "CLAUDE_USAGE_LIMIT",
+      resetAt: new Date(1_800_000_000 * 1000).toISOString(),
+    });
+  });
+
   it("emits tool:use and tool:question events when SDK stream yields AskUserQuestion", async () => {
     queryMock.mockImplementation(async function* () {
       yield { type: "system", subtype: "init", session_id: "runtime-session-q" };
@@ -803,6 +833,58 @@ describe("Claude runtime adapter", () => {
     expect(call.options.env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
     expect(call.options.env.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
     expect(call.options.env.CUSTOM_ENV).toBe("1");
+  });
+
+  it("forwards fork mode and source session id to Claude query options", async () => {
+    queryMock.mockImplementation(immediateSuccess("forked"));
+    const adapter = createClaudeRuntimeAdapter();
+
+    const result = await adapter.forkSession!({
+      ...createRunInput({
+        model: "claude-sonnet-4-5",
+      }),
+      sourceSessionId: "session-warm-source-1",
+    });
+
+    expect(result.outputText).toBe("forked");
+    expect(result.sessionId).toBe("runtime-session-1");
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const call = queryMock.mock.calls[0][0];
+    expect(call.options.resume).toBe("session-warm-source-1");
+    expect(call.options.forkSession).toBe(true);
+    expect(call.options.model).toBe("claude-sonnet-4-5");
+  });
+
+  it("logs Claude fork lifecycle without prompt contents", async () => {
+    queryMock.mockImplementation(immediateSuccess("forked"));
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const adapter = createClaudeRuntimeAdapter({ logger });
+
+    await adapter.forkSession!({
+      ...createRunInput({ prompt: "secret prompt text" }),
+      sourceSessionId: "session-warm-source-2",
+    });
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionIdSuffix: "source-2",
+      }),
+      "DEBUG [runtime:claude] Starting Claude session fork run",
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionIdSuffix: "source-2",
+        childSessionIdSuffix: "ession-1",
+      }),
+      "DEBUG [runtime:claude] Claude session fork run completed",
+    );
+    const serializedLogs = JSON.stringify(logger.debug.mock.calls);
+    expect(serializedLogs).not.toContain("secret prompt text");
   });
 
   it("forwards effort to Claude query options", async () => {

@@ -323,7 +323,7 @@ function handleRequest(message) {
     }
 
     case "thread/start": {
-      if (scenario === "resume-required") {
+      if (scenario === "resume-required" || scenario === "fork-required") {
         sendError(id, -32010, "thread/start is forbidden for this scenario", {
           category: "transport",
           adapterCode: "CODEX_TRANSPORT_ERROR",
@@ -381,33 +381,96 @@ function handleRequest(message) {
         typeof params.threadId === "string" && params.threadId.trim().length > 0
           ? params.threadId.trim()
           : "thread-read";
-      sendResult(id, {
-        thread: makeThread({
-          id: threadId,
-          turns: params.includeTurns
+      const turns =
+        scenario === "system-error-thread-read"
+          ? [
+              {
+                id: turnId,
+                status: "failed",
+                error: {
+                  message: "Provider rejected the request",
+                  codexErrorInfo: "unauthorized",
+                  additionalDetails: "invalid API key",
+                },
+                items: [],
+              },
+            ]
+          : scenario === "system-error-thread-read-nested"
             ? [
                 {
-                  id: "turn-read-1",
-                  status: "completed",
+                  id: turnId,
+                  status: "failed",
                   error: null,
                   items: [
                     {
-                      type: "userMessage",
-                      id: "item-user-1",
-                      content: [{ type: "text", text: "Stored user prompt", text_elements: [] }],
-                    },
-                    {
-                      type: "agentMessage",
-                      id: "item-agent-1",
-                      text: "Stored assistant answer",
-                      phase: "final_answer",
-                      memoryCitation: null,
+                      type: "diagnostic",
+                      id: "item-error-1",
+                      payload: {
+                        error: {
+                          message: "Provider rejected nested request",
+                          codexErrorInfo: { unauthorized: {} },
+                          additionalDetails: "nested invalid API key",
+                        },
+                      },
                     },
                   ],
                 },
               ]
-            : [],
+            : scenario === "system-error-thread-read-empty"
+              ? []
+              : params.includeTurns
+                ? [
+                    {
+                      id: "turn-read-1",
+                      status: "completed",
+                      error: null,
+                      items: [
+                        {
+                          type: "userMessage",
+                          id: "item-user-1",
+                          content: [
+                            { type: "text", text: "Stored user prompt", text_elements: [] },
+                          ],
+                        },
+                        {
+                          type: "agentMessage",
+                          id: "item-agent-1",
+                          text: "Stored assistant answer",
+                          phase: "final_answer",
+                          memoryCitation: null,
+                        },
+                      ],
+                    },
+                  ]
+                : [];
+      sendResult(id, {
+        thread: makeThread({
+          id: threadId,
+          turns,
         }),
+      });
+      return;
+    }
+
+    case "thread/fork": {
+      threadId =
+        typeof params.threadId === "string" && params.threadId.trim().length > 0
+          ? `${params.threadId.trim()}-fork`
+          : "thread-forked";
+      sendResult(id, {
+        thread: {
+          id: threadId,
+          turns: [],
+        },
+        model: params.model ?? "gpt-5.4",
+        modelProvider: params.modelProvider ?? "openai",
+        serviceTier: null,
+        cwd: params.cwd ?? "/tmp/fake",
+        instructionSources: [],
+        approvalPolicy: params.approvalPolicy ?? "on-request",
+        approvalsReviewer: "user",
+        sandbox: { type: "workspaceWrite" },
+        reasoningEffort: null,
       });
       return;
     }
@@ -513,6 +576,33 @@ function handleRequest(message) {
               adapterCode: "CODEX_TRANSPORT_ERROR",
             },
           },
+        });
+        return;
+      }
+
+      if (scenario === "mcp-startup-system-error") {
+        sendNotification("mcpServer/startupStatus/updated", {
+          name: "filesystem",
+          status: "failed",
+          error: {
+            message: "configured root is not readable",
+          },
+        });
+        sendNotification("thread/status/changed", {
+          threadId,
+          status: { type: "systemError" },
+        });
+        return;
+      }
+
+      if (
+        scenario === "system-error-thread-read" ||
+        scenario === "system-error-thread-read-nested" ||
+        scenario === "system-error-thread-read-empty"
+      ) {
+        sendNotification("thread/status/changed", {
+          threadId,
+          status: { type: "systemError" },
         });
         return;
       }

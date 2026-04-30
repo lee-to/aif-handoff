@@ -30,6 +30,7 @@ function createRuntimeDescriptor(overrides: Partial<RuntimeDescriptor>): Runtime
     supportedTransports: ["sdk"],
     capabilities: {
       supportsResume: true,
+      supportsSessionFork: false,
       supportsSessionList: false,
       supportsAgentDefinitions: false,
       supportsStreaming: true,

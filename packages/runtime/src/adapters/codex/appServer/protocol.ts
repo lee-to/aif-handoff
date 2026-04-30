@@ -7,6 +7,8 @@ import type { ModelListParams } from "./generated/v2/ModelListParams.js";
 import type { ModelListResponse } from "./generated/v2/ModelListResponse.js";
 import type { ThreadListParams } from "./generated/v2/ThreadListParams.js";
 import type { ThreadListResponse } from "./generated/v2/ThreadListResponse.js";
+import type { ThreadForkParams } from "./generated/v2/ThreadForkParams.js";
+import type { ThreadForkResponse } from "./generated/v2/ThreadForkResponse.js";
 import type { ThreadReadParams } from "./generated/v2/ThreadReadParams.js";
 import type { ThreadReadResponse } from "./generated/v2/ThreadReadResponse.js";
 import type { ThreadResumeParams } from "./generated/v2/ThreadResumeParams.js";
@@ -56,6 +58,7 @@ export const CodexAppServerMethod = {
   INITIALIZE: "initialize",
   MODEL_LIST: "model/list",
   THREAD_LIST: "thread/list",
+  THREAD_FORK: "thread/fork",
   THREAD_READ: "thread/read",
   THREAD_START: "thread/start",
   THREAD_RESUME: "thread/resume",
@@ -77,6 +80,10 @@ export type CodexAppServerRequestMap = {
   [CodexAppServerMethod.THREAD_LIST]: {
     params: ThreadListParams;
     result: ThreadListResponse;
+  };
+  [CodexAppServerMethod.THREAD_FORK]: {
+    params: ThreadForkParams;
+    result: ThreadForkResponse;
   };
   [CodexAppServerMethod.THREAD_READ]: {
     params: ThreadReadParams;

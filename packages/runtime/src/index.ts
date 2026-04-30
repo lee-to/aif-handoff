@@ -30,6 +30,7 @@ export {
   type RuntimeRunResult,
   type RuntimeSession,
   type RuntimeSessionEventsInput,
+  type RuntimeSessionForkInput,
   type RuntimeSessionGetInput,
   type RuntimeSessionListInput,
   isRuntimeTransport,
@@ -83,9 +84,13 @@ export {
 export {
   assertRuntimeCapabilities,
   checkRuntimeCapabilities,
+  checkRuntimeSessionForkSupport,
   type RuntimeCapabilityCheckInput,
   type RuntimeCapabilityCheckResult,
   type RuntimeCapabilityName,
+  type RuntimeSessionForkSkipReason,
+  type RuntimeSessionForkSupportInput,
+  type RuntimeSessionForkSupportResult,
 } from "./capabilities.js";
 
 export { createRuntimeMemoryCache, type RuntimeCache, type RuntimeCacheOptions } from "./cache.js";

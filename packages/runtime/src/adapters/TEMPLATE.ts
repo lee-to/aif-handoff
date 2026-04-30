@@ -49,6 +49,7 @@
  * | Capability              | Enables method(s)                                     |
  * |-------------------------|-------------------------------------------------------|
  * | supportsResume          | resume()                                              |
+ * | supportsSessionFork     | forkSession()                                         |
  * | supportsSessionList     | listSessions(), getSession(), listSessionEvents()     |
  * | supportsModelDiscovery  | listModels()                                          |
  * | supportsAgentDefinitions| execution.agentDefinitionName is forwarded to the SDK |
@@ -266,6 +267,7 @@ export function createExampleRuntimeAdapter(
         // supportsStreaming: true,
         // supportsModelDiscovery: true,
         // supportsCustomEndpoint: true,
+        // supportsSessionFork: true, // implement forkSession() when enabled
         //
         // REQUIRED: declare your usage-reporting contract. DEFAULT_RUNTIME_CAPABILITIES
         // sets this to UsageReporting.NONE — override it if your transport can surface
@@ -309,6 +311,7 @@ export function createExampleRuntimeAdapter(
     //   return this.descriptor.capabilities;
     // },
     // async resume(input) { ... },
+    // async forkSession(input) { ... },
     // async listSessions(input) { ... },
     // async getSession(input) { ... },
     // async listSessionEvents(input) { ... },

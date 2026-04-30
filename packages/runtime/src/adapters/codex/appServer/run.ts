@@ -1,4 +1,4 @@
-import type { RuntimeRunInput, RuntimeRunResult } from "../../../types.js";
+import type { RuntimeRunInput, RuntimeRunResult, RuntimeSessionForkInput } from "../../../types.js";
 import {
   isRetriableTimeoutError,
   makeProcessRunTimeoutError,
@@ -40,6 +40,18 @@ interface DeferredCompletion<T> {
   isSettled: () => boolean;
 }
 
+function readForkSourceSessionId(input: RuntimeRunInput): string | null {
+  const sourceSessionId = (input as Partial<RuntimeSessionForkInput>).sourceSessionId;
+  return typeof sourceSessionId === "string" && sourceSessionId.trim().length > 0
+    ? sourceSessionId.trim()
+    : null;
+}
+
+function sessionIdSuffix(sessionId: string | null | undefined): string | null {
+  if (!sessionId) return null;
+  return sessionId.length <= 8 ? sessionId : sessionId.slice(-8);
+}
+
 export async function runCodexAppServer(
   input: RuntimeRunInput,
   logger?: CodexAppServerRunLogger,
@@ -50,6 +62,7 @@ export async function runCodexAppServer(
       profileId: input.profileId ?? null,
       transport: "app-server",
       resume: Boolean(input.resume && input.sessionId),
+      fork: Boolean(readForkSourceSessionId(input)),
       model: input.model ?? null,
       startTimeoutMs: input.execution?.startTimeoutMs ?? null,
       runTimeoutMs: input.execution?.runTimeoutMs ?? null,
@@ -117,6 +130,7 @@ async function runCodexAppServerAttempt(
   const abortSignal = input.execution?.abortController?.signal;
   let completionFailure: Error | null = null;
   const experimentalApiEnabled = asRecord(input.options).experimentalApi === true;
+  const forkSourceSessionId = readForkSourceSessionId(input);
 
   const mapper = new CodexAppServerEventMapper({
     input,
@@ -249,7 +263,42 @@ async function runCodexAppServerAttempt(
       "DEBUG [runtime:codex] [FIX:app-server-experimental-history] Prepared thread payload capability gates",
     );
 
-    if (input.resume && input.sessionId) {
+    if (forkSourceSessionId) {
+      const sourceThreadId = parseCodexThreadId(forkSourceSessionId);
+      const forkParams = {
+        threadId: sourceThreadId,
+        model: input.model ?? null,
+        cwd: input.cwd ?? input.projectRoot ?? null,
+        approvalPolicy: permissionSettings.approvalPolicy,
+        sandbox: permissionSettings.sandboxMode,
+        config: threadMetadata,
+        persistExtendedHistory: experimentalApiEnabled,
+      } as CodexAppServerRequestMap["thread/fork"]["params"];
+      logger?.debug?.(
+        {
+          runtimeId: input.runtimeId,
+          profileId: input.profileId ?? null,
+          transport: "app-server",
+          appServerEndpoint: readString(asRecord(input.options).appServerEndpoint) ?? "process",
+          sourceThreadIdSuffix: sessionIdSuffix(sourceThreadId),
+        },
+        "DEBUG [runtime:codex] Starting Codex app-server thread fork",
+      );
+      const forked = await client.forkThread(forkParams);
+      threadId = forked.thread.id;
+      mapper.handleNotification("thread/started", { threadId });
+      logger?.info?.(
+        {
+          runtimeId: input.runtimeId,
+          profileId: input.profileId ?? null,
+          transport: "app-server",
+          appServerEndpoint: readString(asRecord(input.options).appServerEndpoint) ?? "process",
+          sourceThreadIdSuffix: sessionIdSuffix(sourceThreadId),
+          forkedThreadId: threadId,
+        },
+        "INFO [runtime:codex] Codex app-server thread fork completed",
+      );
+    } else if (input.resume && input.sessionId) {
       const resumeThreadId = parseCodexThreadId(input.sessionId);
       const resumeParams = {
         threadId: resumeThreadId,
@@ -394,7 +443,13 @@ async function runCodexAppServerAttempt(
       }
       throw makeProcessRunTimeoutError(input.execution?.runTimeoutMs ?? 0);
     }
-    throw error;
+    throw await enrichAppServerFailureFromThread({
+      error,
+      client,
+      threadId: threadId ?? readThreadIdFromError(error),
+      logger,
+      input,
+    });
   } finally {
     abortSignal?.removeEventListener("abort", abortHandler);
     launch.process.off("exit", processExitHandler);
@@ -402,6 +457,214 @@ async function runCodexAppServerAttempt(
     client.close("run finished");
     await terminateCodexAppServerProcess(launch, logger);
   }
+}
+
+async function enrichAppServerFailureFromThread(input: {
+  error: unknown;
+  client: CodexAppServerClient;
+  threadId: string | null;
+  logger?: CodexAppServerRunLogger;
+  input: RuntimeRunInput;
+}): Promise<unknown> {
+  if (!input.threadId) {
+    return input.error;
+  }
+
+  try {
+    input.logger?.debug?.(
+      {
+        runtimeId: input.input.runtimeId,
+        profileId: input.input.profileId ?? null,
+        transport: "app-server",
+        threadId: input.threadId,
+      },
+      "DEBUG [runtime:codex] Attempting to enrich Codex app-server failure from thread state",
+    );
+    const result = await input.client.readThread({
+      threadId: input.threadId,
+      includeTurns: true,
+    });
+    const detail = extractThreadFailureDetail(result);
+    if (!detail) {
+      const thread = asRecord(result.thread);
+      input.logger?.warn?.(
+        {
+          runtimeId: input.input.runtimeId,
+          profileId: input.input.profileId ?? null,
+          transport: "app-server",
+          threadId: input.threadId,
+          threadReadShape: summarizeThreadReadShape(result),
+          threadStatus: thread.status ?? null,
+        },
+        "WARN [runtime:codex] Codex app-server thread read did not include a failed turn error",
+      );
+      return input.error;
+    }
+
+    input.logger?.warn?.(
+      {
+        runtimeId: input.input.runtimeId,
+        profileId: input.input.profileId ?? null,
+        transport: "app-server",
+        threadId: input.threadId,
+        turnId: detail.turnId,
+        codexErrorInfo: detail.codexErrorInfo ?? null,
+      },
+      "WARN [runtime:codex] Enriched Codex app-server failure from thread state",
+    );
+
+    const cause = input.error instanceof Error ? input.error : undefined;
+    return Object.assign(new Error(detail.message), {
+      cause,
+      codexErrorInfo: {
+        threadId: input.threadId,
+        turnId: detail.turnId,
+        turnStatus: detail.turnStatus,
+        turnError: detail.turnError,
+        codexErrorInfo: detail.codexErrorInfo,
+      },
+    });
+  } catch (readError) {
+    input.logger?.warn?.(
+      {
+        runtimeId: input.input.runtimeId,
+        profileId: input.input.profileId ?? null,
+        transport: "app-server",
+        threadId: input.threadId,
+        err: readError,
+      },
+      "WARN [runtime:codex] Failed to read Codex app-server thread after run failure",
+    );
+    return input.error;
+  }
+}
+
+function readThreadIdFromError(error: unknown): string | null {
+  const info = asRecord(asRecord(error).codexErrorInfo);
+  return readString(info.threadId);
+}
+
+function extractThreadFailureDetail(payload: unknown): {
+  message: string;
+  turnId: string | null;
+  turnStatus: string | null;
+  turnError: Record<string, unknown>;
+  codexErrorInfo: unknown;
+} | null {
+  const thread = asRecord(asRecord(payload).thread ?? payload);
+  const turns = Array.isArray(asRecord(thread)?.turns)
+    ? (asRecord(thread)?.turns as unknown[])
+    : [];
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = asRecord(turns[index]);
+    const turnError = asRecord(turn?.error);
+    if (Object.keys(turnError).length === 0) {
+      continue;
+    }
+    const message = readString(turnError.message);
+    if (!message) {
+      continue;
+    }
+    const additionalDetails = readString(turnError.additionalDetails);
+    return {
+      message: additionalDetails ? `${message}: ${additionalDetails}` : message,
+      turnId: readString(turn?.id),
+      turnStatus: readString(turn?.status),
+      turnError,
+      codexErrorInfo: turnError.codexErrorInfo ?? null,
+    };
+  }
+  return findNestedFailureDetail(payload);
+}
+
+function findNestedFailureDetail(payload: unknown): {
+  message: string;
+  turnId: string | null;
+  turnStatus: string | null;
+  turnError: Record<string, unknown>;
+  codexErrorInfo: unknown;
+} | null {
+  const seen = new Set<unknown>();
+  const stack: Array<{ value: unknown; turnId: string | null; turnStatus: string | null }> = [
+    { value: payload, turnId: null, turnStatus: null },
+  ];
+
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (!current.value || typeof current.value !== "object") {
+      continue;
+    }
+    if (seen.has(current.value)) {
+      continue;
+    }
+    seen.add(current.value);
+
+    if (Array.isArray(current.value)) {
+      for (let index = current.value.length - 1; index >= 0; index -= 1) {
+        stack.push({
+          value: current.value[index],
+          turnId: current.turnId,
+          turnStatus: current.turnStatus,
+        });
+      }
+      continue;
+    }
+
+    const record = current.value as Record<string, unknown>;
+    const recordStatus = readString(record.status);
+    const isTurnRecord =
+      recordStatus === "completed" ||
+      recordStatus === "interrupted" ||
+      recordStatus === "failed" ||
+      recordStatus === "inProgress";
+    const status = isTurnRecord ? recordStatus : current.turnStatus;
+    const id = isTurnRecord ? (readString(record.id) ?? current.turnId) : current.turnId;
+    const error = asRecord(record.error);
+    const explicitError =
+      Object.keys(error).length > 0
+        ? error
+        : readString(record.message) &&
+            ("codexErrorInfo" in record || "additionalDetails" in record || "code" in record)
+          ? record
+          : null;
+    if (explicitError) {
+      const message = readString(explicitError.message);
+      if (message) {
+        const additionalDetails = readString(explicitError.additionalDetails);
+        return {
+          message: additionalDetails ? `${message}: ${additionalDetails}` : message,
+          turnId: id,
+          turnStatus: status,
+          turnError: explicitError,
+          codexErrorInfo: explicitError.codexErrorInfo ?? null,
+        };
+      }
+    }
+
+    for (const value of Object.values(record)) {
+      stack.push({ value, turnId: id, turnStatus: status });
+    }
+  }
+
+  return null;
+}
+
+function summarizeThreadReadShape(result: unknown): Record<string, unknown> {
+  const thread = asRecord(asRecord(result).thread);
+  const turns = Array.isArray(thread.turns) ? thread.turns : [];
+  const lastTurn = asRecord(turns.at(-1));
+  const lastError = asRecord(lastTurn.error);
+  return {
+    resultKeys: Object.keys(asRecord(result)),
+    threadKeys: Object.keys(thread),
+    turnsCount: turns.length,
+    lastTurnKeys: Object.keys(lastTurn),
+    lastTurnStatus: lastTurn.status ?? null,
+    lastTurnErrorKeys: Object.keys(lastError),
+    lastTurnItemTypes: Array.isArray(lastTurn.items)
+      ? lastTurn.items.map((item) => readString(asRecord(item).type) ?? "unknown").slice(-5)
+      : [],
+  };
 }
 
 function resolveRequestTimeout(input: RuntimeRunInput): number {

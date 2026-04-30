@@ -1,6 +1,8 @@
 import {
   clearRuntimeProfileLimitSnapshot,
   createDbUsageSink,
+  expireStaleRuntimeWarmupSessions,
+  findActiveReadyRuntimeWarmupSession,
   findTaskById,
   getAppDefaultRuntimeProfileId,
   getTaskSessionId,
@@ -15,6 +17,7 @@ import {
   buildRuntimeLimitBroadcastCacheKey,
   buildRuntimeLimitCacheSignature,
   bootstrapRuntimeRegistry,
+  checkRuntimeSessionForkSupport,
   createRuntimeMemoryCache,
   createRuntimeWorkflowSpec,
   extractLatestRuntimeLimitSnapshot,
@@ -41,7 +44,7 @@ import {
   type RuntimeTransport,
   type RuntimeWorkflowSpec,
 } from "@aif/runtime";
-import { getEnv, logger, redactProviderTextForLogs } from "@aif/shared";
+import { getEnv, isWarmupWorkflowKind, logger, redactProviderTextForLogs } from "@aif/shared";
 import { logActivity } from "./hooks.js";
 import { PROJECT_SCOPE_SYSTEM_APPEND, REVIEW_DIFF_SCOPE_SYSTEM_APPEND } from "./constants.js";
 import { createStderrCollector } from "./stderrCollector.js";
@@ -378,6 +381,20 @@ function parseRuntimeOptions(raw: string | null | undefined): Record<string, unk
   } catch {
     return null;
   }
+}
+
+type WarmupSkipReason =
+  | "feature_disabled"
+  | "workflow_not_enabled"
+  | "existing_task_session"
+  | "expired"
+  | "unsupported_runtime"
+  | "missing_adapter_method"
+  | "runtime_mismatch";
+
+function sessionIdSuffix(sessionId: string | null | undefined): string | null {
+  if (!sessionId) return null;
+  return sessionId.slice(-8);
 }
 
 // Reasoning-effort key per runtime: claude/openrouter use `effort`,
@@ -741,6 +758,85 @@ export async function executeSubagentQuery(
 
     const registry = await getRuntimeRegistry();
     adapter = registry.resolveRuntime(context.runtimeId);
+    let warmupSourceSessionId: string | null = null;
+    let warmupId: string | null = null;
+    let usedWarmupFork = false;
+
+    const logWarmupSkip = (skipReason: WarmupSkipReason) => {
+      log.debug(
+        {
+          taskId,
+          workflowKind: context.workflow.workflowKind,
+          runtimeId: context.runtimeId,
+          runtimeProfileId: context.profileId,
+          transport: context.transport,
+          model: context.model,
+          skipReason,
+        },
+        "Skipping warmup fork",
+      );
+    };
+
+    if (!getEnv().AIF_WARMUP_ENABLED) {
+      logWarmupSkip("feature_disabled");
+    } else if (!isWarmupWorkflowKind(context.workflow.workflowKind)) {
+      logWarmupSkip("workflow_not_enabled");
+    } else if (existingSessionId) {
+      logWarmupSkip("existing_task_session");
+    } else {
+      const forkSupport = checkRuntimeSessionForkSupport({
+        runtimeId: context.runtimeId,
+        transport: context.transport,
+        capabilities: context.capabilities,
+        hasForkSessionMethod: typeof adapter.forkSession === "function",
+        sourceSessionId: "__warmup_probe__",
+        logger: {
+          debug(runtimeContext, message) {
+            log.debug({ taskId, ...runtimeContext }, `[runtime-warmup] ${message}`);
+          },
+          warn(runtimeContext, message) {
+            log.warn({ taskId, ...runtimeContext }, `WARN [runtime-warmup] ${message}`);
+          },
+        },
+      });
+      if (!forkSupport.ok) {
+        logWarmupSkip(
+          forkSupport.skipReason === "missing_adapter_method"
+            ? "missing_adapter_method"
+            : "unsupported_runtime",
+        );
+      } else {
+        const expiredCount = expireStaleRuntimeWarmupSessions();
+        const projectId = findTaskById(taskId)?.projectId ?? null;
+        const warmup =
+          projectId == null
+            ? undefined
+            : findActiveReadyRuntimeWarmupSession({
+                projectId,
+                runtimeProfileId: context.profileId,
+                runtimeId: context.runtimeId,
+                providerId: context.providerId,
+                transport: context.transport,
+                model: context.model,
+              });
+        if (!warmup?.sourceSessionId) {
+          logWarmupSkip(expiredCount > 0 ? "expired" : "runtime_mismatch");
+        } else {
+          warmupSourceSessionId = warmup.sourceSessionId;
+          warmupId = warmup.id;
+          log.info(
+            {
+              taskId,
+              warmupId,
+              runtimeId: context.runtimeId,
+              runtimeProfileId: context.profileId,
+              sourceSessionIdSuffix: sessionIdSuffix(warmupSourceSessionId),
+            },
+            "Warmup fork selected",
+          );
+        }
+      }
+    }
 
     // First-activity watchdog requires a transport that surfaces incremental
     // runtime activity in real time. SDK / CLI adapters emit RuntimeEvent
@@ -875,10 +971,18 @@ export async function executeSubagentQuery(
       } as const;
 
       try {
-        result =
-          shouldResume && adapter.resume
-            ? await adapter.resume({ ...runInput, sessionId: existingSessionId as string })
-            : await adapter.run(runInput);
+        if (warmupSourceSessionId && adapter.forkSession) {
+          result = await adapter.forkSession({
+            ...runInput,
+            sourceSessionId: warmupSourceSessionId,
+          });
+          usedWarmupFork = true;
+        } else {
+          result =
+            shouldResume && adapter.resume
+              ? await adapter.resume({ ...runInput, sessionId: existingSessionId as string })
+              : await adapter.run(runInput);
+        }
         // Success — break out of retry loop
         watchdog.clear();
         break;
@@ -931,9 +1035,30 @@ export async function executeSubagentQuery(
     }
 
     const runtimeSessionId = getResultSessionId(result, context.capabilities);
-    if (runtimeSessionId && context.canResume) {
+    if (runtimeSessionId && (context.canResume || usedWarmupFork)) {
       saveTaskSessionId(taskId, runtimeSessionId);
-      log.debug({ taskId, agentName, runtimeSessionId }, "Captured runtime session ID");
+      log.debug(
+        {
+          taskId,
+          agentName,
+          runtimeSessionIdSuffix: sessionIdSuffix(runtimeSessionId),
+          usedWarmupFork,
+          warmupId,
+        },
+        "Captured runtime session ID",
+      );
+      if (usedWarmupFork) {
+        log.info(
+          {
+            taskId,
+            warmupId,
+            runtimeId: context.runtimeId,
+            runtimeProfileId: context.profileId,
+            childSessionIdSuffix: sessionIdSuffix(runtimeSessionId),
+          },
+          "Warmup fork succeeded",
+        );
+      }
     } else if (runtimeSessionId) {
       log.debug(
         {

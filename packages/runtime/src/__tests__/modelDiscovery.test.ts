@@ -48,6 +48,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -107,6 +108,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -155,6 +157,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -208,6 +211,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -249,6 +253,7 @@ describe("runtime model discovery service", () => {
         displayName: "No Model Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -276,6 +281,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -308,6 +314,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -319,6 +326,7 @@ describe("runtime model discovery service", () => {
       },
       getEffectiveCapabilities: (transport) => ({
         supportsResume: true,
+        supportsSessionFork: false,
         supportsSessionList: false,
         supportsAgentDefinitions: false,
         supportsStreaming: false,
@@ -379,6 +387,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -416,6 +425,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -453,6 +463,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -493,6 +504,7 @@ describe("runtime model discovery service", () => {
         displayName: "Codex Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,
@@ -531,6 +543,7 @@ describe("runtime model discovery service", () => {
         displayName: "Stub Runtime",
         capabilities: {
           supportsResume: true,
+          supportsSessionFork: false,
           supportsSessionList: false,
           supportsAgentDefinitions: false,
           supportsStreaming: false,

@@ -21,3 +21,28 @@ export const ORDERED_STATUSES: TaskStatus[] = [
   "done",
   "verified",
 ];
+
+export const WARMUP_TARGETS = [
+  { workflowKind: "planner", profileMode: "plan" },
+  { workflowKind: "implementer", profileMode: "task" },
+  { workflowKind: "reviewer", profileMode: "review" },
+] as const;
+
+export const WARMUP_WORKFLOW_KINDS = [
+  "planner",
+  "implementer",
+  "reviewer",
+  "review-security",
+] as const;
+
+export type WarmupTarget = (typeof WARMUP_TARGETS)[number];
+export type WarmupWorkflowKind = (typeof WARMUP_WORKFLOW_KINDS)[number];
+export type WarmupProfileMode = WarmupTarget["profileMode"];
+
+export const DEFAULT_WARMUP_TARGET = WARMUP_TARGETS[0];
+
+export function isWarmupWorkflowKind(
+  workflowKind: string | null | undefined,
+): workflowKind is WarmupWorkflowKind {
+  return WARMUP_WORKFLOW_KINDS.some((kind) => kind === workflowKind);
+}

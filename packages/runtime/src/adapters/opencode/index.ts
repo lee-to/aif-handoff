@@ -39,6 +39,7 @@ export interface CreateOpenCodeRuntimeAdapterOptions {
 
 const API_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: true,
+  supportsSessionFork: false,
   supportsSessionList: true,
   supportsAgentDefinitions: false,
   supportsStreaming: true,

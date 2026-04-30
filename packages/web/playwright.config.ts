@@ -27,7 +27,11 @@ export default defineConfig({
   webServer: process.env.AIF_SKIP_DEV_SERVER
     ? undefined
     : {
-        command: "npm run dev --prefix ../..",
+        command: "npm run dev:perf --prefix ../..",
+        env: {
+          ...process.env,
+          AIF_ENABLE_CODEX_LOGIN_PROXY: "false",
+        },
         url: "http://localhost:5180",
         reuseExistingServer: true,
         timeout: 120_000,

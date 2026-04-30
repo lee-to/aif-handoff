@@ -88,6 +88,7 @@ describe("Claude adapter — transport routing and capabilities", () => {
       const caps = adapter.getEffectiveCapabilities!(RuntimeTransport.SDK);
 
       expect(caps.supportsResume).toBe(true);
+      expect(caps.supportsSessionFork).toBe(true);
       expect(caps.supportsSessionList).toBe(true);
       expect(caps.supportsAgentDefinitions).toBe(true);
       expect(caps.supportsStreaming).toBe(true);
@@ -100,6 +101,7 @@ describe("Claude adapter — transport routing and capabilities", () => {
 
       expect(caps.supportsAgentDefinitions).toBe(true);
       expect(caps.supportsResume).toBe(true);
+      expect(caps.supportsSessionFork).toBe(true);
       expect(caps.supportsStreaming).toBe(false);
       expect(caps.supportsApprovals).toBe(false);
     });
@@ -110,6 +112,7 @@ describe("Claude adapter — transport routing and capabilities", () => {
 
       expect(caps.supportsAgentDefinitions).toBe(false);
       expect(caps.supportsResume).toBe(false);
+      expect(caps.supportsSessionFork).toBe(false);
       expect(caps.supportsSessionList).toBe(false);
     });
   });
@@ -136,6 +139,47 @@ describe("Claude adapter — transport routing and capabilities", () => {
       expect(runClaudeCliMock).toHaveBeenCalledTimes(1);
       const input = runClaudeCliMock.mock.calls[0][0];
       expect(input.resume).toBe(true);
+    });
+  });
+
+  describe("forkSession", () => {
+    it("routes SDK fork to the SDK transport with source session id", async () => {
+      const adapter = createClaudeRuntimeAdapter();
+      await adapter.forkSession!({
+        ...createRunInput({ transport: RuntimeTransport.SDK }),
+        sourceSessionId: "warm-session-sdk",
+      } as any);
+
+      expect(runClaudeRuntimeMock).toHaveBeenCalledTimes(1);
+      const input = runClaudeRuntimeMock.mock.calls[0][0];
+      expect(input.sourceSessionId).toBe("warm-session-sdk");
+      expect(input.resume).toBeUndefined();
+      expect(input.sessionId).toBeUndefined();
+    });
+
+    it("routes CLI fork to the CLI transport with source session id", async () => {
+      const adapter = createClaudeRuntimeAdapter();
+      await adapter.forkSession!({
+        ...createRunInput({ transport: RuntimeTransport.CLI }),
+        sourceSessionId: "warm-session-cli",
+      } as any);
+
+      expect(runClaudeCliMock).toHaveBeenCalledTimes(1);
+      const input = runClaudeCliMock.mock.calls[0][0];
+      expect(input.sourceSessionId).toBe("warm-session-cli");
+    });
+
+    it("rejects API transport forks", async () => {
+      const adapter = createClaudeRuntimeAdapter();
+
+      await expect(
+        adapter.forkSession!({
+          ...createRunInput({ transport: RuntimeTransport.API }),
+          sourceSessionId: "warm-session-api",
+        } as any),
+      ).rejects.toThrow("does not support session fork");
+      expect(runClaudeRuntimeMock).not.toHaveBeenCalled();
+      expect(runClaudeCliMock).not.toHaveBeenCalled();
     });
   });
 });

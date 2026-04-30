@@ -115,4 +115,15 @@ describe("codex error classification", () => {
     expect(classified.adapterCode).toBe("CODEX_RATE_LIMIT");
     expect(classified.httpStatus).toBe(429);
   });
+
+  it("classifies app-server generated codexErrorInfo string variants", () => {
+    const err = new Error("provider rejected request") as Error & {
+      codexErrorInfo: string;
+    };
+    err.codexErrorInfo = "unauthorized";
+
+    const classified = classifyCodexAppServerError(err);
+    expect(classified.category).toBe("auth");
+    expect(classified.adapterCode).toBe("CODEX_AUTH_ERROR");
+  });
 });

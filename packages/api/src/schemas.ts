@@ -151,6 +151,10 @@ export const roadmapGenerateSchema = z.object({
   vision: z.string().max(10000).optional(),
 });
 
+export const warmupCreateSchema = z.object({
+  ttlSeconds: z.number().int().min(60).max(86_400).default(3_600),
+});
+
 export const createChatSessionSchema = z.object({
   projectId: z.string().min(1, "Project ID is required"),
   title: z.string().max(200).optional(),

@@ -249,19 +249,21 @@ describe("codex index service", () => {
 
   it("marks missing files and deletes indexed session rows for vanished paths", async () => {
     const { createCodexIndexService } = await loadService();
+    const recentMtimeMs = Date.now() - 60_000;
+    const recentIso = new Date(recentMtimeMs).toISOString();
     mockListCodexSessionFileStates.mockReturnValue([
       {
         filePath: "/tmp/codex/missing.jsonl",
         sessionId: "session-1",
         sizeBytes: 100,
-        mtimeMs: Date.parse("2026-04-23T00:00:00.000Z"),
+        mtimeMs: recentMtimeMs,
         parsedOffset: 100,
         pendingTail: "",
         missing: false,
         importVersion: 1,
-        lastSeenAt: "2026-04-23T00:00:00.000Z",
-        createdAt: "2026-04-23T00:00:00.000Z",
-        updatedAt: "2026-04-23T00:00:00.000Z",
+        lastSeenAt: recentIso,
+        createdAt: recentIso,
+        updatedAt: recentIso,
       },
     ]);
     mockListCodexSessionFileInfos.mockResolvedValue([]);
@@ -350,19 +352,21 @@ describe("codex index service", () => {
 
   it("notifies visible project runtime profiles when stale limit heads are deleted without replacements", async () => {
     const { createCodexIndexService } = await loadService();
+    const recentMtimeMs = Date.now() - 60_000;
+    const recentIso = new Date(recentMtimeMs).toISOString();
     mockListCodexSessionFileStates.mockReturnValue([
       {
         filePath: "/tmp/project-1/.codex/sessions/deleted.jsonl",
         sessionId: "session-deleted",
         sizeBytes: 100,
-        mtimeMs: Date.parse("2026-04-23T00:00:00.000Z"),
+        mtimeMs: recentMtimeMs,
         parsedOffset: 100,
         pendingTail: "",
         missing: false,
         importVersion: 1,
-        lastSeenAt: "2026-04-23T00:00:00.000Z",
-        createdAt: "2026-04-23T00:00:00.000Z",
-        updatedAt: "2026-04-23T00:00:00.000Z",
+        lastSeenAt: recentIso,
+        createdAt: recentIso,
+        updatedAt: recentIso,
       },
     ]);
     mockListCodexSessionFileInfos.mockResolvedValue([]);
@@ -370,7 +374,7 @@ describe("codex index service", () => {
       {
         headKey: "head-key",
         projectRoot: "/tmp/project-1",
-        observedAt: "2026-04-23T00:00:02.000Z",
+        observedAt: recentIso,
         filePath: "/tmp/project-1/.codex/sessions/deleted.jsonl",
       },
     ]);

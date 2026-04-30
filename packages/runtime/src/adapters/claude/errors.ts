@@ -5,6 +5,7 @@ import {
   classifyByMessageFallback,
   type RuntimeErrorCategory,
 } from "../../errors.js";
+import { RuntimeLimitStatus } from "../../types.js";
 
 /** Map semantic category to Claude-specific adapter code. */
 const CATEGORY_TO_ADAPTER_CODE: Record<RuntimeErrorCategory, string> = {
@@ -91,6 +92,15 @@ export function classifyClaudeRuntimeError(
   }
   const message = messageFromUnknown(error);
   const mergedMetadata = mergeMetadata(error, httpStatus, metadata);
+  if (mergedMetadata.limitSnapshot?.status === RuntimeLimitStatus.BLOCKED) {
+    return new ClaudeRuntimeAdapterError(
+      message,
+      CATEGORY_TO_ADAPTER_CODE.rate_limit,
+      "rate_limit",
+      error,
+      mergedMetadata,
+    );
+  }
 
   if (error instanceof RuntimeExecutionError) {
     return new ClaudeRuntimeAdapterError(

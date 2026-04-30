@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Project, CreateProjectInput } from "@aif/shared/browser";
 import { api, ApiError } from "../lib/api.js";
+import { invalidateProjectWarmupQueries } from "./useProjectWarmup.js";
 
 const MAX_PROJECTS_RETRIES = 8;
 
@@ -42,10 +43,11 @@ export function useUpdateProject() {
   return useMutation({
     mutationFn: ({ id, input }: { id: string; input: CreateProjectInput }) =>
       api.updateProject(id, input),
-    onSuccess: () => {
+    onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
       queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
+      invalidateProjectWarmupQueries(queryClient, id);
     },
   });
 }

@@ -78,6 +78,8 @@ export const UsageSource = {
   ROADMAP_EXTRACT: "roadmap-extract",
   /** Fast Fix on a task (services/fastFix.ts). */
   FAST_FIX: "fast-fix",
+  /** Reusable seed session creation for project warmup flows. */
+  WARMUP: "warmup",
   /** Subagent execution from the agent coordinator (agent/subagentQuery.ts). */
   SUBAGENT: "subagent",
   /** Adapter-internal probe used by listModels() discovery flows. */
@@ -95,6 +97,8 @@ export type UsageSource = (typeof UsageSource)[keyof typeof UsageSource];
 export interface RuntimeCapabilities {
   /** Adapter can continue a previous session via resume(). */
   supportsResume: boolean;
+  /** Adapter can fork a source session into a child session before running a prompt. */
+  supportsSessionFork: boolean;
   /** Adapter can list/get sessions via listSessions(), getSession(), listSessionEvents(). */
   supportsSessionList: boolean;
   /** Adapter supports .claude/agents/ definitions (agentDefinitionName in execution intent). */
@@ -124,6 +128,7 @@ export interface RuntimeCapabilities {
 
 export const DEFAULT_RUNTIME_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: false,
+  supportsSessionFork: false,
   supportsSessionList: false,
   supportsAgentDefinitions: false,
   supportsStreaming: false,
@@ -261,6 +266,10 @@ export interface RuntimeRunInput {
    * omit it — new code that forgets scoping fails TypeScript compilation.
    */
   usageContext: RuntimeUsageContext;
+}
+
+export interface RuntimeSessionForkInput extends RuntimeRunInput {
+  sourceSessionId: string;
 }
 
 export interface RuntimeEvent {
@@ -449,6 +458,7 @@ export interface RuntimeDiagnoseErrorInput {
  * ## Optional — capabilities-gated
  * Implement these when `descriptor.capabilities` flags are true:
  * - `resume()` — re-enter an existing session (supportsResume)
+ * - `forkSession()` — fork a source session into a child run (supportsSessionFork)
  * - `listSessions()` / `getSession()` / `listSessionEvents()` — session management (supportsSessionList)
  * - `listModels()` — enumerate available models (supportsModelDiscovery)
  * - `validateConnection()` — health check for readiness endpoint
@@ -487,6 +497,8 @@ export interface RuntimeAdapter {
 
   /** Resume an existing session. Gate: supportsResume. */
   resume?(input: RuntimeRunInput & { sessionId: string }): Promise<RuntimeRunResult>;
+  /** Fork a source session into a child run. Gate: supportsSessionFork. */
+  forkSession?(input: RuntimeSessionForkInput): Promise<RuntimeRunResult>;
   /** List recent sessions. Gate: supportsSessionList. */
   listSessions?(input: RuntimeSessionListInput): Promise<RuntimeSession[]>;
   /** Get a single session by ID. Gate: supportsSessionList. */

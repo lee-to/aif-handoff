@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { CreateRuntimeProfileInput, UpdateRuntimeProfileInput } from "@aif/shared/browser";
 import { api } from "@/lib/api";
+import { invalidateProjectWarmupQueries } from "@/hooks/useProjectWarmup";
 
 export function useRuntimeProfiles(projectId: string | null, includeGlobal = true, enabled = true) {
   return useQuery({
@@ -67,6 +68,7 @@ function invalidateRuntimeQueries(queryClient: QueryClient) {
   queryClient.invalidateQueries({ queryKey: ["settings"] });
   queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
   queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
+  invalidateProjectWarmupQueries(queryClient);
 }
 
 export function useCreateRuntimeProfile() {

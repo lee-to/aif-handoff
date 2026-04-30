@@ -3,14 +3,25 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { jsonValidator } from "../middleware/zodValidator.js";
 import { internalBroadcastAuth } from "../middleware/internalBroadcastAuth.js";
-import { logger, getProjectConfig } from "@aif/shared";
-import { findRuntimeProfileById, findTaskById } from "@aif/data";
+import { logger, getEnv, getProjectConfig } from "@aif/shared";
+import {
+  clearActiveRuntimeWarmupSessions,
+  createRuntimeWarmupSession,
+  expireStaleRuntimeWarmupSessions,
+  findActiveReadyRuntimeWarmupSession,
+  findRuntimeProfileById,
+  findTaskById,
+  markRuntimeWarmupSessionFailed,
+  markRuntimeWarmupSessionReady,
+  type RuntimeWarmupSessionRow,
+} from "@aif/data";
 import {
   createProjectSchema,
   roadmapImportSchema,
   roadmapGenerateSchema,
   broadcastProjectSchema,
   autoQueueModeSchema,
+  warmupCreateSchema,
 } from "../schemas.js";
 import { getAutoQueueMode, setAutoQueueMode } from "@aif/data";
 import { broadcast } from "../ws.js";
@@ -30,6 +41,12 @@ import {
   RoadmapGenerationError,
 } from "../services/roadmapGeneration.js";
 import { validateProjectScopedRuntimeProfileSelections } from "../services/runtimeProfileScope.js";
+import {
+  resolveApiWarmupSupport,
+  resolveApiWarmupSupports,
+  runApiRuntimeOneShot,
+  type ApiWarmupSupport,
+} from "../services/runtime.js";
 
 const log = logger("projects-route");
 
@@ -37,6 +54,12 @@ export const projectsRouter = new Hono();
 
 const PARALLEL_AUTO_QUEUE_BRANCH_ERROR =
   "Parallel auto-queue with git.create_branches=true is not supported without worktrees. Either disable parallel execution, disable auto-queue mode, or set git.create_branches=false for this project.";
+const WARMUP_PROMPT =
+  "Study the current project context, including its structure, architecture layers, package boundaries, conventions, and relevant documentation, so this session can be forked for future tasks. Do not edit files. Do not summarize the context; if a final response is required, reply only that warmup is complete.";
+
+function getWarmupEnabled(): boolean {
+  return getEnv().AIF_WARMUP_ENABLED;
+}
 
 function validateParallelAutoQueueBranchConfig(input: {
   rootPath: string;
@@ -51,6 +74,122 @@ function validateParallelAutoQueueBranchConfig(input: {
   }
 
   return null;
+}
+
+function warmupScopeFromSupport(
+  support: {
+    runtimeId: string | null;
+    providerId: string | null;
+    runtimeProfileId: string | null;
+    transport: string | null;
+    model: string | null;
+  },
+  projectId: string,
+) {
+  if (!support.runtimeId || !support.providerId) return null;
+  return {
+    projectId,
+    runtimeProfileId: support.runtimeProfileId,
+    runtimeId: support.runtimeId,
+    providerId: support.providerId,
+    transport: support.transport,
+    model: support.model,
+  };
+}
+
+function warmupScopeKey(scope: NonNullable<ReturnType<typeof warmupScopeFromSupport>>): string {
+  return JSON.stringify([
+    scope.projectId,
+    scope.runtimeProfileId ?? null,
+    scope.runtimeId,
+    scope.providerId,
+    scope.transport ?? null,
+    scope.model ?? null,
+  ]);
+}
+
+function supportedWarmupScopes(projectId: string, supports: ApiWarmupSupport[]) {
+  const seen = new Set<string>();
+  const scopes: Array<{
+    support: ApiWarmupSupport;
+    scope: NonNullable<ReturnType<typeof warmupScopeFromSupport>>;
+  }> = [];
+
+  for (const support of supports) {
+    if (!support.supported) continue;
+    const scope = warmupScopeFromSupport(support, projectId);
+    if (!scope) continue;
+    const key = warmupScopeKey(scope);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    scopes.push({ support, scope });
+  }
+
+  return scopes;
+}
+
+function toWarmupPayload(row: RuntimeWarmupSessionRow | undefined | null, now = new Date()) {
+  if (!row) return null;
+  const remainingSeconds = Math.max(
+    0,
+    Math.floor((Date.parse(row.expiresAt) - now.getTime()) / 1000),
+  );
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    runtimeProfileId: row.runtimeProfileId,
+    runtimeId: row.runtimeId,
+    providerId: row.providerId,
+    transport: row.transport,
+    model: row.model,
+    status: row.status,
+    ttlSeconds: row.ttlSeconds,
+    expiresAt: row.expiresAt,
+    remainingSeconds,
+    summary: row.summary,
+    errorMessage: row.errorMessage,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function broadcastWarmupUpdate(
+  projectId: string,
+  status: "ready" | "failed" | "cleared" | "expired",
+) {
+  broadcast({ type: "project:warmup_updated", payload: { projectId, status } });
+  log.debug({ projectId, status }, "Warmup state broadcast");
+}
+
+async function buildWarmupOverview(projectId: string) {
+  const enabled = getWarmupEnabled();
+  const targetSupports = await resolveApiWarmupSupports(projectId);
+  const support =
+    targetSupports.find((target) => target.supported) ??
+    targetSupports[0] ??
+    (await resolveApiWarmupSupport(projectId));
+  const scope = warmupScopeFromSupport(support, projectId);
+  expireStaleRuntimeWarmupSessions();
+  const active = scope ? findActiveReadyRuntimeWarmupSession(scope) : undefined;
+  const warmups = supportedWarmupScopes(projectId, targetSupports)
+    .map(({ scope }) => findActiveReadyRuntimeWarmupSession(scope))
+    .filter((row): row is RuntimeWarmupSessionRow => Boolean(row))
+    .map((row) => toWarmupPayload(row));
+  return {
+    enabled,
+    support: {
+      ...support,
+      supported: enabled && support.supported,
+      skipReason: !enabled ? "feature_disabled" : (support.skipReason ?? null),
+    },
+    targets: targetSupports.map((target) => ({
+      ...target,
+      supported: enabled && target.supported,
+      skipReason: !enabled ? "feature_disabled" : (target.skipReason ?? null),
+    })),
+    warmup: toWarmupPayload(active),
+    warmups,
+  };
 }
 
 // GET /projects
@@ -287,6 +426,216 @@ projectsRouter.patch("/:id/auto-queue-mode", jsonValidator(autoQueueModeSchema),
     broadcast({ type: "project:auto_queue_mode_changed", payload: updated });
   }
   return c.json({ enabled });
+});
+
+// GET /projects/:id/warmup
+projectsRouter.get("/:id/warmup", async (c) => {
+  const { id } = c.req.param();
+  const project = findProjectById(id);
+  if (!project) return c.json({ error: "Project not found" }, 404);
+
+  log.debug({ projectId: id }, "Warmup status requested");
+  const overview = await buildWarmupOverview(id);
+  return c.json(overview);
+});
+
+// POST /projects/:id/warmup
+projectsRouter.post("/:id/warmup", jsonValidator(warmupCreateSchema), async (c) => {
+  const { id } = c.req.param();
+  const { ttlSeconds } = c.req.valid("json");
+  const project = findProjectById(id);
+  if (!project) return c.json({ error: "Project not found" }, 404);
+
+  if (!getWarmupEnabled()) {
+    log.warn({ projectId: id }, "Rejected warmup create because feature flag is disabled");
+    return c.json({ error: "Warmup is disabled", code: "feature_disabled" }, 403);
+  }
+
+  const targetSupports = await resolveApiWarmupSupports(id);
+  const supportedScopes = supportedWarmupScopes(id, targetSupports);
+  const support =
+    supportedScopes[0]?.support ?? targetSupports[0] ?? (await resolveApiWarmupSupport(id));
+  log.info(
+    {
+      projectId: id,
+      runtimeId: support.runtimeId,
+      providerId: support.providerId,
+      runtimeProfileId: support.runtimeProfileId,
+      transport: support.transport,
+      model: support.model,
+      supported: support.supported,
+      skipReason: support.skipReason ?? null,
+      supportedTargetCount: supportedScopes.length,
+      ttlSeconds,
+    },
+    "Warmup create requested",
+  );
+
+  if (supportedScopes.length === 0) {
+    return c.json(
+      {
+        error: "Warmup is not supported by the project's effective runtime",
+        code: support.skipReason ?? "unsupported_runtime",
+        support,
+        targets: targetSupports,
+      },
+      409,
+    );
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
+  const readyRows: RuntimeWarmupSessionRow[] = [];
+  let firstReady: RuntimeWarmupSessionRow | undefined;
+
+  for (const { support: targetSupport, scope } of supportedScopes) {
+    const pending = createRuntimeWarmupSession({
+      ...scope,
+      ttlSeconds,
+      expiresAt,
+      createdAt: now.toISOString(),
+    });
+    if (!pending) {
+      log.error(
+        { projectId: id, workflowKind: targetSupport.workflowKind },
+        "Failed to create warmup persistence row",
+      );
+      return c.json({ error: "Failed to create warmup" }, 500);
+    }
+
+    try {
+      const { result } = await runApiRuntimeOneShot({
+        projectId: id,
+        projectRoot: project.rootPath,
+        prompt: WARMUP_PROMPT,
+        workflowKind: targetSupport.workflowKind,
+        profileMode: targetSupport.profileMode,
+        usageContext: { source: "warmup" as const },
+        includePartialMessages: false,
+        maxTurns: 1,
+      });
+
+      const seedSessionId = result.sessionId ?? result.session?.id ?? null;
+      if (!seedSessionId) {
+        const failed = markRuntimeWarmupSessionFailed(
+          pending.id,
+          "Runtime did not return a seed session id",
+        );
+        log.warn(
+          {
+            projectId: id,
+            warmupId: pending.id,
+            runtimeId: scope.runtimeId,
+            workflowKind: targetSupport.workflowKind,
+          },
+          "Warmup create failed because runtime did not return a seed session id",
+        );
+        broadcastWarmupUpdate(id, "failed");
+        return c.json(
+          {
+            error: "Runtime did not return a seed session id",
+            code: "missing_seed_session",
+            warmup: toWarmupPayload(failed),
+            warmups: readyRows.map((row) => toWarmupPayload(row)),
+            support,
+            targets: targetSupports,
+          },
+          502,
+        );
+      }
+
+      const ready = markRuntimeWarmupSessionReady(pending.id, {
+        sourceSessionId: seedSessionId,
+        summary: result.outputText || null,
+        expiresAt,
+        ttlSeconds,
+      });
+      if (ready) {
+        readyRows.push(ready);
+        firstReady ??= ready;
+      }
+      log.info(
+        {
+          projectId: id,
+          warmupId: pending.id,
+          runtimeId: scope.runtimeId,
+          runtimeProfileId: scope.runtimeProfileId,
+          workflowKind: targetSupport.workflowKind,
+          profileMode: targetSupport.profileMode,
+          ttlSeconds,
+          expiresAt,
+        },
+        "Warmup create succeeded",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failed = markRuntimeWarmupSessionFailed(pending.id, message);
+      log.warn(
+        {
+          projectId: id,
+          warmupId: pending.id,
+          runtimeId: scope.runtimeId,
+          workflowKind: targetSupport.workflowKind,
+          err: error,
+        },
+        "Warmup create failed during runtime execution",
+      );
+      broadcastWarmupUpdate(id, "failed");
+      return c.json(
+        {
+          error: message,
+          code: "runtime_failed",
+          warmup: toWarmupPayload(failed),
+          warmups: readyRows.map((row) => toWarmupPayload(row)),
+          support,
+          targets: targetSupports,
+        },
+        502,
+      );
+    }
+  }
+
+  broadcastWarmupUpdate(id, "ready");
+  return c.json(
+    {
+      enabled: true,
+      support,
+      targets: targetSupports,
+      warmup: toWarmupPayload(firstReady),
+      warmups: readyRows.map((row) => toWarmupPayload(row)),
+    },
+    201,
+  );
+});
+
+// DELETE /projects/:id/warmup
+projectsRouter.delete("/:id/warmup", async (c) => {
+  const { id } = c.req.param();
+  const project = findProjectById(id);
+  if (!project) return c.json({ error: "Project not found" }, 404);
+
+  const targetSupports = await resolveApiWarmupSupports(id);
+  const supportedScopes = supportedWarmupScopes(id, targetSupports);
+  const support =
+    supportedScopes[0]?.support ?? targetSupports[0] ?? (await resolveApiWarmupSupport(id));
+  const cleared = supportedScopes.reduce(
+    (count, { scope }) => count + clearActiveRuntimeWarmupSessions(scope),
+    0,
+  );
+  log.info(
+    {
+      projectId: id,
+      runtimeId: support.runtimeId,
+      runtimeProfileId: support.runtimeProfileId,
+      supportedTargetCount: supportedScopes.length,
+      cleared,
+    },
+    "Warmup cleared",
+  );
+  if (cleared > 0) {
+    broadcastWarmupUpdate(id, "cleared");
+  }
+  return c.json({ success: true, cleared });
 });
 
 // POST /projects/:id/broadcast — emit project-scoped WS event (used by agent coordinator)

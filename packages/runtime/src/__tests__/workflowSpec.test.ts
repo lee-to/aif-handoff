@@ -9,6 +9,7 @@ import {
 
 const CODEX_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: true,
+  supportsSessionFork: false,
   supportsSessionList: false,
   supportsAgentDefinitions: false,
   supportsStreaming: true,
@@ -20,6 +21,7 @@ const CODEX_CAPABILITIES: RuntimeCapabilities = {
 
 const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
   supportsResume: true,
+  supportsSessionFork: false,
   supportsSessionList: true,
   supportsAgentDefinitions: true,
   supportsStreaming: true,

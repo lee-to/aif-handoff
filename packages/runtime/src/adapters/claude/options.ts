@@ -2,6 +2,7 @@ import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import type {
   RuntimeEvent,
   RuntimeRunInput,
+  RuntimeSessionForkInput,
   RuntimeSubagentStartCallback,
   RuntimeToolUseCallback,
 } from "../../types.js";
@@ -47,6 +48,13 @@ function toStringRecord(value: Record<string, unknown> | null): Record<string, s
     (entry): entry is [string, string] => typeof entry[1] === "string",
   );
   return Object.fromEntries(entries);
+}
+
+function readForkSourceSessionId(input: RuntimeRunInput): string | null {
+  const sourceSessionId = (input as Partial<RuntimeSessionForkInput>).sourceSessionId;
+  return typeof sourceSessionId === "string" && sourceSessionId.trim().length > 0
+    ? sourceSessionId.trim()
+    : null;
 }
 
 /**
@@ -317,6 +325,7 @@ export function buildClaudeQueryOptions(
   }
   const rawEffort = optionRecord?.effort;
   const normalizedEffort = normalizeClaudeEffort(rawEffort);
+  const forkSourceSessionId = readForkSourceSessionId(input);
   logger?.debug?.(
     {
       runtimeId: input.runtimeId,
@@ -362,7 +371,11 @@ export function buildClaudeQueryOptions(
     ...(execution.agentDefinitionName
       ? { extraArgs: { agent: execution.agentDefinitionName } }
       : {}),
-    ...(input.resume && input.sessionId ? { resume: input.sessionId } : {}),
+    ...(forkSourceSessionId
+      ? { resume: forkSourceSessionId, forkSession: true }
+      : input.resume && input.sessionId
+        ? { resume: input.sessionId }
+        : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(normalizedEffort ? { effort: normalizedEffort } : {}),
   };

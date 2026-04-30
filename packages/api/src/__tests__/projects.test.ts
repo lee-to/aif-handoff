@@ -5,12 +5,13 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
-import { projects, runtimeProfiles, tasks } from "@aif/shared";
+import { projects, runtimeProfiles, runtimeWarmupSessions, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
 const mockBroadcast = vi.fn();
 const mockInternalBroadcastToken = { value: "" };
+const mockWarmupEnabled = { value: false };
 const baseMockEnv = {
   AIF_DEFAULT_RUNTIME_ID: "claude",
   AIF_DEFAULT_PROVIDER_ID: "anthropic",
@@ -24,6 +25,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
     getEnv: () => ({
       ...baseMockEnv,
       INTERNAL_BROADCAST_TOKEN: mockInternalBroadcastToken.value,
+      AIF_WARMUP_ENABLED: mockWarmupEnabled.value,
     }),
   };
 });
@@ -47,6 +49,10 @@ vi.mock("@aif/runtime", () => ({
   ),
 }));
 
+const mockResolveApiWarmupSupport = vi.fn();
+const mockResolveApiWarmupSupports = vi.fn();
+const mockRunApiRuntimeOneShot = vi.fn();
+
 vi.mock("../services/runtime.js", () => ({
   getApiRuntimeRegistry: vi.fn(() =>
     Promise.resolve({
@@ -54,6 +60,9 @@ vi.mock("../services/runtime.js", () => ({
       listRuntimes: vi.fn(() => []),
     }),
   ),
+  resolveApiWarmupSupport: (...args: unknown[]) => mockResolveApiWarmupSupport(...args),
+  resolveApiWarmupSupports: (...args: unknown[]) => mockResolveApiWarmupSupports(...args),
+  runApiRuntimeOneShot: (...args: unknown[]) => mockRunApiRuntimeOneShot(...args),
 }));
 
 vi.mock("../ws.js", () => ({
@@ -83,6 +92,32 @@ describe("projects API", () => {
     app = createApp();
     mockBroadcast.mockReset();
     mockInternalBroadcastToken.value = "";
+    mockWarmupEnabled.value = false;
+    mockResolveApiWarmupSupport.mockReset();
+    const unsupportedWarmup = {
+      supported: false,
+      skipReason: "unsupported_capability",
+      workflowKind: "planner",
+      profileMode: "plan",
+      runtimeId: "openrouter",
+      providerId: "openrouter",
+      runtimeProfileId: null,
+      transport: "api",
+      model: "openrouter/auto",
+      selectionSource: "none",
+    };
+    mockResolveApiWarmupSupport.mockResolvedValue(unsupportedWarmup);
+    mockResolveApiWarmupSupports.mockReset();
+    mockResolveApiWarmupSupports.mockResolvedValue([unsupportedWarmup]);
+    mockRunApiRuntimeOneShot.mockReset();
+    mockRunApiRuntimeOneShot.mockResolvedValue({
+      result: {
+        outputText: "Warmup summary",
+        sessionId: "seed-session-1",
+        usage: null,
+      },
+      context: {},
+    });
     vi.unstubAllEnvs();
     vi.stubEnv("NODE_ENV", "test");
   });
@@ -780,6 +815,298 @@ describe("projects API", () => {
 
     it("returns 404 for unknown project", async () => {
       const res = await app.request("/projects/missing/auto-queue-mode");
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("warmup routes", () => {
+    beforeEach(() => {
+      testDb.current
+        .insert(projects)
+        .values({ id: "warm-project", name: "Warm Project", rootPath: "/tmp/warm-project" })
+        .run();
+    });
+
+    function mockSupportedWarmup() {
+      const supportedWarmup = {
+        supported: true,
+        workflowKind: "planner",
+        profileMode: "plan",
+        runtimeId: "claude",
+        providerId: "anthropic",
+        runtimeProfileId: "profile-warm",
+        transport: "sdk",
+        model: "claude-sonnet-4",
+        selectionSource: "project_default",
+      };
+      mockResolveApiWarmupSupport.mockResolvedValue(supportedWarmup);
+      mockResolveApiWarmupSupports.mockResolvedValue([supportedWarmup]);
+    }
+
+    it("GET returns feature and support metadata with no active warmup", async () => {
+      mockWarmupEnabled.value = true;
+      mockSupportedWarmup();
+
+      const res = await app.request("/projects/warm-project/warmup");
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(
+        expect.objectContaining({
+          enabled: true,
+          support: expect.objectContaining({
+            supported: true,
+            workflowKind: "planner",
+            profileMode: "plan",
+            runtimeId: "claude",
+            runtimeProfileId: "profile-warm",
+            transport: "sdk",
+          }),
+          targets: [
+            expect.objectContaining({
+              supported: true,
+              workflowKind: "planner",
+              profileMode: "plan",
+              runtimeId: "claude",
+              runtimeProfileId: "profile-warm",
+              transport: "sdk",
+            }),
+          ],
+          warmup: null,
+          warmups: [],
+        }),
+      );
+    });
+
+    it("POST rejects when the warmup feature flag is disabled", async () => {
+      const res = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      });
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({
+        error: "Warmup is disabled",
+        code: "feature_disabled",
+      });
+      expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
+    });
+
+    it("POST rejects unsupported warmup runtimes", async () => {
+      mockWarmupEnabled.value = true;
+      mockResolveApiWarmupSupport.mockResolvedValue({
+        supported: false,
+        skipReason: "unsupported_capability",
+        workflowKind: "planner",
+        profileMode: "plan",
+        runtimeId: "openrouter",
+        providerId: "openrouter",
+        runtimeProfileId: null,
+        transport: "api",
+        model: "openrouter/auto",
+        selectionSource: "none",
+      });
+      mockResolveApiWarmupSupports.mockResolvedValue([
+        {
+          supported: false,
+          skipReason: "unsupported_capability",
+          workflowKind: "planner",
+          profileMode: "plan",
+          runtimeId: "openrouter",
+          providerId: "openrouter",
+          runtimeProfileId: null,
+          transport: "api",
+          model: "openrouter/auto",
+          selectionSource: "none",
+        },
+      ]);
+
+      const res = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      });
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe("unsupported_capability");
+      expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
+    });
+
+    it("POST validates TTL bounds", async () => {
+      mockWarmupEnabled.value = true;
+      mockSupportedWarmup();
+
+      const res = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 1 }),
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    it("POST creates and persists a ready warmup seed session", async () => {
+      mockWarmupEnabled.value = true;
+      mockSupportedWarmup();
+
+      const res = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.warmup).toEqual(
+        expect.objectContaining({
+          projectId: "warm-project",
+          runtimeProfileId: "profile-warm",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          transport: "sdk",
+          model: "claude-sonnet-4",
+          status: "ready",
+          ttlSeconds: 600,
+          summary: "Warmup summary",
+        }),
+      );
+      expect(body.warmup).not.toHaveProperty("sourceSessionId");
+      expect(mockRunApiRuntimeOneShot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "warm-project",
+          projectRoot: "/tmp/warm-project",
+          workflowKind: "planner",
+          usageContext: { source: "warmup" },
+        }),
+      );
+      const rows = testDb.current.select().from(runtimeWarmupSessions).all();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toEqual(
+        expect.objectContaining({
+          status: "ready",
+          sourceSessionId: "seed-session-1",
+        }),
+      );
+      expect(mockBroadcast).toHaveBeenCalledWith({
+        type: "project:warmup_updated",
+        payload: { projectId: "warm-project", status: "ready" },
+      });
+    });
+
+    it("POST creates warmup seeds for distinct planner, implementer, and review runtimes", async () => {
+      mockWarmupEnabled.value = true;
+      mockResolveApiWarmupSupports.mockResolvedValue([
+        {
+          supported: true,
+          workflowKind: "planner",
+          profileMode: "plan",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          runtimeProfileId: "profile-plan",
+          transport: "sdk",
+          model: "claude-plan",
+          selectionSource: "project_default",
+        },
+        {
+          supported: true,
+          workflowKind: "implementer",
+          profileMode: "task",
+          runtimeId: "codex",
+          providerId: "openai",
+          runtimeProfileId: "profile-impl",
+          transport: "app-server",
+          model: "gpt-5.5",
+          selectionSource: "project_default",
+        },
+        {
+          supported: true,
+          workflowKind: "reviewer",
+          profileMode: "review",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          runtimeProfileId: "profile-review",
+          transport: "sdk",
+          model: "claude-review",
+          selectionSource: "project_default",
+        },
+      ]);
+      mockRunApiRuntimeOneShot.mockImplementation((input: { workflowKind: string }) =>
+        Promise.resolve({
+          result: {
+            outputText: `Warmup ${input.workflowKind}`,
+            sessionId: `seed-${input.workflowKind}`,
+            usage: null,
+          },
+          context: {},
+        }),
+      );
+
+      const res = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.warmups).toHaveLength(3);
+      expect(mockRunApiRuntimeOneShot).toHaveBeenCalledTimes(3);
+      expect(mockRunApiRuntimeOneShot).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowKind: "planner", profileMode: "plan" }),
+      );
+      expect(mockRunApiRuntimeOneShot).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowKind: "implementer", profileMode: "task" }),
+      );
+      expect(mockRunApiRuntimeOneShot).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowKind: "reviewer", profileMode: "review" }),
+      );
+      const rows = testDb.current.select().from(runtimeWarmupSessions).all();
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runtimeProfileId: "profile-plan",
+            sourceSessionId: "seed-planner",
+          }),
+          expect.objectContaining({
+            runtimeProfileId: "profile-impl",
+            sourceSessionId: "seed-implementer",
+          }),
+          expect.objectContaining({
+            runtimeProfileId: "profile-review",
+            sourceSessionId: "seed-reviewer",
+          }),
+        ]),
+      );
+    });
+
+    it("DELETE clears active warmup rows for the effective warmup scopes", async () => {
+      mockWarmupEnabled.value = true;
+      mockSupportedWarmup();
+
+      const createRes = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      });
+      expect(createRes.status).toBe(201);
+      mockBroadcast.mockClear();
+
+      const deleteRes = await app.request("/projects/warm-project/warmup", {
+        method: "DELETE",
+      });
+
+      expect(deleteRes.status).toBe(200);
+      expect(await deleteRes.json()).toEqual({ success: true, cleared: 1 });
+      expect(testDb.current.select().from(runtimeWarmupSessions).get()?.status).toBe("cleared");
+      expect(mockBroadcast).toHaveBeenCalledWith({
+        type: "project:warmup_updated",
+        payload: { projectId: "warm-project", status: "cleared" },
+      });
+    });
+
+    it("returns 404 for missing projects", async () => {
+      const res = await app.request("/projects/missing-project/warmup");
       expect(res.status).toBe(404);
     });
   });

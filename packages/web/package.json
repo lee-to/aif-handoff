@@ -7,13 +7,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:perf": "vite",
     "build": "tsc -b && vite build --configLoader native",
     "preview": "vite preview",
     "test": "vitest run --configLoader runner",
     "coverage": "vitest run --coverage",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "test:watch": "vitest --configLoader runner",
-    "perf": "playwright test --config=playwright.config.ts",
+    "perf": "node ./scripts/run-perf.mjs",
     "perf:ui": "playwright test --config=playwright.config.ts --ui",
     "perf:report": "playwright show-report playwright-report",
     "perf:install": "playwright install chromium"

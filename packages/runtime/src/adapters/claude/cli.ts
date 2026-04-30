@@ -3,9 +3,11 @@ import type {
   RuntimeEvent,
   RuntimeLimitSnapshot,
   RuntimeRunInput,
+  RuntimeSessionForkInput,
   RuntimeRunResult,
   RuntimeUsage,
 } from "../../types.js";
+import { RuntimeLimitStatus } from "../../types.js";
 import { buildRuntimeLimitEvent } from "../../limitEvents.js";
 import { assertSafeWindowsShellExecutablePath } from "../../shellSafety.js";
 import {
@@ -41,6 +43,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readForkSourceSessionId(input: RuntimeRunInput): string | null {
+  const sourceSessionId = (input as Partial<RuntimeSessionForkInput>).sourceSessionId;
+  return typeof sourceSessionId === "string" && sourceSessionId.trim().length > 0
+    ? sourceSessionId.trim()
+    : null;
 }
 
 const ALLOWED_ENV_PREFIXES = [
@@ -209,8 +218,10 @@ function buildCliArgs(input: RuntimeRunInput): string[] {
     args.push("--max-turns", String(execution.maxTurns));
   }
 
-  // Resume session
-  if (input.resume && input.sessionId) {
+  const forkSourceSessionId = readForkSourceSessionId(input);
+  if (forkSourceSessionId) {
+    args.push("--resume", forkSourceSessionId, "--fork-session");
+  } else if (input.resume && input.sessionId) {
     args.push("--resume", input.sessionId);
   }
 
@@ -428,6 +439,13 @@ function processStreamJsonLine(
       },
       "Translated Claude rate_limit_event into runtime limit snapshot",
     );
+    if (snapshot.status === RuntimeLimitStatus.BLOCKED) {
+      throw classifyClaudeResultSubtype(
+        "rate_limit",
+        "Claude runtime reported a blocked limit state",
+        buildClaudeLimitErrorMetadata(snapshot),
+      );
+    }
     return;
   }
 
@@ -585,9 +603,11 @@ function runCliAttempt(
     runTimeoutMs: execution?.runTimeoutMs ?? resolveTimeoutMs(input),
   });
 
-  const state = createCliStreamState(input.sessionId ?? null);
+  const fallbackSessionId = readForkSourceSessionId(input) ? null : (input.sessionId ?? null);
+  const state = createCliStreamState(fallbackSessionId);
   let stdoutBuffer = "";
   let stderr = "";
+  let streamProcessingError: unknown = null;
 
   const flushCompleteLines = (): void => {
     let newlineIdx = stdoutBuffer.indexOf("\n");
@@ -604,10 +624,12 @@ function runCliAttempt(
     try {
       flushCompleteLines();
     } catch (err) {
+      streamProcessingError = err;
       logger?.error?.(
         { runtimeId: input.runtimeId, err },
         "Claude CLI stream-json processing error",
       );
+      child.kill("SIGTERM");
     }
   });
 
@@ -663,6 +685,17 @@ function runCliAttempt(
       }
 
       const startTimedOut = await timeouts.startTimedOut;
+
+      if (streamProcessingError) {
+        reject(
+          classifyClaudeRuntimeError(
+            streamProcessingError,
+            undefined,
+            buildClaudeLimitErrorMetadata(state.latestLimitSnapshot),
+          ),
+        );
+        return;
+      }
 
       if (startTimedOut) {
         const startMs = execution?.startTimeoutMs ?? 0;
@@ -741,7 +774,7 @@ function runCliAttempt(
       }
 
       resolve({
-        result: finalizeCliResult(state, input.sessionId ?? null),
+        result: finalizeCliResult(state, fallbackSessionId),
         startTimedOut: false,
       });
     });

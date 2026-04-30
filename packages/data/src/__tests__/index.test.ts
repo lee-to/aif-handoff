@@ -68,6 +68,13 @@ const {
   hasActiveBranchBoundTasksForProject,
   claimBacklogTaskForAdvance,
   createChatSession,
+  createRuntimeWarmupSession,
+  markRuntimeWarmupSessionReady,
+  markRuntimeWarmupSessionFailed,
+  clearActiveRuntimeWarmupSessions,
+  expireStaleRuntimeWarmupSessions,
+  findActiveReadyRuntimeWarmupSession,
+  findRuntimeWarmupSessionById,
   upsertCodexSessions,
   upsertCodexSessionFiles,
   upsertCodexLimitHeads,
@@ -1580,6 +1587,130 @@ describe("data layer", () => {
       const loaded = findCodexIndexCursor("codex:reconcile");
       expect(loaded).toBeDefined();
       expect(loaded?.cursorJson).toEqual({ watermark: "w1", pass: 2 });
+    });
+  });
+
+  describe("runtime warmup sessions", () => {
+    const scope = {
+      projectId: "proj-1",
+      runtimeProfileId: "profile-1",
+      runtimeId: "claude",
+      providerId: "anthropic",
+      transport: "sdk",
+      model: "claude-sonnet-4",
+    };
+
+    it("finds the active ready warmup for a runtime scope", () => {
+      const row = createRuntimeWarmupSession({
+        ...scope,
+        ttlSeconds: 600,
+        expiresAt: "2026-04-30T12:10:00.000Z",
+      });
+      expect(row).toBeDefined();
+      expect(findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:00:00.000Z")).toBeUndefined();
+
+      markRuntimeWarmupSessionReady(row!.id, {
+        sourceSessionId: "seed-session-1",
+        summary: "Seeded plan context",
+        updatedAt: "2026-04-30T12:01:00.000Z",
+      });
+
+      const found = findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:02:00.000Z");
+      expect(found).toEqual(
+        expect.objectContaining({
+          id: row!.id,
+          status: "ready",
+          sourceSessionId: "seed-session-1",
+          summary: "Seeded plan context",
+        }),
+      );
+    });
+
+    it("expires stale active warmups and excludes expired rows from lookup", () => {
+      const row = createRuntimeWarmupSession({
+        ...scope,
+        ttlSeconds: 60,
+        expiresAt: "2026-04-30T12:00:00.000Z",
+      })!;
+      markRuntimeWarmupSessionReady(row.id, {
+        sourceSessionId: "seed-expired",
+        updatedAt: "2026-04-30T11:59:00.000Z",
+      });
+
+      expect(findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:00:00.000Z")).toBeUndefined();
+      expect(expireStaleRuntimeWarmupSessions("2026-04-30T12:00:00.000Z")).toBe(1);
+      expect(expireStaleRuntimeWarmupSessions("2026-04-30T12:00:00.000Z")).toBe(0);
+      expect(findRuntimeWarmupSessionById(row.id)?.status).toBe("expired");
+    });
+
+    it("clears an existing active warmup when creating a replacement", () => {
+      const first = createRuntimeWarmupSession({
+        ...scope,
+        ttlSeconds: 600,
+        expiresAt: "2026-04-30T13:00:00.000Z",
+        createdAt: "2026-04-30T12:00:00.000Z",
+      })!;
+      markRuntimeWarmupSessionReady(first.id, {
+        sourceSessionId: "seed-old",
+        updatedAt: "2026-04-30T12:01:00.000Z",
+      });
+
+      const second = createRuntimeWarmupSession({
+        ...scope,
+        ttlSeconds: 600,
+        expiresAt: "2026-04-30T13:10:00.000Z",
+        createdAt: "2026-04-30T12:10:00.000Z",
+      })!;
+
+      expect(findRuntimeWarmupSessionById(first.id)?.status).toBe("cleared");
+      expect(second.status).toBe("creating");
+      expect(findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:11:00.000Z")).toBeUndefined();
+
+      markRuntimeWarmupSessionReady(second.id, {
+        sourceSessionId: "seed-new",
+        updatedAt: "2026-04-30T12:12:00.000Z",
+      });
+      expect(findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:13:00.000Z")?.id).toBe(
+        second.id,
+      );
+    });
+
+    it("persists failed warmups without making them active", () => {
+      const row = createRuntimeWarmupSession({
+        ...scope,
+        model: "claude-opus-4",
+        ttlSeconds: 600,
+        expiresAt: "2026-04-30T13:00:00.000Z",
+      })!;
+
+      const failed = markRuntimeWarmupSessionFailed(
+        row.id,
+        "Runtime did not return a seed session",
+        "2026-04-30T12:05:00.000Z",
+      );
+
+      expect(failed).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          errorMessage: "Runtime did not return a seed session",
+        }),
+      );
+      expect(
+        findActiveReadyRuntimeWarmupSession(
+          { ...scope, model: "claude-opus-4" },
+          "2026-04-30T12:06:00.000Z",
+        ),
+      ).toBeUndefined();
+    });
+
+    it("returns empty results for missing warmup updates and clears", () => {
+      expect(
+        markRuntimeWarmupSessionReady("missing-warmup", {
+          sourceSessionId: "seed-missing",
+        }),
+      ).toBeUndefined();
+      expect(markRuntimeWarmupSessionFailed("missing-warmup", "failed")).toBeUndefined();
+      expect(clearActiveRuntimeWarmupSessions({ ...scope, model: "missing-model" })).toBe(0);
     });
   });
 

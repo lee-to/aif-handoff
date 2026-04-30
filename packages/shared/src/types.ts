@@ -280,6 +280,7 @@ export type WsEventType =
   | "project:auto_queue_mode_changed"
   | "project:auto_queue_advanced"
   | "project:runtime_limit_updated"
+  | "project:warmup_updated"
   | "task:commit_started"
   | "task:commit_done"
   | "task:commit_failed";
@@ -318,6 +319,11 @@ export interface RuntimeLimitBroadcastPayload {
   taskId?: string | null;
 }
 
+export interface WarmupBroadcastPayload {
+  projectId: string;
+  status: "ready" | "failed" | "cleared" | "expired";
+}
+
 export interface WsEvent {
   type: WsEventType;
   payload:
@@ -331,7 +337,8 @@ export interface WsEvent {
     | ChatErrorPayload
     | ChatSession
     | TaskCommitPayload
-    | RuntimeLimitBroadcastPayload;
+    | RuntimeLimitBroadcastPayload
+    | WarmupBroadcastPayload;
 }
 
 export const RuntimeTransport = {

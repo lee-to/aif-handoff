@@ -37,6 +37,7 @@ import {
   chatSessions,
   chatMessages,
   usageEvents,
+  runtimeWarmupSessions,
   codexSessions,
   codexSessionFiles,
   codexLimitHeads,
@@ -52,6 +53,7 @@ import {
   type RuntimeLimitFutureHint,
   type UpdateAppSettingsInput,
   type UpdateRuntimeProfileInput,
+  type RuntimeWarmupSessionStatus,
   type Task,
   type TaskStatus,
   resolveRuntimeLimitFutureHint,
@@ -76,6 +78,7 @@ export type CommentRow = typeof taskComments.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 export type AppSettingsRow = typeof appSettings.$inferSelect;
 export type RuntimeProfileRow = typeof runtimeProfiles.$inferSelect;
+export type RuntimeWarmupSessionRow = typeof runtimeWarmupSessions.$inferSelect;
 export type CodexSessionIndexRow = typeof codexSessions.$inferSelect;
 export type CodexSessionFileIndexRow = typeof codexSessionFiles.$inferSelect;
 export type CodexLimitHeadIndexRow = typeof codexLimitHeads.$inferSelect;
@@ -87,6 +90,23 @@ export type HydratedTaskRow = TaskRow & {
 };
 
 export type CoordinatorStage = "planner" | "plan-checker" | "implementer" | "reviewer";
+
+export interface RuntimeWarmupScopeInput {
+  projectId: string;
+  runtimeProfileId?: string | null;
+  runtimeId: string;
+  providerId: string;
+  transport?: string | null;
+  model?: string | null;
+}
+
+export interface CreateRuntimeWarmupSessionInput extends RuntimeWarmupScopeInput {
+  ttlSeconds: number;
+  expiresAt: string;
+  sourceSessionId?: string | null;
+  summary?: string | null;
+  createdAt?: string;
+}
 
 /** DB-level patch: all mutable task columns with their storage types (attachments/tags as JSON strings). */
 export type TaskFieldsPatch = Partial<Omit<TaskRow, "id" | "projectId" | "createdAt">> & {
@@ -1875,6 +1895,176 @@ export function findTasksByRoadmapAlias(projectId: string, alias: string): TaskR
     .from(tasks)
     .where(and(eq(tasks.projectId, projectId), eq(tasks.roadmapAlias, alias)))
     .all();
+}
+
+// ── Runtime Warmup Sessions ──────────────────────────────────────────
+
+const ACTIVE_RUNTIME_WARMUP_STATUSES: RuntimeWarmupSessionStatus[] = ["creating", "ready"];
+
+function runtimeWarmupScopeConditions(input: RuntimeWarmupScopeInput) {
+  return [
+    eq(runtimeWarmupSessions.projectId, input.projectId),
+    input.runtimeProfileId == null
+      ? isNull(runtimeWarmupSessions.runtimeProfileId)
+      : eq(runtimeWarmupSessions.runtimeProfileId, input.runtimeProfileId),
+    eq(runtimeWarmupSessions.runtimeId, input.runtimeId),
+    eq(runtimeWarmupSessions.providerId, input.providerId),
+    input.transport == null
+      ? isNull(runtimeWarmupSessions.transport)
+      : eq(runtimeWarmupSessions.transport, input.transport),
+    input.model == null
+      ? isNull(runtimeWarmupSessions.model)
+      : eq(runtimeWarmupSessions.model, input.model),
+  ];
+}
+
+export function findRuntimeWarmupSessionById(
+  id: string,
+): RuntimeWarmupSessionRow | undefined {
+  return getDb()
+    .select()
+    .from(runtimeWarmupSessions)
+    .where(eq(runtimeWarmupSessions.id, id))
+    .get();
+}
+
+export function createRuntimeWarmupSession(
+  input: CreateRuntimeWarmupSessionInput,
+): RuntimeWarmupSessionRow | undefined {
+  const db = getDb();
+  const id = crypto.randomUUID();
+  const now = input.createdAt ?? new Date().toISOString();
+
+  db.transaction((tx) => {
+    tx.update(runtimeWarmupSessions)
+      .set({ status: "cleared", updatedAt: now })
+      .where(
+        and(
+          ...runtimeWarmupScopeConditions(input),
+          inArray(runtimeWarmupSessions.status, ACTIVE_RUNTIME_WARMUP_STATUSES),
+        ),
+      )
+      .run();
+
+    tx.insert(runtimeWarmupSessions)
+      .values({
+        id,
+        projectId: input.projectId,
+        runtimeProfileId: input.runtimeProfileId ?? null,
+        runtimeId: input.runtimeId,
+        providerId: input.providerId,
+        transport: input.transport ?? null,
+        model: input.model ?? null,
+        sourceSessionId: input.sourceSessionId ?? null,
+        status: "creating",
+        ttlSeconds: input.ttlSeconds,
+        expiresAt: input.expiresAt,
+        summary: input.summary ?? null,
+        errorMessage: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+  });
+
+  return findRuntimeWarmupSessionById(id);
+}
+
+export function markRuntimeWarmupSessionReady(
+  id: string,
+  input: {
+    sourceSessionId: string;
+    summary?: string | null;
+    expiresAt?: string;
+    ttlSeconds?: number;
+    updatedAt?: string;
+  },
+): RuntimeWarmupSessionRow | undefined {
+  const now = input.updatedAt ?? new Date().toISOString();
+  getDb()
+    .update(runtimeWarmupSessions)
+    .set({
+      status: "ready",
+      sourceSessionId: input.sourceSessionId,
+      summary: input.summary ?? null,
+      errorMessage: null,
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+      ...(input.ttlSeconds !== undefined ? { ttlSeconds: input.ttlSeconds } : {}),
+      updatedAt: now,
+    })
+    .where(eq(runtimeWarmupSessions.id, id))
+    .run();
+  return findRuntimeWarmupSessionById(id);
+}
+
+export function markRuntimeWarmupSessionFailed(
+  id: string,
+  errorMessage: string,
+  updatedAt = new Date().toISOString(),
+): RuntimeWarmupSessionRow | undefined {
+  getDb()
+    .update(runtimeWarmupSessions)
+    .set({
+      status: "failed",
+      errorMessage,
+      updatedAt,
+    })
+    .where(eq(runtimeWarmupSessions.id, id))
+    .run();
+  return findRuntimeWarmupSessionById(id);
+}
+
+export function clearActiveRuntimeWarmupSessions(
+  input: RuntimeWarmupScopeInput,
+  updatedAt = new Date().toISOString(),
+): number {
+  const result = getDb()
+    .update(runtimeWarmupSessions)
+    .set({ status: "cleared", updatedAt })
+    .where(
+      and(
+        ...runtimeWarmupScopeConditions(input),
+        inArray(runtimeWarmupSessions.status, ACTIVE_RUNTIME_WARMUP_STATUSES),
+      ),
+    )
+    .run();
+  return result.changes;
+}
+
+export function expireStaleRuntimeWarmupSessions(
+  nowIso = new Date().toISOString(),
+): number {
+  const result = getDb()
+    .update(runtimeWarmupSessions)
+    .set({ status: "expired", updatedAt: nowIso })
+    .where(
+      and(
+        inArray(runtimeWarmupSessions.status, ACTIVE_RUNTIME_WARMUP_STATUSES),
+        lte(runtimeWarmupSessions.expiresAt, nowIso),
+      ),
+    )
+    .run();
+  return result.changes;
+}
+
+export function findActiveReadyRuntimeWarmupSession(
+  input: RuntimeWarmupScopeInput,
+  nowIso = new Date().toISOString(),
+): RuntimeWarmupSessionRow | undefined {
+  return getDb()
+    .select()
+    .from(runtimeWarmupSessions)
+    .where(
+      and(
+        ...runtimeWarmupScopeConditions(input),
+        eq(runtimeWarmupSessions.status, "ready"),
+        isNotNull(runtimeWarmupSessions.sourceSessionId),
+        gt(runtimeWarmupSessions.expiresAt, nowIso),
+      ),
+    )
+    .orderBy(desc(runtimeWarmupSessions.updatedAt))
+    .limit(1)
+    .get();
 }
 
 // ── Runtime Profiles ──────────────────────────────────────────

@@ -4,6 +4,12 @@ import {
   classifyClaudeRuntimeError,
   ClaudeRuntimeAdapterError,
 } from "../adapters/claude/errors.js";
+import {
+  RuntimeLimitPrecision,
+  RuntimeLimitSource,
+  RuntimeLimitStatus,
+  RuntimeLimitScope,
+} from "../types.js";
 
 describe("Claude runtime error classification", () => {
   it("classifies usage-limit failures", () => {
@@ -48,6 +54,33 @@ describe("Claude runtime error classification", () => {
   it("classifies unknown failures with default code", () => {
     const classified = classifyClaudeRuntimeError({ message: "unexpected" });
     expect(classified.adapterCode).toBe("CLAUDE_RUNTIME_ERROR");
+  });
+
+  it("classifies unknown failures with blocked limit metadata as rate limits", () => {
+    const resetAt = "2026-04-30T21:20:00.000Z";
+    const classified = classifyClaudeRuntimeError(
+      new Error("Claude CLI exited with code 1: unknown error"),
+      undefined,
+      {
+        resetAt,
+        limitSnapshot: {
+          source: RuntimeLimitSource.SDK_EVENT,
+          status: RuntimeLimitStatus.BLOCKED,
+          precision: RuntimeLimitPrecision.HEURISTIC,
+          checkedAt: "2026-04-30T17:01:13.958Z",
+          providerId: "anthropic",
+          runtimeId: "claude",
+          profileId: "profile-1",
+          primaryScope: RuntimeLimitScope.SPEND,
+          resetAt,
+          windows: [],
+        },
+      },
+    );
+
+    expect(classified.adapterCode).toBe("CLAUDE_USAGE_LIMIT");
+    expect(classified.category).toBe("rate_limit");
+    expect(classified.resetAt).toBe(resetAt);
   });
 
   it("classifies non-success result subtype", () => {

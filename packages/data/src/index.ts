@@ -13,6 +13,7 @@ import {
   lte,
   max,
   min,
+  ne,
   or,
   sql,
 } from "drizzle-orm";
@@ -1936,37 +1937,25 @@ export function createRuntimeWarmupSession(
   const id = crypto.randomUUID();
   const now = input.createdAt ?? new Date().toISOString();
 
-  db.transaction((tx) => {
-    tx.update(runtimeWarmupSessions)
-      .set({ status: "cleared", updatedAt: now })
-      .where(
-        and(
-          ...runtimeWarmupScopeConditions(input),
-          inArray(runtimeWarmupSessions.status, ACTIVE_RUNTIME_WARMUP_STATUSES),
-        ),
-      )
-      .run();
-
-    tx.insert(runtimeWarmupSessions)
-      .values({
-        id,
-        projectId: input.projectId,
-        runtimeProfileId: input.runtimeProfileId ?? null,
-        runtimeId: input.runtimeId,
-        providerId: input.providerId,
-        transport: input.transport ?? null,
-        model: input.model ?? null,
-        sourceSessionId: input.sourceSessionId ?? null,
-        status: "creating",
-        ttlSeconds: input.ttlSeconds,
-        expiresAt: input.expiresAt,
-        summary: input.summary ?? null,
-        errorMessage: null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-  });
+  db.insert(runtimeWarmupSessions)
+    .values({
+      id,
+      projectId: input.projectId,
+      runtimeProfileId: input.runtimeProfileId ?? null,
+      runtimeId: input.runtimeId,
+      providerId: input.providerId,
+      transport: input.transport ?? null,
+      model: input.model ?? null,
+      sourceSessionId: input.sourceSessionId ?? null,
+      status: "creating",
+      ttlSeconds: input.ttlSeconds,
+      expiresAt: input.expiresAt,
+      summary: input.summary ?? null,
+      errorMessage: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
 
   return findRuntimeWarmupSessionById(id);
 }
@@ -1982,19 +1971,38 @@ export function markRuntimeWarmupSessionReady(
   },
 ): RuntimeWarmupSessionRow | undefined {
   const now = input.updatedAt ?? new Date().toISOString();
-  getDb()
-    .update(runtimeWarmupSessions)
-    .set({
-      status: "ready",
-      sourceSessionId: input.sourceSessionId,
-      summary: input.summary ?? null,
-      errorMessage: null,
-      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
-      ...(input.ttlSeconds !== undefined ? { ttlSeconds: input.ttlSeconds } : {}),
-      updatedAt: now,
-    })
-    .where(eq(runtimeWarmupSessions.id, id))
-    .run();
+  getDb().transaction((tx) => {
+    const existing = tx
+      .select()
+      .from(runtimeWarmupSessions)
+      .where(eq(runtimeWarmupSessions.id, id))
+      .get();
+    if (!existing) return;
+
+    tx.update(runtimeWarmupSessions)
+      .set({
+        status: "ready",
+        sourceSessionId: input.sourceSessionId,
+        summary: input.summary ?? null,
+        errorMessage: null,
+        ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        ...(input.ttlSeconds !== undefined ? { ttlSeconds: input.ttlSeconds } : {}),
+        updatedAt: now,
+      })
+      .where(eq(runtimeWarmupSessions.id, id))
+      .run();
+
+    tx.update(runtimeWarmupSessions)
+      .set({ status: "cleared", updatedAt: now })
+      .where(
+        and(
+          ...runtimeWarmupScopeConditions(existing),
+          inArray(runtimeWarmupSessions.status, ACTIVE_RUNTIME_WARMUP_STATUSES),
+          ne(runtimeWarmupSessions.id, id),
+        ),
+      )
+      .run();
+  });
   return findRuntimeWarmupSessionById(id);
 }
 

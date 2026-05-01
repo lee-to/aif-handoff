@@ -1112,7 +1112,7 @@ Runtime-limit invalidation is project-scoped:
 
 - `project:runtime_limit_updated` payload is `{ projectId, runtimeProfileId, taskId? }`, and `runtimeProfileId` is required at emission time.
 - API/agent callers emit this via `POST /projects/:id/broadcast` after runtime snapshot/usage updates.
-- `project:warmup_updated` payload is `{ projectId, status }`, where `status` is `ready`, `failed`, `cleared`, or `expired`.
+- `project:warmup_updated` payload is `{ projectId, status }`, where `status` is `ready`, `failed`, `partial`, `cleared`, or `expired`.
 
 ## MCP Sync Integration
 

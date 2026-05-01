@@ -736,6 +736,44 @@ describe("executeSubagentQuery planner warmup fork", () => {
     expect(saveTaskSessionIdMock).toHaveBeenCalledWith("task-review", "review-child-session");
   });
 
+  it("forks the reviewer warmup for security review workflows", async () => {
+    findActiveReadyRuntimeWarmupSessionMock.mockReturnValue({
+      id: "warmup-review-security",
+      projectId: "project-1",
+      runtimeProfileId: null,
+      runtimeId: "claude",
+      providerId: "anthropic",
+      transport: "sdk",
+      model: null,
+      sourceSessionId: "warm-review-source",
+      status: "ready",
+      ttlSeconds: 600,
+      expiresAt: "2026-04-30T12:00:00.000Z",
+      summary: "summary",
+      errorMessage: null,
+      createdAt: "2026-04-30T11:00:00.000Z",
+      updatedAt: "2026-04-30T11:00:00.000Z",
+    });
+    queryMock.mockImplementation(makeSuccessWithSession("review-security-child", "reviewed"));
+
+    await executeSubagentQuery({
+      taskId: "task-review-security",
+      projectRoot: "/tmp/project",
+      agentName: "review-security",
+      prompt: "review security",
+      workflowKind: "review-security",
+      profileMode: "review",
+    });
+
+    const callOptions = queryMock.mock.calls[0][0].options;
+    expect(callOptions.resume).toBe("warm-review-source");
+    expect(callOptions.forkSession).toBe(true);
+    expect(saveTaskSessionIdMock).toHaveBeenCalledWith(
+      "task-review-security",
+      "review-security-child",
+    );
+  });
+
   it("skips warmup for non-stage helper workflows", async () => {
     queryMock.mockImplementation(makeSuccessWithSession("helper-session", "done"));
 

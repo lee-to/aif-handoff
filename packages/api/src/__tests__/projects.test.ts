@@ -1045,6 +1045,56 @@ describe("projects API", () => {
       });
     });
 
+    it("POST preserves the previous ready warmup when regeneration fails", async () => {
+      mockWarmupEnabled.value = true;
+      mockSupportedWarmup();
+      testDb.current
+        .insert(runtimeWarmupSessions)
+        .values({
+          id: "warmup-old",
+          projectId: "warm-project",
+          runtimeProfileId: "profile-warm",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          transport: "sdk",
+          model: "claude-sonnet-4",
+          sourceSessionId: "seed-old",
+          status: "ready",
+          ttlSeconds: 600,
+          expiresAt: "2026-05-01T12:00:00.000Z",
+          summary: "Old warmup",
+          errorMessage: null,
+          createdAt: "2026-05-01T11:00:00.000Z",
+          updatedAt: "2026-05-01T11:00:00.000Z",
+        })
+        .run();
+      mockRunApiRuntimeOneShot.mockRejectedValue(new Error("runtime unavailable"));
+
+      const res = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      });
+
+      expect(res.status).toBe(502);
+      const body = await res.json();
+      expect(body.code).toBe("runtime_failed");
+      expect(body.warmups).toEqual([
+        expect.objectContaining({
+          id: "warmup-old",
+          status: "ready",
+          summary: "Old warmup",
+        }),
+      ]);
+      expect(
+        testDb.current
+          .select()
+          .from(runtimeWarmupSessions)
+          .all()
+          .filter((row) => row.id === "warmup-old")[0]?.status,
+      ).toBe("ready");
+    });
+
     it("POST creates warmup seeds for distinct planner, implementer, and review runtimes", async () => {
       mockWarmupEnabled.value = true;
       mockResolveApiWarmupSupports.mockResolvedValue([
@@ -1129,6 +1179,66 @@ describe("projects API", () => {
           }),
         ]),
       );
+    });
+
+    it("POST returns partial warmup results when a later target fails", async () => {
+      mockWarmupEnabled.value = true;
+      mockResolveApiWarmupSupports.mockResolvedValue([
+        {
+          supported: true,
+          workflowKind: "planner",
+          profileMode: "plan",
+          runtimeId: "claude",
+          providerId: "anthropic",
+          runtimeProfileId: "profile-plan",
+          transport: "sdk",
+          model: "claude-plan",
+          selectionSource: "project_default",
+        },
+        {
+          supported: true,
+          workflowKind: "implementer",
+          profileMode: "task",
+          runtimeId: "codex",
+          providerId: "openai",
+          runtimeProfileId: "profile-impl",
+          transport: "app-server",
+          model: "gpt-5.5",
+          selectionSource: "project_default",
+        },
+      ]);
+      mockRunApiRuntimeOneShot
+        .mockResolvedValueOnce({
+          result: { outputText: "Warmup planner", sessionId: "seed-planner", usage: null },
+          context: {},
+        })
+        .mockRejectedValueOnce(new Error("codex warmup failed"));
+
+      const res = await app.request("/projects/warm-project/warmup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttlSeconds: 600 }),
+      });
+
+      expect(res.status).toBe(207);
+      const body = await res.json();
+      expect(body).toEqual(
+        expect.objectContaining({
+          code: "partial_warmup_failed",
+          failedTarget: "implementer",
+          partial: true,
+        }),
+      );
+      expect(body.warmups).toEqual([
+        expect.objectContaining({
+          runtimeProfileId: "profile-plan",
+          status: "ready",
+        }),
+      ]);
+      expect(mockBroadcast).toHaveBeenCalledWith({
+        type: "project:warmup_updated",
+        payload: { projectId: "warm-project", status: "partial" },
+      });
     });
 
     it("DELETE clears active warmup rows for the effective warmup scopes", async () => {

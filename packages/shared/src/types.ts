@@ -322,7 +322,7 @@ export interface RuntimeLimitBroadcastPayload {
 
 export interface WarmupBroadcastPayload {
   projectId: string;
-  status: "ready" | "failed" | "cleared" | "expired";
+  status: "ready" | "failed" | "partial" | "cleared" | "expired";
 }
 
 export interface WsEvent {

@@ -1650,7 +1650,7 @@ describe("data layer", () => {
       expect(findRuntimeWarmupSessionById(row.id)?.status).toBe("expired");
     });
 
-    it("clears an existing active warmup when creating a replacement", () => {
+    it("preserves an existing ready warmup until a replacement becomes ready", () => {
       const first = createRuntimeWarmupSession({
         ...scope,
         ttlSeconds: 600,
@@ -1669,14 +1669,17 @@ describe("data layer", () => {
         createdAt: "2026-04-30T12:10:00.000Z",
       })!;
 
-      expect(findRuntimeWarmupSessionById(first.id)?.status).toBe("cleared");
+      expect(findRuntimeWarmupSessionById(first.id)?.status).toBe("ready");
       expect(second.status).toBe("creating");
-      expect(findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:11:00.000Z")).toBeUndefined();
+      expect(findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:11:00.000Z")?.id).toBe(
+        first.id,
+      );
 
       markRuntimeWarmupSessionReady(second.id, {
         sourceSessionId: "seed-new",
         updatedAt: "2026-04-30T12:12:00.000Z",
       });
+      expect(findRuntimeWarmupSessionById(first.id)?.status).toBe("cleared");
       expect(findActiveReadyRuntimeWarmupSession(scope, "2026-04-30T12:13:00.000Z")?.id).toBe(
         second.id,
       );

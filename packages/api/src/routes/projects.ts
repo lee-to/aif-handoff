@@ -150,7 +150,7 @@ function toWarmupPayload(row: RuntimeWarmupSessionRow | undefined | null, now = 
 
 function broadcastWarmupUpdate(
   projectId: string,
-  status: "ready" | "failed" | "cleared" | "expired",
+  status: "ready" | "failed" | "partial" | "cleared" | "expired",
 ) {
   broadcast({ type: "project:warmup_updated", payload: { projectId, status } });
   log.debug({ projectId, status }, "Warmup state broadcast");
@@ -481,6 +481,18 @@ projectsRouter.post("/:id/warmup", jsonValidator(warmupCreateSchema), async (c) 
   const readyRows: RuntimeWarmupSessionRow[] = [];
   let firstReady: RuntimeWarmupSessionRow | undefined;
 
+  const activeWarmupPayloads = () =>
+    supportedScopes
+      .map(({ scope }) => findActiveReadyRuntimeWarmupSession(scope))
+      .filter((row): row is RuntimeWarmupSessionRow => Boolean(row))
+      .map((row) => toWarmupPayload(row));
+  const warmupFailureStatus = () => (readyRows.length > 0 ? 207 : 502);
+  const warmupFailureCode = (code: string) =>
+    readyRows.length > 0 ? "partial_warmup_failed" : code;
+  const broadcastWarmupFailure = () => {
+    broadcastWarmupUpdate(id, readyRows.length > 0 ? "partial" : "failed");
+  };
+
   for (const { support: targetSupport, scope } of supportedScopes) {
     const pending = createRuntimeWarmupSession({
       ...scope,
@@ -523,18 +535,18 @@ projectsRouter.post("/:id/warmup", jsonValidator(warmupCreateSchema), async (c) 
           },
           "Warmup create failed because runtime did not return a seed session id",
         );
-        broadcastWarmupUpdate(id, "failed");
-        return c.json(
-          {
-            error: "Runtime did not return a seed session id",
-            code: "missing_seed_session",
-            warmup: toWarmupPayload(failed),
-            warmups: readyRows.map((row) => toWarmupPayload(row)),
-            support,
-            targets: targetSupports,
-          },
-          502,
-        );
+        broadcastWarmupFailure();
+        c.status(warmupFailureStatus());
+        return c.json({
+          error: "Runtime did not return a seed session id",
+          code: warmupFailureCode("missing_seed_session"),
+          failedTarget: targetSupport.workflowKind,
+          partial: readyRows.length > 0,
+          warmup: toWarmupPayload(failed),
+          warmups: activeWarmupPayloads(),
+          support,
+          targets: targetSupports,
+        });
       }
 
       const ready = markRuntimeWarmupSessionReady(pending.id, {
@@ -573,18 +585,18 @@ projectsRouter.post("/:id/warmup", jsonValidator(warmupCreateSchema), async (c) 
         },
         "Warmup create failed during runtime execution",
       );
-      broadcastWarmupUpdate(id, "failed");
-      return c.json(
-        {
-          error: message,
-          code: "runtime_failed",
-          warmup: toWarmupPayload(failed),
-          warmups: readyRows.map((row) => toWarmupPayload(row)),
-          support,
-          targets: targetSupports,
-        },
-        502,
-      );
+      broadcastWarmupFailure();
+      c.status(warmupFailureStatus());
+      return c.json({
+        error: message,
+        code: warmupFailureCode("runtime_failed"),
+        failedTarget: targetSupport.workflowKind,
+        partial: readyRows.length > 0,
+        warmup: toWarmupPayload(failed),
+        warmups: activeWarmupPayloads(),
+        support,
+        targets: targetSupports,
+      });
     }
   }
 

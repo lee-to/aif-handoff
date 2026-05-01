@@ -32,6 +32,7 @@ export const WARMUP_WORKFLOW_KINDS = [
   "planner",
   "implementer",
   "reviewer",
+  // Security review uses the review profile/mode and can fork the reviewer warmup seed.
   "review-security",
 ] as const;
 

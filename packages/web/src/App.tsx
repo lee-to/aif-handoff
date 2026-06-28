@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Header } from "./components/layout/Header";
 import { Board } from "./components/kanban/Board";
 import { TaskDetail } from "./components/task/TaskDetail";
@@ -7,7 +7,7 @@ import { CommandPalette } from "./components/layout/CommandPalette";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useCommitToasts } from "./hooks/useCommitToasts";
 import { useProjects } from "./hooks/useProjects";
-import { useTasks } from "./hooks/useTasks";
+import { useTasks, useAllProjectTasks } from "./hooks/useTasks";
 import { useTheme } from "./hooks/useTheme";
 import { useKeyboardShortcut } from "./hooks/useKeyboardShortcut";
 import { ChatBubble } from "./components/chat/ChatBubble";
@@ -15,8 +15,7 @@ import { ChatPanel } from "./components/chat/ChatPanel";
 import { calculateTaskMetrics } from "./lib/taskMetrics";
 import { readStorage, writeStorage, removeStorage } from "./lib/storage";
 import { STORAGE_KEYS } from "./lib/storageKeys";
-import { api } from "./lib/api";
-import type { Project, Task } from "@aif/shared/browser";
+import type { Project } from "@aif/shared/browser";
 import { ProjectRuntimeSettings } from "./components/project/ProjectRuntimeSettings";
 import { ProjectsOverview } from "./components/project/ProjectsOverview";
 import { ToastProvider } from "./components/ui/toast";
@@ -30,13 +29,31 @@ const queryClient = new QueryClient({
   },
 });
 
+const PROJECT_ROUTE_PATTERN = /^\/project\/([^/]+)(?:\/task\/([^/]+))?/;
+
+function readInitialSelection(): { projectId: string | null; taskId: string | null } {
+  const match = window.location.pathname.match(PROJECT_ROUTE_PATTERN);
+  if (match) {
+    return { projectId: match[1] ?? null, taskId: match[2] ?? null };
+  }
+
+  return {
+    projectId: readStorage(STORAGE_KEYS.SELECTED_PROJECT),
+    taskId: null,
+  };
+}
+
 function AppContent() {
   useWebSocket();
   useCommitToasts();
   const { theme, toggleTheme } = useTheme();
   const { data: projects } = useProjects();
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    () => readInitialSelection().projectId,
+  );
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
+    () => readInitialSelection().taskId,
+  );
   const [commandOpen, setCommandOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
@@ -52,18 +69,18 @@ function AppContent() {
     () => projects?.find((candidate) => candidate.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
   );
-  const { data: projectTasks } = useTasks(project?.id ?? null);
-  const { data: allTasks } = useQuery<Task[]>({
-    queryKey: ["tasks", "all"],
-    queryFn: () => api.listTasks(),
-    enabled: !project,
-  });
+  const { data: projectTasks } = useTasks(selectedProjectId);
+  const allProjectIds = useMemo(
+    () => (selectedProjectId ? [] : (projects ?? []).map((p) => p.id)),
+    [projects, selectedProjectId],
+  );
+  const { tasks: allProjectTasks } = useAllProjectTasks(allProjectIds);
   const taskMetrics = useMemo(
-    () => calculateTaskMetrics((project ? projectTasks : allTasks) ?? []),
-    [project, projectTasks, allTasks],
+    () => calculateTaskMetrics(selectedProjectId ? (projectTasks ?? []) : allProjectTasks),
+    [allProjectTasks, projectTasks, selectedProjectId],
   );
   const aggregateProjectTotals = useMemo(() => {
-    if (project || !projects?.length) return null;
+    if (selectedProjectId || !projects?.length) return null;
     return projects.reduce(
       (acc, p) => ({
         tokenInput: acc.tokenInput + (p.tokenInput ?? 0),
@@ -73,7 +90,7 @@ function AppContent() {
       }),
       { tokenInput: 0, tokenOutput: 0, tokenTotal: 0, costUsd: 0 },
     );
-  }, [project, projects]);
+  }, [projects, selectedProjectId]);
 
   useEffect(() => {
     writeStorage(STORAGE_KEYS.DENSITY, density);
@@ -83,50 +100,40 @@ function AppContent() {
     writeStorage(STORAGE_KEYS.VIEW_MODE, viewMode);
   }, [viewMode]);
 
-  // Restore state from URL or localStorage on initial load
+  // Validate restored state after projects load.
   useEffect(() => {
-    if (!projects?.length) return;
-    if (selectedProjectId) return;
+    if (!projects || !selectedProjectId) return;
 
-    const match = window.location.pathname.match(/^\/project\/([^/]+)(?:\/task\/([^/]+))?/);
-    if (match) {
-      const urlProjectId = match[1];
-      const urlTaskId = match[2] ?? null;
-      const found = projects.find((p) => p.id === urlProjectId);
-      if (found) {
-        queueMicrotask(() => {
-          setSelectedProjectId(found.id);
-          writeStorage(STORAGE_KEYS.SELECTED_PROJECT, found.id);
-          if (urlTaskId) setSelectedTaskId(urlTaskId);
-        });
-        return;
-      }
+    const found = projects.find((p) => p.id === selectedProjectId);
+    if (found) {
+      writeStorage(STORAGE_KEYS.SELECTED_PROJECT, found.id);
+      return;
     }
 
-    const savedId = readStorage(STORAGE_KEYS.SELECTED_PROJECT);
-    if (savedId) {
-      const found = projects.find((p) => p.id === savedId);
-      if (found) {
-        queueMicrotask(() => {
-          setSelectedProjectId(found.id);
-        });
-      }
-    }
+    console.debug("[app] Clearing stale selected project", {
+      selectedProjectId,
+      reason: "missing_from_projects",
+    });
+
+    const clearTimer = window.setTimeout(() => {
+      setSelectedProjectId(null);
+      setSelectedTaskId(null);
+      removeStorage(STORAGE_KEYS.SELECTED_PROJECT);
+    }, 0);
+
+    return () => window.clearTimeout(clearTimer);
   }, [projects, selectedProjectId]);
 
   // Handle browser back/forward
   useEffect(() => {
     const onPopState = () => {
-      const match = window.location.pathname.match(/^\/project\/([^/]+)(?:\/task\/([^/]+))?/);
+      const match = window.location.pathname.match(PROJECT_ROUTE_PATTERN);
       if (match) {
         const urlProjectId = match[1];
         const urlTaskId = match[2] ?? null;
-        const found = projects?.find((p) => p.id === urlProjectId);
-        if (found) {
-          setSelectedProjectId(found.id);
-          setSelectedTaskId(urlTaskId);
-          return;
-        }
+        setSelectedProjectId(urlProjectId);
+        setSelectedTaskId(urlTaskId);
+        return;
       }
       setSelectedProjectId(null);
       setSelectedTaskId(null);
@@ -253,7 +260,7 @@ function AppContent() {
         onOpenChange={setCommandOpen}
         projects={projects ?? []}
         tasks={projectTasks ?? []}
-        selectedProjectId={project?.id ?? null}
+        selectedProjectId={selectedProjectId}
         density={density}
         theme={theme}
         onSelectProject={handleSelectProject}

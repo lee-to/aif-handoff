@@ -1,6 +1,13 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueries,
+  useMutation,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import type {
   Task,
+  TaskListItem,
   CreateTaskInput,
   UpdateTaskInput,
   TaskEvent,
@@ -11,11 +18,53 @@ import type {
 import { api } from "../lib/api.js";
 
 export function useTasks(projectId: string | null) {
-  return useQuery<Task[]>({
+  return useQuery<TaskListItem[]>({
     queryKey: ["tasks", projectId],
-    queryFn: () => api.listTasks(projectId ?? undefined),
+    queryFn: () => api.listTasks(projectId!),
     enabled: !!projectId,
   });
+}
+
+/**
+ * Fetch the lightweight task list for every project in parallel.
+ *
+ * The task list contract requires a `projectId`, so the no-project overview
+ * screen (and aggregate header metrics) cannot use a single "load all" call.
+ * Until a dedicated aggregate endpoint exists, we fan out one scoped request
+ * per project and flatten the results here.
+ *
+ * Returns the merged task list **and** a loading flag derived from query
+ * state (not from data presence), so that projects with zero tasks still
+ * resolve to a non-loading state.
+ */
+export function useAllProjectTasks(projectIds: string[]): {
+  tasks: TaskListItem[];
+  isLoading: boolean;
+} {
+  const results = useQueries({
+    queries: projectIds.map((projectId) => ({
+      queryKey: ["tasks", projectId] as const,
+      queryFn: () => api.listTasks(projectId),
+    })),
+  });
+  const tasks: TaskListItem[] = [];
+  for (const result of results) {
+    if (result.data) {
+      for (const task of result.data) {
+        tasks.push(task);
+      }
+    }
+  }
+  // Loading is derived from query state, NOT from data presence: a project
+  // with zero tasks resolves successfully to `[]`, which must read as
+  // "loaded, empty" rather than "still loading".
+  const isLoading =
+    projectIds.length > 0 && results.some((result) => result.isLoading || result.isFetching);
+  return { tasks, isLoading };
+}
+
+function invalidateTaskCollections(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ["tasks"] });
 }
 
 export function useTask(id: string | null) {
@@ -39,7 +88,7 @@ export function useCreateTask() {
   return useMutation({
     mutationFn: (input: CreateTaskInput) => api.createTask(input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      invalidateTaskCollections(queryClient);
     },
   });
 }
@@ -50,7 +99,7 @@ export function useUpdateTask() {
     mutationFn: ({ id, input }: { id: string; input: UpdateTaskInput }) =>
       api.updateTask(id, input),
     onSuccess: (task) => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      invalidateTaskCollections(queryClient);
       queryClient.invalidateQueries({ queryKey: ["task", task.id] });
     },
   });
@@ -62,7 +111,7 @@ export function useDeleteTask() {
     mutationFn: (id: string) => api.deleteTask(id),
     onSuccess: (_data, id) => {
       queryClient.removeQueries({ queryKey: ["task", id] });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      invalidateTaskCollections(queryClient);
     },
   });
 }
@@ -81,17 +130,20 @@ export function useTaskEvent() {
       deletePlanFile?: TaskEventInput["deletePlanFile"];
       commitOnApprove?: TaskEventInput["commitOnApprove"];
     }) => api.taskEvent(id, event, { deletePlanFile, commitOnApprove }),
-    // Optimistic update
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["tasks"] });
-      const previous = queryClient.getQueryData<Task[]>(["tasks"]);
+      const previousTaskLists = queryClient.getQueriesData<TaskListItem[]>({
+        queryKey: ["tasks"],
+      });
       const previousTask = queryClient.getQueryData<Task>(["task", id]);
 
-      return { previous, previousTask };
+      return { previousTaskLists, previousTask };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(["tasks"], context.previous);
+      if (context?.previousTaskLists) {
+        for (const [queryKey, taskList] of context.previousTaskLists) {
+          queryClient.setQueryData(queryKey, taskList);
+        }
       }
       if (context?.previousTask) {
         queryClient.setQueryData(["task", context.previousTask.id], context.previousTask);
@@ -101,7 +153,7 @@ export function useTaskEvent() {
       queryClient.setQueryData(["task", task.id], task);
     },
     onSettled: (_data, _error, vars) => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      invalidateTaskCollections(queryClient);
       queryClient.invalidateQueries({ queryKey: ["task", vars.id] });
     },
   });
@@ -124,7 +176,7 @@ export function useReorderTask() {
     mutationFn: ({ id, position }: { id: string; position: number }) =>
       api.reorderTask(id, position),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      invalidateTaskCollections(queryClient);
     },
   });
 }
@@ -134,7 +186,7 @@ export function useSyncTaskPlan() {
   return useMutation({
     mutationFn: (id: string) => api.syncTaskPlan(id),
     onSuccess: (task) => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      invalidateTaskCollections(queryClient);
       queryClient.invalidateQueries({ queryKey: ["task", task.id] });
     },
   });

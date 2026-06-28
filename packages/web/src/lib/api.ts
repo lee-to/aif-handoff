@@ -1,5 +1,6 @@
 import type {
   Task,
+  TaskListItem,
   CreateTaskInput,
   UpdateTaskInput,
   TaskEvent,
@@ -351,10 +352,10 @@ export const api = {
   },
 
   // Tasks
-  listTasks(projectId?: string): Promise<Task[]> {
-    const qs = projectId ? `?projectId=${projectId}` : "";
-    console.debug("[api] GET /tasks%s", qs);
-    return request<Task[]>(`${API_BASE}${qs}`);
+  listTasks(projectId: string): Promise<TaskListItem[]> {
+    const qs = `?projectId=${encodeURIComponent(projectId)}`;
+    console.debug("[api] GET /tasks?projectId=%s", projectId);
+    return request<TaskListItem[]>(`${API_BASE}${qs}`);
   },
 
   getTask(id: string): Promise<Task> {

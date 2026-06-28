@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from "@aif/shared/browser";
+import type { TaskListItem, TaskStatus } from "@aif/shared/browser";
 import { STATUS_CONFIG } from "@aif/shared/browser";
 import { TaskCard } from "./TaskCard";
 import { AddTaskForm } from "./AddTaskForm";
@@ -6,7 +6,7 @@ import { useReorderTask, useUpdateTask } from "@/hooks/useTasks";
 
 interface ColumnProps {
   status: TaskStatus;
-  tasks: Task[];
+  tasks: TaskListItem[];
   projectId: string;
   onTaskClick: (taskId: string) => void;
   totalVisibleTasks: number;
@@ -43,7 +43,7 @@ const OWNER_BADGES: Record<TaskStatus, Array<{ label: string; className: string 
 };
 
 function reorderBacklog(
-  tasks: Task[],
+  tasks: TaskListItem[],
   idx: number,
   dir: "up" | "down",
   reorder: ReturnType<typeof useReorderTask>,

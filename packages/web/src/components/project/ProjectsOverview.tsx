@@ -1,8 +1,6 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import type { Project, Task, TaskStatus } from "@aif/shared/browser";
+import type { Project, TaskListItem, TaskStatus } from "@aif/shared/browser";
 import { STATUS_CONFIG } from "@aif/shared/browser";
-import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -11,6 +9,7 @@ import { ProgressBar } from "@/components/ui/progress-bar";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Metric } from "@/components/ui/metric";
+import { useAllProjectTasks } from "@/hooks/useTasks";
 import { calculateTaskMetrics } from "@/lib/taskMetrics";
 
 const integerFmt = new Intl.NumberFormat("en-US");
@@ -44,8 +43,8 @@ const OVERVIEW_STATUSES: TaskStatus[] = [
 
 const PREVIEW_LIMIT = 3;
 
-function tasksByProject(tasks: Task[]): Map<string, Task[]> {
-  const map = new Map<string, Task[]>();
+function tasksByProject(tasks: TaskListItem[]): Map<string, TaskListItem[]> {
+  const map = new Map<string, TaskListItem[]>();
   for (const task of tasks) {
     const list = map.get(task.projectId);
     if (list) list.push(task);
@@ -54,26 +53,25 @@ function tasksByProject(tasks: Task[]): Map<string, Task[]> {
   return map;
 }
 
-function emptyByStatus(): Record<TaskStatus, Task[]> {
-  return Object.fromEntries(Object.keys(STATUS_CONFIG).map((s) => [s, [] as Task[]])) as Record<
-    TaskStatus,
-    Task[]
-  >;
+function emptyByStatus(): Record<TaskStatus, TaskListItem[]> {
+  return Object.fromEntries(
+    Object.keys(STATUS_CONFIG).map((s) => [s, [] as TaskListItem[]]),
+  ) as Record<TaskStatus, TaskListItem[]>;
 }
 
-function groupByStatus(tasks: Task[]): Record<TaskStatus, Task[]> {
+function groupByStatus(tasks: TaskListItem[]): Record<TaskStatus, TaskListItem[]> {
   const acc = emptyByStatus();
   for (const task of tasks) acc[task.status]?.push(task);
   return acc;
 }
 
 export function ProjectsOverview({ projects, onSelectProject }: ProjectsOverviewProps) {
-  const { data: allTasks, isLoading } = useQuery<Task[]>({
-    queryKey: ["tasks", "all"],
-    queryFn: () => api.listTasks(),
-  });
-
-  const tasksByProj = useMemo(() => tasksByProject(allTasks ?? []), [allTasks]);
+  const projectIds = useMemo(() => projects.map((p) => p.id), [projects]);
+  // Loading is derived from query state by the hook (not data presence), so
+  // projects with zero tasks resolve to a non-loading state instead of
+  // hanging on skeleton cards forever.
+  const { tasks: allTasks, isLoading } = useAllProjectTasks(projectIds);
+  const tasksByProj = useMemo(() => tasksByProject(allTasks), [allTasks]);
 
   if (!projects.length) {
     return (

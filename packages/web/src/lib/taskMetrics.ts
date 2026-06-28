@@ -1,4 +1,4 @@
-import type { Task } from "@aif/shared/browser";
+import type { TaskListItem } from "@aif/shared/browser";
 
 export interface TaskMetricsSummary {
   totalTasks: number;
@@ -19,12 +19,24 @@ export interface TaskMetricsSummary {
   completionRate: number;
 }
 
+type TaskMetricsInput = Pick<
+  TaskListItem,
+  | "status"
+  | "autoMode"
+  | "isFix"
+  | "retryCount"
+  | "tokenInput"
+  | "tokenOutput"
+  | "tokenTotal"
+  | "costUsd"
+>;
+
 function toNonNegativeNumber(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   return value > 0 ? value : 0;
 }
 
-export function calculateTaskMetrics(tasks: Task[]): TaskMetricsSummary {
+export function calculateTaskMetrics(tasks: TaskMetricsInput[]): TaskMetricsSummary {
   const totalTasks = tasks.length;
 
   const completedTasks = tasks.filter(

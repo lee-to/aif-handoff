@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { WsEvent, Task, TaskStatus } from "@aif/shared/browser";
+import type { WsEvent, Task, TaskListItem, TaskStatus } from "@aif/shared/browser";
 import { useNotificationSettings } from "./useNotificationSettings";
 import { playStatusChangeBeep, showTaskMovedNotification } from "@/lib/notifications";
 
@@ -80,7 +80,7 @@ export function useWebSocket() {
       const detailed = queryClient.getQueryData<Task>(["task", taskId]);
       if (detailed) return detailed.status;
 
-      const taskLists = queryClient.getQueriesData<Task[]>({ queryKey: ["tasks"] });
+      const taskLists = queryClient.getQueriesData<TaskListItem[]>({ queryKey: ["tasks"] });
       for (const [, tasks] of taskLists) {
         if (!tasks) continue;
         const found = tasks.find((task) => task.id === taskId);
@@ -224,6 +224,7 @@ export function useWebSocket() {
         invalidateRuntimeLimitQueries(queryClient, data.payload);
         if (typeof data.payload.taskId === "string" && data.payload.taskId.length > 0) {
           pendingTaskIds.current.add(data.payload.taskId);
+          queryClient.invalidateQueries({ queryKey: ["tasks"] });
         }
         return;
       }
@@ -250,6 +251,7 @@ export function useWebSocket() {
         window.dispatchEvent(new CustomEvent(data.type, { detail: data.payload }));
 
         if (data.type === "roadmap:complete" && isRecord(data.payload)) {
+          queryClient.invalidateQueries({ queryKey: ["tasks"] });
           const p = data.payload as { roadmapAlias?: string; created?: number };
           if (settingsRef.current.desktop && Notification.permission === "granted") {
             new Notification("Roadmap ready", {

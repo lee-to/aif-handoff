@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { ORDERED_STATUSES, STATUS_CONFIG, type Task, type TaskStatus } from "@aif/shared/browser";
+import {
+  ORDERED_STATUSES,
+  STATUS_CONFIG,
+  type TaskListItem,
+  type TaskStatus,
+} from "@aif/shared/browser";
 import { useTasks } from "@/hooks/useTasks";
 import { Column } from "./Column";
 import { Button } from "@/components/ui/button";
@@ -92,7 +97,7 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
         const oneDayAgo = RECENT_CUTOFF_REFERENCE_TS - ONE_DAY_MS;
         if (updatedTs < oneDayAgo) return false;
       }
-      if (activeFilters.includes("no_plan") && (task.plan?.trim()?.length ?? 0) > 0) return false;
+      if (activeFilters.includes("no_plan") && task.hasPlan) return false;
       if (activeFilters.includes("roadmap")) {
         if (!task.tags || !task.tags.includes("roadmap")) return false;
         if (
@@ -106,7 +111,7 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
   }, [activeFilters, activeRoadmapAliases, tasks]);
 
   const tasksByStatus = useMemo(() => {
-    const grouped: Record<TaskStatus, Task[]> = {
+    const grouped: Record<TaskStatus, TaskListItem[]> = {
       backlog: [],
       planning: [],
       plan_ready: [],

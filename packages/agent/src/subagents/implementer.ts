@@ -19,6 +19,7 @@ import { logActivity } from "../hooks.js";
 import { executeSubagentQuery } from "../subagentQuery.js";
 import { computePendingPlanLayers, computePlanLayers } from "../planLayers.js";
 import { assertCurrentBranch, restorePersistedBranch } from "../gitBranch.js";
+import { StageManualBlockError } from "../stageErrorHandler.js";
 
 const log = logger("implementer");
 const AGENT_NAME = "implement-coordinator";
@@ -374,7 +375,16 @@ Execution rules:
   let finalResultText = resultText;
 
   if (isBlockedImplementationResult(resultText)) {
-    throw new Error("Implementer blocked by permissions");
+    // Route through StageManualBlockError so the coordinator parks the task to
+    // blocked_external (retryAfter=manual) instead of reverting it to
+    // `implementing`. A plain Error falls through classifyStageError to the
+    // generic `revert` path, which immediately re-picks the task with no
+    // backoff — an infinite hot loop when the blocker is an environment
+    // prerequisite (e.g. an unreachable private dependency) that no amount of
+    // retries can resolve without operator action.
+    throw new StageManualBlockError(
+      "Implementer reported a blocking condition (permissions or unmet environment prerequisite). Manual action required before retry.",
+    );
   }
 
   let syncedPlan = readCanonicalPlan(task, projectRoot) ?? task.plan;

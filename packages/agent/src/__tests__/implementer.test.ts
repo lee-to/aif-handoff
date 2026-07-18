@@ -434,6 +434,41 @@ describe("runImplementer rework behavior", () => {
     // Stored session must NOT be resumed for rework, even in skill mode
     expect(call.options.resume).toBeUndefined();
   });
+
+  it("parks the task via StageManualBlockError when the subagent reports a blocking condition", async () => {
+    const db = testDb.current;
+    // Blocked result text — the implementer must NOT swallow it into a plain
+    // Error (which classifyStageError treats as a retryable revert → hot loop),
+    // but throw StageManualBlockError so the coordinator parks it to
+    // blocked_external and stops re-picking it.
+    queryMock.mockReturnValue(
+      streamSuccess(
+        "Status: BLOCKED — cannot proceed: private Go module github.com/burlet-mikhail is unreachable (permission denied).",
+      ),
+    );
+
+    db.insert(tasks)
+      .values({
+        id: "task-blocked",
+        projectId: "project-1",
+        title: "Task",
+        description: "Desc",
+        status: "implementing",
+        plan: "## Plan\n- [ ] Task 1: Pending",
+        reworkRequested: false,
+        useSubagents: true,
+      })
+      .run();
+
+    const { StageManualBlockError } = await import("../stageErrorHandler.js");
+    await expect(runImplementer("task-blocked", projectRoot)).rejects.toBeInstanceOf(
+      StageManualBlockError,
+    );
+
+    // Implementer ran exactly once — the blocked result short-circuits before
+    // any checklist-sync second query.
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("runImplementer feature branch routing", () => {

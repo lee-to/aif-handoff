@@ -34,6 +34,8 @@ export function TaskSettings({ task, onSave }: Props) {
   const [autoMode, setAutoMode] = useState(task.autoMode);
   const [skipReview, setSkipReview] = useState(task.skipReview);
   const [useSubagents, setUseSubagents] = useState(task.useSubagents);
+  const [runPlanImprove, setRunPlanImprove] = useState(task.runPlanImprove);
+  const [runPostVerify, setRunPostVerify] = useState(task.runPostVerify);
   const [autoQa, setAutoQa] = useState(task.autoQa);
   const [plannerMode, setPlannerMode] = useState<"full" | "fast">(
     task.plannerMode as "full" | "fast",
@@ -62,6 +64,8 @@ export function TaskSettings({ task, onSave }: Props) {
     autoMode !== task.autoMode ||
     skipReview !== task.skipReview ||
     useSubagents !== task.useSubagents ||
+    runPlanImprove !== task.runPlanImprove ||
+    runPostVerify !== task.runPostVerify ||
     autoQa !== task.autoQa ||
     maxReviewIterations !== task.maxReviewIterations ||
     (runtimeProfileId || null) !== (task.runtimeProfileId ?? null) ||
@@ -79,6 +83,8 @@ export function TaskSettings({ task, onSave }: Props) {
     if (autoMode !== task.autoMode) input.autoMode = autoMode;
     if (skipReview !== task.skipReview) input.skipReview = skipReview;
     if (useSubagents !== task.useSubagents) input.useSubagents = useSubagents;
+    if (runPlanImprove !== task.runPlanImprove) input.runPlanImprove = runPlanImprove;
+    if (runPostVerify !== task.runPostVerify) input.runPostVerify = runPostVerify;
     if (autoQa !== task.autoQa) input.autoQa = autoQa;
     if (maxReviewIterations !== task.maxReviewIterations)
       input.maxReviewIterations = maxReviewIterations;
@@ -132,6 +138,8 @@ export function TaskSettings({ task, onSave }: Props) {
               setAutoMode(task.autoMode);
               setSkipReview(task.skipReview);
               setUseSubagents(task.useSubagents);
+              setRunPlanImprove(task.runPlanImprove);
+              setRunPostVerify(task.runPostVerify);
               setAutoQa(task.autoQa);
               setMaxReviewIterations(task.maxReviewIterations);
               setPlannerMode(task.plannerMode as "full" | "fast");
@@ -157,9 +165,33 @@ export function TaskSettings({ task, onSave }: Props) {
         <CheckboxField label="Skip review" checked={skipReview} onChange={setSkipReview}>
           After implementation, move directly to done without code review.
         </CheckboxField>
-        <CheckboxField label="Use subagents" checked={useSubagents} onChange={setUseSubagents}>
+        <CheckboxField
+          label="Use subagents"
+          checked={useSubagents}
+          onChange={(checked) => {
+            setUseSubagents(checked);
+            if (checked) {
+              setRunPlanImprove(false);
+              setRunPostVerify(false);
+            }
+          }}
+        >
           Run via custom subagents (plan-coordinator, implement-coordinator, sidecars).
         </CheckboxField>
+        {!useSubagents && (
+          <>
+            <CheckboxField
+              label="Run improve"
+              checked={runPlanImprove}
+              onChange={setRunPlanImprove}
+            >
+              Refine the generated plan with aif-improve before implementation.
+            </CheckboxField>
+            <CheckboxField label="Run verify" checked={runPostVerify} onChange={setRunPostVerify}>
+              Validate the finished implementation with aif-verify before review.
+            </CheckboxField>
+          </>
+        )}
         {qaPipelineEnabled && (
           <CheckboxField label="Run QA after done" checked={autoQa} onChange={setAutoQa}>
             Automatically run the QA pipeline when this task is approved (done → verified).

@@ -36,6 +36,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     planCheckerMaxBudgetUsd: null,
     implementerMaxBudgetUsd: null,
     reviewSidecarMaxBudgetUsd: null,
+    pinnedAt: null,
+    groupName: null,
     parallelEnabled: false,
     autoQueueMode: false,
     createdAt: "2026-04-16T00:00:00Z",

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import type { Task } from "@aif/shared/browser";
+import type { TaskListItem } from "@aif/shared/browser";
 
 const mutateReorder = vi.fn();
 const mutateUpdate = vi.fn();
@@ -12,7 +12,7 @@ vi.mock("@/hooks/useTasks", () => ({
 
 const { TaskListTable } = await import("@/components/kanban/TaskListTable");
 
-function makeTask(overrides: Partial<Task> = {}): Task {
+function makeTask(overrides: Partial<TaskListItem> = {}): TaskListItem {
   return {
     id: "t",
     projectId: "p",
@@ -20,42 +20,31 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     description: "",
     autoMode: true,
     isFix: false,
-    plannerMode: "fast",
-    planPath: ".ai-factory/PLAN.md",
-    planDocs: false,
-    planTests: false,
-    skipReview: false,
-    useSubagents: true,
-    autoQa: false,
-    qaChangeSummary: null,
-    qaTestPlan: null,
-    qaTestCases: null,
-    qaStatus: "idle",
     reworkRequested: false,
     reviewIterationCount: 0,
     maxReviewIterations: 3,
     manualReviewRequired: false,
-    autoReviewState: null,
     paused: false,
-    lastHeartbeatAt: null,
     lastSyncedAt: null,
-    sessionId: null,
     scheduledAt: null,
-    branchName: null,
-    worktreePath: null,
     roadmapAlias: null,
     tags: [],
     status: "backlog",
     priority: 0,
     position: 1000,
-    plan: null,
-    implementationLog: null,
-    reviewComments: null,
-    agentActivityLog: null,
     blockedReason: null,
     blockedFromStatus: null,
     retryAfter: null,
     retryCount: 0,
+    tokenInput: 0,
+    tokenOutput: 0,
+    tokenTotal: 0,
+    costUsd: 0,
+    runtimeProfileId: null,
+    modelOverride: null,
+    runtimeLimitSnapshot: null,
+    runtimeLimitUpdatedAt: null,
+    hasPlan: false,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

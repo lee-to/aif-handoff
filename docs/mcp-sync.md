@@ -61,20 +61,25 @@ When running in Docker, or in local development with `MCP_PORT` set to a valid i
 
 The HTTP mode also exposes a `/health` endpoint for Docker healthchecks.
 
+By default the HTTP transport runs in **single-session** mode: one shared server/transport for the whole process (the original behavior). Because that transport is stateful, only the first client can `initialize` — a second concurrent client (e.g. another Claude Code window) receives `-32600 "Server already initialized"`.
+
+Set `AIF_MCP_HTTP_MULTI_SESSION_ENABLED=true` to opt into **stateless multi-session** mode. Each request then gets its own short-lived server/transport with no shared session, so multiple clients (several Claude Code windows, or remote clients) can connect to the same `/mcp` endpoint concurrently and every `initialize` succeeds independently. The flag defaults to off so enabling concurrent clients is an intentional rollout rather than an unconditional transport change. The stateless path is `POST`-only: an optional `GET /mcp` SSE stream is answered with `405` (the SDK treats this as "server does not offer SSE"), because server→client events (task updates) are delivered out-of-band via the API broadcast endpoint, not through the MCP transport.
+
 When the web settings UI calls `POST /settings/mcp/install`, the API installs this HTTP URL form automatically whenever `MCP_PORT` is a valid integer port. If `MCP_PORT` is missing or invalid, it falls back to the local `stdio`/`npx tsx packages/mcp/src/index.ts` entry. Direct MCP HTTP startup (`packages/mcp`) is stricter: invalid `MCP_PORT` values fail fast during startup instead of silently coercing the port.
 
 ### Environment Variables
 
 The MCP server uses the shared monorepo environment (`packages/shared/src/env.ts`) for database and API configuration. MCP-specific variables:
 
-| Variable                     | Default | Description                                                |
-| ---------------------------- | ------- | ---------------------------------------------------------- |
-| `MCP_TRANSPORT`              | `stdio` | Transport mode: `stdio` or `http`                          |
-| `MCP_PORT`                   | `3100`  | HTTP port (`1-65535`, only used when `MCP_TRANSPORT=http`) |
-| `MCP_RATE_LIMIT_READ_RPM`    | `120`   | Read tool rate limit (requests/minute)                     |
-| `MCP_RATE_LIMIT_READ_BURST`  | `10`    | Read tool burst capacity                                   |
-| `MCP_RATE_LIMIT_WRITE_RPM`   | `30`    | Write tool rate limit (requests/minute)                    |
-| `MCP_RATE_LIMIT_WRITE_BURST` | `5`     | Write tool burst capacity                                  |
+| Variable                             | Default | Description                                                                                                                                          |
+| ------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP_TRANSPORT`                      | `stdio` | Transport mode: `stdio` or `http`                                                                                                                    |
+| `MCP_PORT`                           | `3100`  | HTTP port (`1-65535`, only used when `MCP_TRANSPORT=http`)                                                                                           |
+| `AIF_MCP_HTTP_MULTI_SESSION_ENABLED` | `false` | Opt into stateless multi-session HTTP transport so multiple clients connect concurrently (`1/true/yes/on` = on). Only used when `MCP_TRANSPORT=http` |
+| `MCP_RATE_LIMIT_READ_RPM`            | `120`   | Read tool rate limit (requests/minute)                                                                                                               |
+| `MCP_RATE_LIMIT_READ_BURST`          | `10`    | Read tool burst capacity                                                                                                                             |
+| `MCP_RATE_LIMIT_WRITE_RPM`           | `30`    | Write tool rate limit (requests/minute)                                                                                                              |
+| `MCP_RATE_LIMIT_WRITE_BURST`         | `5`     | Write tool burst capacity                                                                                                                            |
 
 Shared variables (from `@aif/shared`):
 

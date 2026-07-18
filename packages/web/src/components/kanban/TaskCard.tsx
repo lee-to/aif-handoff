@@ -1,6 +1,6 @@
 import type { CSSProperties, MouseEvent } from "react";
 import { ChevronUp, ChevronDown, Clock, Pause, Play } from "lucide-react";
-import { STATUS_CONFIG, type Task } from "@aif/shared/browser";
+import { STATUS_CONFIG, type TaskListItem } from "@aif/shared/browser";
 import { Badge } from "@/components/ui/badge";
 import { TaskTagsList } from "@/components/ui/task-tags-list";
 import { timeAgo } from "@/lib/utils";
@@ -17,7 +17,7 @@ const PRIORITY_LABELS: Record<number, { label: string; className: string }> = {
 };
 
 interface TaskCardProps {
-  task: Task;
+  task: TaskListItem;
   onClick: () => void;
   overlay?: boolean;
   density?: "comfortable" | "compact";

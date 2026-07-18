@@ -16,6 +16,8 @@ function makeTask(status: Task["status"]): Task {
     planTests: false,
     skipReview: false,
     useSubagents: true,
+    runPlanImprove: false,
+    runPostVerify: false,
     autoQa: false,
     qaChangeSummary: null,
     qaTestPlan: null,
@@ -66,6 +68,11 @@ describe("task state machine", () => {
   it("rejects start_ai from non-backlog statuses", () => {
     const result = applyHumanTaskEvent(makeTask("done"), "start_ai");
     expect(result.ok).toBe(false);
+  });
+
+  it("keeps improve and verify as coordinator-only statuses", () => {
+    expect(applyHumanTaskEvent(makeTask("improve"), "start_implementation").ok).toBe(false);
+    expect(applyHumanTaskEvent(makeTask("verify"), "approve_done").ok).toBe(false);
   });
 
   it("allows accept_existing_plan from backlog", () => {

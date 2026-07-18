@@ -16,6 +16,8 @@ function makeTask(overrides: Partial<Task>): Task {
     planTests: false,
     skipReview: false,
     useSubagents: true,
+    runPlanImprove: false,
+    runPostVerify: false,
     autoQa: false,
     qaChangeSummary: null,
     qaTestPlan: null,

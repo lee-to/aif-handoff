@@ -61,6 +61,9 @@ vi.mock("../services/runtime.js", () => ({
 const { tasksRouter } = await import("../routes/tasks.js");
 const { broadcast: mockBroadcast } = await import("../ws.js");
 
+const TEST_PROJECT_UUID = "00000000-0000-4000-8000-000000000001";
+const OTHER_PROJECT_UUID = "00000000-0000-4000-8000-000000000002";
+
 function createApp() {
   const app = new Hono();
   app.route("/tasks", tasksRouter);
@@ -103,67 +106,69 @@ describe("tasks API", () => {
   });
 
   describe("GET /tasks", () => {
-    it("should return empty list initially", async () => {
-      const res = await app.request("/tasks");
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body).toEqual([]);
-    });
-
-    it("should return all tasks", async () => {
+    it("should return mapped full Task[] across all projects when projectId is missing (legacy bare path)", async () => {
       const db = testDb.current;
-      db.insert(tasks).values({ id: "1", projectId: "test-project", title: "Task 1" }).run();
-      db.insert(tasks).values({ id: "2", projectId: "test-project", title: "Task 2" }).run();
-
-      const res = await app.request("/tasks");
-      const body = await res.json();
-      expect(body).toHaveLength(2);
-    });
-
-    it("resolves the app task default for every listed task", async () => {
-      const db = testDb.current;
-      insertTestProject(db);
-      db.update(appSettings).set({ defaultTaskRuntimeProfileId: "app-task-default" }).run();
-      db.insert(runtimeProfiles)
+      db.insert(tasks)
         .values({
-          id: "app-task-default",
-          projectId: null,
-          name: "App Task Default",
-          runtimeId: "claude",
-          providerId: "anthropic",
-          enabled: true,
+          id: "1",
+          projectId: TEST_PROJECT_UUID,
+          title: "Task 1",
+          tags: '["alpha","beta"]',
+          runtimeOptionsJson: '{"model":"x"}',
         })
         .run();
-      db.insert(tasks)
-        .values([
-          { id: "1", projectId: "test-project", title: "Task 1" },
-          { id: "2", projectId: "test-project", title: "Task 2" },
-        ])
-        .run();
+      db.insert(tasks).values({ id: "2", projectId: OTHER_PROJECT_UUID, title: "Task 2" }).run();
 
+      // Legacy bare path retained until dashboard consumers migrate to /overview.
       const res = await app.request("/tasks");
       expect(res.status).toBe(200);
       const body = await res.json();
-
       expect(body).toHaveLength(2);
-      expect(
-        body.map((task: { effectiveRuntime: Record<string, string> }) => task.effectiveRuntime),
-      ).toEqual([
-        {
-          source: "system_default",
-          profileId: "app-task-default",
-          runtimeId: "claude",
-          providerId: "anthropic",
-          profileName: "App Task Default",
-        },
-        {
-          source: "system_default",
-          profileId: "app-task-default",
-          runtimeId: "claude",
-          providerId: "anthropic",
-          profileName: "App Task Default",
-        },
-      ]);
+      // Full mapped Task[] shape (not raw TaskRow, not lightweight TaskListItem):
+      // tags parsed into an array, runtimeOptions parsed, raw JSON columns absent.
+      expect(body[0]).toHaveProperty("plan");
+      expect(body[0].tags).toEqual(["alpha", "beta"]);
+      expect(body[0]).toHaveProperty("runtimeOptions");
+      expect(body[0].runtimeOptions).toEqual({ model: "x" });
+      expect(body[0]).not.toHaveProperty("runtimeOptionsJson");
+      expect(body[0]).not.toHaveProperty("tagsJson");
+    });
+
+    it("should return lightweight tasks scoped to projectId", async () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "1",
+          projectId: TEST_PROJECT_UUID,
+          title: "Task 1",
+          description: "Board text",
+          plan: "## Plan",
+          implementationLog: "large implementation log",
+          reviewComments: "large review comments",
+          agentActivityLog: "large activity log",
+        })
+        .run();
+      db.insert(tasks).values({ id: "2", projectId: OTHER_PROJECT_UUID, title: "Task 2" }).run();
+
+      const res = await app.request(`/tasks?projectId=${TEST_PROJECT_UUID}`);
+      const body = await res.json();
+      expect(res.status).toBe(200);
+
+      expect(body).toHaveLength(1);
+      expect(body[0]).toMatchObject({
+        id: "1",
+        projectId: TEST_PROJECT_UUID,
+        title: "Task 1",
+        description: "Board text",
+        hasPlan: true,
+      });
+      expect(body[0]).not.toHaveProperty("plan");
+      expect(body[0]).not.toHaveProperty("implementationLog");
+      expect(body[0]).not.toHaveProperty("reviewComments");
+      expect(body[0]).not.toHaveProperty("agentActivityLog");
+      expect(body[0]).not.toHaveProperty("attachments");
+      expect(body[0]).not.toHaveProperty("runtimeOptions");
+      expect(body[0]).not.toHaveProperty("effectiveRuntime");
     });
 
     it("should return 400 for invalid projectId format", async () => {
@@ -285,7 +290,47 @@ describe("tasks API", () => {
       expect(body.priority).toBe(2);
       expect(body.autoMode).toBe(true);
       expect(body.isFix).toBe(false);
+      expect(body.runPlanImprove).toBe(false);
+      expect(body.runPostVerify).toBe(false);
       expect(body.status).toBe("backlog");
+    });
+
+    it("should persist improve and verify flags only for skills-mode tasks", async () => {
+      const skillsRes = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Skills workflow task",
+          projectId: "test-project",
+          useSubagents: false,
+          runPlanImprove: true,
+          runPostVerify: true,
+        }),
+      });
+
+      expect(skillsRes.status).toBe(201);
+      const skillsBody = await skillsRes.json();
+      expect(skillsBody.useSubagents).toBe(false);
+      expect(skillsBody.runPlanImprove).toBe(true);
+      expect(skillsBody.runPostVerify).toBe(true);
+
+      const subagentRes = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Subagent workflow task",
+          projectId: "test-project",
+          useSubagents: true,
+          runPlanImprove: true,
+          runPostVerify: true,
+        }),
+      });
+
+      expect(subagentRes.status).toBe(201);
+      const subagentBody = await subagentRes.json();
+      expect(subagentBody.useSubagents).toBe(true);
+      expect(subagentBody.runPlanImprove).toBe(false);
+      expect(subagentBody.runPostVerify).toBe(false);
     });
 
     it("lists ordinary created backlog tasks in append-to-tail order", async () => {
@@ -295,14 +340,14 @@ describe("tasks API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             title,
-            projectId: "test-project",
+            projectId: TEST_PROJECT_UUID,
           }),
         });
 
         expect(res.status).toBe(201);
       }
 
-      const res = await app.request("/tasks");
+      const res = await app.request(`/tasks?projectId=${TEST_PROJECT_UUID}`);
       expect(res.status).toBe(200);
       const body = await res.json();
 
@@ -638,12 +683,24 @@ describe("tasks API", () => {
   describe("GET /tasks/:id", () => {
     it("should return a task by id", async () => {
       const db = testDb.current;
-      db.insert(tasks).values({ id: "test-1", projectId: "test-project", title: "Find me" }).run();
+      db.insert(tasks)
+        .values({
+          id: "test-1",
+          projectId: "test-project",
+          title: "Find me",
+          plan: "## Full plan",
+          implementationLog: "implementation details",
+          reviewComments: "review details",
+        })
+        .run();
 
       const res = await app.request("/tasks/test-1");
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.title).toBe("Find me");
+      expect(body.plan).toBe("## Full plan");
+      expect(body.implementationLog).toBe("implementation details");
+      expect(body.reviewComments).toBe("review details");
     });
 
     it("should expose app-level effective runtime when project defaults are missing", async () => {

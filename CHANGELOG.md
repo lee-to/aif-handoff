@@ -10,11 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **Per-project parallel task execution** — coordinator processes multiple tasks concurrently for projects with "Parallel Execution" enabled; non-parallel projects unchanged (1 task at a time)
 - Lease-based task claiming with `lockedBy`/`lockedUntil` columns and atomic UPDATE pattern
-- Global concurrency cap (`COORDINATOR_MAX_CONCURRENT_TASKS`, default 3) across all stages and projects
+- Cross-project coordinator lanes with independent project and per-project task caps
+- Global concurrency safety cap (`COORDINATOR_MAX_CONCURRENT_TASKS`, default 12) across all project lanes
 - Heartbeat-based lock renewal — locks stay alive as long as the agent process is running
 - Stale claim recovery — expired TTL or dead heartbeat auto-releases orphaned locks
 - Graceful shutdown lock release on SIGINT/SIGTERM
-- Per-stage semaphore with global total-active limit
+- Per-project stage semaphore with a global total-active limit
 - API validation: parallel projects force `plannerMode=full`, reject `fast` with 400
 - UI: mode selector and plan path locked in parallel mode (AddTaskForm + TaskSettings)
 - Real-time agent activity broadcast via WebSocket

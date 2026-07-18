@@ -21,6 +21,7 @@ import {
 import { readAttachment } from "../services/attachmentStorage.js";
 import {
   findTaskById,
+  listTaskListItems,
   listTasks,
   createTask,
   updateTask,
@@ -169,29 +170,49 @@ tasksRouter.post(
   },
 );
 
-// GET /tasks?projectId=xxx — list by project, sorted by status order + position
+// GET /tasks — list tasks.
+//   • With projectId: lightweight TaskListItem[] (board/list rendering).
+//   • Without projectId: full Task[] for ALL projects (legacy dashboard path,
+//     retained until consumers migrate to GET /projects/overview — see cleanup PR).
+//     The bare path maps rows through toTaskRouteResponse (same as GET /tasks/:id)
+//     so the legacy response shape — parsed attachments/tags/runtimeOptions,
+//     effectiveRuntime, normalized runtimeLimitSnapshot — is preserved exactly.
+//     TODO(remove-bare-task-list): drop this branch once #141 lands.
 tasksRouter.get("/", (c) => {
   const projectId = c.req.query("projectId") || undefined;
-  if (projectId && !/^[0-9a-f-]{36}$/i.test(projectId)) {
+
+  // Legacy bare path: no projectId → return full Task[] across all projects.
+  // Kept alive for merge-safety until dashboard consumers migrate to /overview.
+  if (!projectId) {
+    const allTasks = listTasks();
+    const systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task");
+    const effectiveRuntimeByTaskId = resolveEffectiveRuntimeProfilesForTasks(allTasks, {
+      mode: "task",
+      systemDefaultRuntimeProfileId,
+    });
+    log.debug({ count: allTasks.length, scope: "all" }, "Listed tasks (bare, legacy)");
+    return c.json(
+      allTasks.map((task) =>
+        toTaskRouteResponse(
+          task,
+          systemDefaultRuntimeProfileId,
+          effectiveRuntimeByTaskId.get(task.id),
+        ),
+      ),
+    );
+  }
+
+  if (!/^[0-9a-f-]{36}$/i.test(projectId)) {
+    log.warn(
+      { route: "GET /tasks", projectId },
+      "Rejected task list request with invalid projectId",
+    );
     return c.json({ error: "Invalid projectId format" }, 400);
   }
 
-  const allTasks = listTasks(projectId);
-  const systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task");
-  const effectiveRuntimeByTaskId = resolveEffectiveRuntimeProfilesForTasks(allTasks, {
-    mode: "task",
-    systemDefaultRuntimeProfileId,
-  });
-  log.debug({ count: allTasks.length, projectId }, "Listed tasks");
-  return c.json(
-    allTasks.map((task) =>
-      toTaskRouteResponse(
-        task,
-        systemDefaultRuntimeProfileId,
-        effectiveRuntimeByTaskId.get(task.id),
-      ),
-    ),
-  );
+  const taskList = listTaskListItems(projectId);
+  log.debug({ count: taskList.length, projectId, responseType: "TaskListItem" }, "Listed tasks");
+  return c.json(taskList);
 });
 
 // POST /tasks — create
@@ -225,6 +246,8 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
   const resolvedSkipReview = body.skipReview ?? modeDefaults.skipReview;
   const resolvedPlanDocs = body.planDocs ?? modeDefaults.planDocs;
   const resolvedPlanTests = body.planTests ?? modeDefaults.planTests;
+  const resolvedRunPlanImprove = body.useSubagents ? false : body.runPlanImprove;
+  const resolvedRunPostVerify = body.useSubagents ? false : body.runPostVerify;
   if (
     body.skipReview === undefined ||
     body.planDocs === undefined ||
@@ -258,6 +281,8 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     planTests: resolvedPlanTests,
     skipReview: resolvedSkipReview,
     useSubagents: body.useSubagents,
+    runPlanImprove: resolvedRunPlanImprove,
+    runPostVerify: resolvedRunPostVerify,
     autoQa: body.autoQa,
     maxReviewIterations: body.maxReviewIterations,
     paused: body.paused,
@@ -451,6 +476,11 @@ tasksRouter.put("/:id", jsonValidator(updateTaskSchema), async (c) => {
   }
 
   const { plan, attachments: incomingAttachments, ...updatePayload } = body;
+  const effectiveUseSubagents = updatePayload.useSubagents ?? existing.useSubagents;
+  if (effectiveUseSubagents) {
+    updatePayload.runPlanImprove = false;
+    updatePayload.runPostVerify = false;
+  }
 
   // Mirror POST /tasks: when plannerMode changes, fill omitted flags from mode defaults.
   if (updatePayload.plannerMode !== undefined) {

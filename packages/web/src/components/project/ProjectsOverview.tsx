@@ -1,8 +1,6 @@
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import type { Project, Task, TaskStatus } from "@aif/shared/browser";
+import { useMemo, useState } from "react";
+import type { Project, ProjectTaskOverview, TaskStatus } from "@aif/shared/browser";
 import { STATUS_CONFIG } from "@aif/shared/browser";
-import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -11,7 +9,10 @@ import { ProgressBar } from "@/components/ui/progress-bar";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Metric } from "@/components/ui/metric";
-import { calculateTaskMetrics } from "@/lib/taskMetrics";
+import { Select } from "@/components/ui/select";
+import { useProjectTaskOverviews } from "@/hooks/useProjects";
+import { calculateProjectOverviewMetrics } from "@/lib/taskMetrics";
+import { PROJECT_SORT_OPTIONS, sortProjects, type ProjectSort } from "@/lib/projectSorting";
 
 const integerFmt = new Intl.NumberFormat("en-US");
 const usdFmt = new Intl.NumberFormat("en-US", {
@@ -36,44 +37,30 @@ interface ProjectsOverviewProps {
 const OVERVIEW_STATUSES: TaskStatus[] = [
   "backlog",
   "planning",
+  "improve",
   "plan_ready",
   "implementing",
+  "verify",
   "review",
   "done",
 ];
 
 const PREVIEW_LIMIT = 3;
 
-function tasksByProject(tasks: Task[]): Map<string, Task[]> {
-  const map = new Map<string, Task[]>();
-  for (const task of tasks) {
-    const list = map.get(task.projectId);
-    if (list) list.push(task);
-    else map.set(task.projectId, [task]);
-  }
-  return map;
-}
-
-function emptyByStatus(): Record<TaskStatus, Task[]> {
-  return Object.fromEntries(Object.keys(STATUS_CONFIG).map((s) => [s, [] as Task[]])) as Record<
-    TaskStatus,
-    Task[]
-  >;
-}
-
-function groupByStatus(tasks: Task[]): Record<TaskStatus, Task[]> {
-  const acc = emptyByStatus();
-  for (const task of tasks) acc[task.status]?.push(task);
-  return acc;
-}
-
 export function ProjectsOverview({ projects, onSelectProject }: ProjectsOverviewProps) {
-  const { data: allTasks, isLoading } = useQuery<Task[]>({
-    queryKey: ["tasks", "all"],
-    queryFn: () => api.listTasks(),
-  });
-
-  const tasksByProj = useMemo(() => tasksByProject(allTasks ?? []), [allTasks]);
+  const [projectSort, setProjectSort] = useState<ProjectSort>("name");
+  const { data: projectTaskOverviews, isLoading } = useProjectTaskOverviews(projects.length > 0);
+  const overviewByProjectId = useMemo(() => {
+    const map = new Map<string, ProjectTaskOverview>();
+    for (const overview of projectTaskOverviews ?? []) {
+      map.set(overview.projectId, overview);
+    }
+    return map;
+  }, [projectTaskOverviews]);
+  const sortedProjects = useMemo(
+    () => sortProjects(projects, projectSort, overviewByProjectId),
+    [overviewByProjectId, projectSort, projects],
+  );
 
   if (!projects.length) {
     return (
@@ -89,9 +76,18 @@ export function ProjectsOverview({ projects, onSelectProject }: ProjectsOverview
       <SectionHeader
         className="mb-4"
         action={
-          <Badge variant="outline" size="sm">
-            {projects.length} project{projects.length === 1 ? "" : "s"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Select
+              value={projectSort}
+              options={[...PROJECT_SORT_OPTIONS]}
+              onChange={(event) => setProjectSort(event.target.value as ProjectSort)}
+              selectSize="sm"
+              className="w-36"
+            />
+            <Badge variant="outline" size="sm">
+              {projects.length} project{projects.length === 1 ? "" : "s"}
+            </Badge>
+          </div>
         }
       >
         Projects overview
@@ -99,16 +95,15 @@ export function ProjectsOverview({ projects, onSelectProject }: ProjectsOverview
 
       {isLoading ? (
         <div className="grid grid-cols-1 gap-4">
-          {projects.map((p) => (
+          {sortedProjects.map((p) => (
             <Skeleton key={p.id} className="h-44 w-full" />
           ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
-          {projects.map((project) => {
-            const projectTasks = tasksByProj.get(project.id) ?? [];
-            const byStatus = groupByStatus(projectTasks);
-            const metrics = calculateTaskMetrics(projectTasks);
+          {sortedProjects.map((project) => {
+            const overview = overviewByProjectId.get(project.id);
+            const metrics = calculateProjectOverviewMetrics(overview);
             const progress = Math.round(metrics.completionRate);
             const isComplete =
               metrics.totalTasks > 0 && metrics.completedTasks === metrics.totalTasks;
@@ -198,7 +193,8 @@ export function ProjectsOverview({ projects, onSelectProject }: ProjectsOverview
 
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                   {OVERVIEW_STATUSES.map((status) => {
-                    const items = byStatus[status] ?? [];
+                    const count = overview?.statusCounts[status] ?? 0;
+                    const items = overview?.statusPreviews[status] ?? [];
                     const config = STATUS_CONFIG[status];
                     return (
                       <Card key={status} variant="muted" className="p-2">
@@ -210,7 +206,7 @@ export function ProjectsOverview({ projects, onSelectProject }: ProjectsOverview
                             </span>
                           </div>
                           <Badge variant="secondary" size="xs">
-                            {items.length}
+                            {count}
                           </Badge>
                         </div>
                         {items.length === 0 ? (
@@ -226,9 +222,9 @@ export function ProjectsOverview({ projects, onSelectProject }: ProjectsOverview
                                 {task.title}
                               </li>
                             ))}
-                            {items.length > PREVIEW_LIMIT && (
+                            {count > PREVIEW_LIMIT && (
                               <li className="text-2xs text-muted-foreground/60">
-                                +{items.length - PREVIEW_LIMIT} more
+                                +{count - PREVIEW_LIMIT} more
                               </li>
                             )}
                           </ul>

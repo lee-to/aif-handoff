@@ -106,7 +106,7 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
         </button>
 
         {open && (
-          <div className="absolute z-50 mt-1 w-full border border-border bg-popover py-1 shadow-md">
+          <div className="absolute z-50 mt-1 w-full border border-border bg-popover py-1">
             {searchable && (
               <div className="px-2 pb-1">
                 <input

@@ -20,6 +20,7 @@ import {
 import {
   AUTO_REVIEW_FINDING_SOURCES,
   AUTO_REVIEW_STRATEGIES,
+  TASK_STATUSES,
   buildRuntimeLimitSignature,
   appSettings,
   generatePlanPath,
@@ -58,7 +59,10 @@ import {
   type UpdateRuntimeProfileInput,
   type RuntimeWarmupSessionStatus,
   type Task,
+  type TaskListItem,
   type TaskStatus,
+  type ProjectTaskOverview,
+  type UpdateProjectOrganizationInput,
   resolveRuntimeLimitFutureHint,
   sanitizeRuntimeLimitSnapshotForExposure,
   selectViolatedWindowForExactThreshold,
@@ -94,7 +98,22 @@ export type HydratedTaskRow = TaskRow & {
   runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
 };
 
-export type CoordinatorStage = "planner" | "plan-checker" | "implementer" | "reviewer";
+export type CoordinatorStage =
+  | "planner"
+  | "improver"
+  | "plan-checker"
+  | "implementer"
+  | "reviewer"
+  | "verifier";
+
+export interface CoordinatorTaskClaimInput {
+  taskId: string;
+  expectedProjectId: string;
+  expectedStatus: TaskStatus;
+  expectedAutoMode?: boolean;
+  coordinatorId: string;
+  lockDurationMs: number;
+}
 
 export interface RuntimeWarmupScopeInput {
   projectId: string;
@@ -132,6 +151,8 @@ export type TaskFieldsUpdate = {
   planTests?: boolean;
   skipReview?: boolean;
   useSubagents?: boolean;
+  runPlanImprove?: boolean;
+  runPostVerify?: boolean;
   autoQa?: boolean;
   qaChangeSummary?: string | null;
   qaTestPlan?: string | null;
@@ -635,6 +656,92 @@ export function listTasks(projectId?: string): TaskRow[] {
   return db.select().from(tasks).orderBy(asc(tasks.status), asc(tasks.position)).all();
 }
 
+type TaskListItemRow = Pick<TaskRow,
+  | "id" | "projectId" | "title" | "description" | "status" | "priority" | "position"
+  | "autoMode" | "isFix" | "paused" | "roadmapAlias" | "tags"
+  | "runtimeProfileId" | "modelOverride"
+  | "blockedReason" | "blockedFromStatus" | "retryAfter" | "retryCount"
+  | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations" | "manualReviewRequired"
+  | "runtimeLimitSnapshotJson" | "runtimeLimitUpdatedAt"
+  | "tokenInput" | "tokenOutput" | "tokenTotal" | "costUsd"
+  | "lastSyncedAt" | "scheduledAt" | "createdAt" | "updatedAt"
+> & { hasPlan: boolean | number };
+
+const TASK_LIST_COLUMNS = {
+  id: tasks.id,
+  projectId: tasks.projectId,
+  title: tasks.title,
+  description: tasks.description,
+  status: tasks.status,
+  priority: tasks.priority,
+  position: tasks.position,
+  autoMode: tasks.autoMode,
+  isFix: tasks.isFix,
+  paused: tasks.paused,
+  roadmapAlias: tasks.roadmapAlias,
+  tags: tasks.tags,
+  runtimeProfileId: tasks.runtimeProfileId,
+  modelOverride: tasks.modelOverride,
+  blockedReason: tasks.blockedReason,
+  blockedFromStatus: tasks.blockedFromStatus,
+  retryAfter: tasks.retryAfter,
+  retryCount: tasks.retryCount,
+  reworkRequested: tasks.reworkRequested,
+  reviewIterationCount: tasks.reviewIterationCount,
+  maxReviewIterations: tasks.maxReviewIterations,
+  manualReviewRequired: tasks.manualReviewRequired,
+  runtimeLimitSnapshotJson: tasks.runtimeLimitSnapshotJson,
+  runtimeLimitUpdatedAt: tasks.runtimeLimitUpdatedAt,
+  tokenInput: tasks.tokenInput,
+  tokenOutput: tasks.tokenOutput,
+  tokenTotal: tasks.tokenTotal,
+  costUsd: tasks.costUsd,
+  lastSyncedAt: tasks.lastSyncedAt,
+  scheduledAt: tasks.scheduledAt,
+  createdAt: tasks.createdAt,
+  updatedAt: tasks.updatedAt,
+  hasPlan: sql<number>`case when length(trim(coalesce(${tasks.plan}, ''))) > 0 then 1 else 0 end`,
+} as const;
+
+function toBooleanFlag(value: boolean | number): boolean {
+  return value === true || value === 1;
+}
+
+const TASK_STATUS_ORDER = new Map<TaskStatus, number>(
+  TASK_STATUSES.map((status, index) => [status, index]),
+);
+
+function compareTaskListRows(a: TaskListItemRow, b: TaskListItemRow): number {
+  const statusOrder =
+    (TASK_STATUS_ORDER.get(a.status) ?? TASK_STATUSES.length) -
+    (TASK_STATUS_ORDER.get(b.status) ?? TASK_STATUSES.length);
+  if (statusOrder !== 0) return statusOrder;
+  return a.position - b.position;
+}
+
+export function toTaskListItem(row: TaskListItemRow): TaskListItem {
+  const { tags, runtimeLimitSnapshotJson, hasPlan, ...rest } = row;
+  return {
+    ...rest,
+    tags: parseTags(tags),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(runtimeLimitSnapshotJson, row.id),
+    hasPlan: toBooleanFlag(hasPlan),
+  };
+}
+
+export function listTaskListItems(projectId: string): TaskListItem[] {
+  const rows = getDb()
+    .select(TASK_LIST_COLUMNS)
+    .from(tasks)
+    .where(eq(tasks.projectId, projectId))
+    .orderBy(asc(tasks.position))
+    .all();
+
+  rows.sort(compareTaskListRows);
+  log.debug({ projectId, count: rows.length, projection: "task-list" }, "Listed task list items");
+  return rows.map(toTaskListItem);
+}
+
 export function getMinBacklogPosition(projectId: string): number | null {
   const row = getDb()
     .select({ minPos: min(tasks.position) })
@@ -803,6 +910,8 @@ export function createTask(input: {
   planTests?: boolean;
   skipReview?: boolean;
   useSubagents?: boolean;
+  runPlanImprove?: boolean;
+  runPostVerify?: boolean;
   autoQa?: boolean;
   maxReviewIterations?: number;
   paused?: boolean;
@@ -851,6 +960,8 @@ export function createTask(input: {
       planTests: input.planTests,
       skipReview: input.skipReview,
       useSubagents: input.useSubagents,
+      runPlanImprove: input.runPlanImprove,
+      runPostVerify: input.runPostVerify,
       autoQa: input.autoQa,
       maxReviewIterations: input.maxReviewIterations,
       paused: input.paused,
@@ -1206,7 +1317,171 @@ export function getAppDefaultRuntimeProfileId(
 }
 
 export function listProjects(): ProjectRow[] {
-  return getDb().select().from(projects).all();
+  return getDb()
+    .select()
+    .from(projects)
+    .orderBy(
+      sql`case when ${projects.pinnedAt} is null then 1 else 0 end`,
+      asc(projects.pinnedAt),
+      sql`${projects.name} collate nocase`,
+      asc(projects.id),
+    )
+    .all();
+}
+
+function emptyStatusCounts(): Record<TaskStatus, number> {
+  const counts = {} as Record<TaskStatus, number>;
+  for (const status of TASK_STATUSES) {
+    counts[status] = 0;
+  }
+  return counts;
+}
+
+function emptyStatusPreviews(): ProjectTaskOverview["statusPreviews"] {
+  const previews = {} as ProjectTaskOverview["statusPreviews"];
+  for (const status of TASK_STATUSES) {
+    previews[status] = [];
+  }
+  return previews;
+}
+
+function emptyProjectTaskOverview(projectId: string): ProjectTaskOverview {
+  return {
+    projectId,
+    lastActivityAt: null,
+    totalTasks: 0,
+    completedTasks: 0,
+    verifiedTasks: 0,
+    backlogTasks: 0,
+    activeTasks: 0,
+    blockedTasks: 0,
+    autoModeTasks: 0,
+    fixTasks: 0,
+    totalRetries: 0,
+    totalTokenInput: 0,
+    totalTokenOutput: 0,
+    totalTokenTotal: 0,
+    totalCostUsd: 0,
+    statusCounts: emptyStatusCounts(),
+    statusPreviews: emptyStatusPreviews(),
+  };
+}
+
+function toFiniteNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+type ProjectTaskPreviewQueryRow = {
+  id: string;
+  projectId: string;
+  title: string;
+  status: TaskStatus;
+};
+
+export function listProjectTaskOverviews(previewLimit = 3): ProjectTaskOverview[] {
+  const db = getDb();
+  const normalizedPreviewLimit = Number.isFinite(previewLimit)
+    ? Math.max(0, Math.trunc(previewLimit))
+    : 0;
+  const projectRows = listProjects();
+  const overviewByProjectId = new Map(
+    projectRows.map((project) => [project.id, emptyProjectTaskOverview(project.id)]),
+  );
+
+  const aggregateRows = db
+    .select({
+      projectId: tasks.projectId,
+      status: tasks.status,
+      taskCount: count(),
+      autoModeTasks: sql<number>`coalesce(sum(case when ${tasks.autoMode} = 1 then 1 else 0 end), 0)`,
+      fixTasks: sql<number>`coalesce(sum(case when ${tasks.isFix} = 1 then 1 else 0 end), 0)`,
+      totalRetries: sql<number>`coalesce(sum(${tasks.retryCount}), 0)`,
+      totalTokenInput: sql<number>`coalesce(sum(${tasks.tokenInput}), 0)`,
+      totalTokenOutput: sql<number>`coalesce(sum(${tasks.tokenOutput}), 0)`,
+      totalTokenTotal: sql<number>`coalesce(sum(${tasks.tokenTotal}), 0)`,
+      totalCostUsd: sql<number>`coalesce(sum(${tasks.costUsd}), 0)`,
+      lastActivityAt: max(tasks.updatedAt),
+    })
+    .from(tasks)
+    .groupBy(tasks.projectId, tasks.status)
+    .all();
+
+  for (const row of aggregateRows) {
+    const overview = overviewByProjectId.get(row.projectId);
+    if (!overview) continue;
+
+    const taskCount = toFiniteNumber(row.taskCount);
+    const status = row.status;
+    overview.totalTasks += taskCount;
+    overview.statusCounts[status] = taskCount;
+    overview.autoModeTasks += toFiniteNumber(row.autoModeTasks);
+    overview.fixTasks += toFiniteNumber(row.fixTasks);
+    overview.totalRetries += toFiniteNumber(row.totalRetries);
+    overview.totalTokenInput += toFiniteNumber(row.totalTokenInput);
+    overview.totalTokenOutput += toFiniteNumber(row.totalTokenOutput);
+    overview.totalTokenTotal += toFiniteNumber(row.totalTokenTotal);
+    overview.totalCostUsd += toFiniteNumber(row.totalCostUsd);
+    if (
+      row.lastActivityAt &&
+      (!overview.lastActivityAt || row.lastActivityAt > overview.lastActivityAt)
+    ) {
+      overview.lastActivityAt = row.lastActivityAt;
+    }
+
+    if (status === "done" || status === "verified") {
+      overview.completedTasks += taskCount;
+    }
+    if (status === "verified") {
+      overview.verifiedTasks += taskCount;
+    }
+    if (status === "backlog") {
+      overview.backlogTasks += taskCount;
+    }
+    if (status === "blocked_external") {
+      overview.blockedTasks += taskCount;
+    }
+    if (status !== "backlog" && status !== "done" && status !== "verified") {
+      overview.activeTasks += taskCount;
+    }
+  }
+
+  if (normalizedPreviewLimit > 0) {
+    const previewRows = db.all<ProjectTaskPreviewQueryRow>(sql`
+      select
+        id,
+        project_id as "projectId",
+        title,
+        status
+      from (
+        select
+          ${tasks.id} as id,
+          ${tasks.projectId} as project_id,
+          ${tasks.title} as title,
+          ${tasks.status} as status,
+          row_number() over (
+            partition by ${tasks.projectId}, ${tasks.status}
+            order by ${tasks.position} asc, ${tasks.id} asc
+          ) as preview_rank
+        from ${tasks}
+      )
+      where preview_rank <= ${normalizedPreviewLimit}
+      order by project_id asc, status asc, preview_rank asc
+    `);
+
+    for (const row of previewRows) {
+      const overview = overviewByProjectId.get(row.projectId);
+      if (!overview) continue;
+
+      const previews = overview.statusPreviews[row.status];
+      previews.push({ id: row.id, title: row.title });
+    }
+  }
+
+  log.debug(
+    { projectCount: projectRows.length, projection: "project-task-overview" },
+    "Listed project task overviews",
+  );
+  return projectRows.map((project) => overviewByProjectId.get(project.id)!);
 }
 
 export function findProjectById(id: string): ProjectRow | undefined {
@@ -1317,6 +1592,38 @@ export function updateProject(
   return findProjectById(id);
 }
 
+export function updateProjectOrganization(
+  id: string,
+  input: UpdateProjectOrganizationInput,
+): ProjectRow | undefined {
+  const existing = findProjectById(id);
+  if (!existing) return undefined;
+
+  const patch: Partial<ProjectRow> = { updatedAt: new Date().toISOString() };
+  if (input.pinned !== undefined) {
+    patch.pinnedAt = input.pinned ? (existing.pinnedAt ?? new Date().toISOString()) : null;
+  }
+  if (input.groupName !== undefined) {
+    patch.groupName = input.groupName?.trim() || null;
+  }
+
+  log.debug(
+    {
+      projectId: id,
+      pinned: patch.pinnedAt != null,
+      groupName: patch.groupName,
+    },
+    "[FIX:147] Updating project organization",
+  );
+  getDb().update(projects).set(patch).where(eq(projects.id, id)).run();
+  const updated = findProjectById(id);
+  log.debug(
+    { projectId: id, updated: updated != null },
+    "[FIX:147] Project organization updated",
+  );
+  return updated;
+}
+
 export function deleteProject(id: string): void {
   getDb().delete(projects).where(eq(projects.id, id)).run();
 }
@@ -1350,35 +1657,83 @@ export function findCoordinatorTaskCandidate(stage: CoordinatorStage): TaskRow |
   return findCoordinatorTaskCandidates(stage, 1)[0];
 }
 
-export function findCoordinatorTaskCandidates(stage: CoordinatorStage, limit: number): TaskRow[] {
-  const stageFilter =
-    stage === "implementer"
-      ? or(
-          eq(tasks.status, "implementing"),
-          and(eq(tasks.status, "plan_ready"), eq(tasks.autoMode, true)),
-        )
+function coordinatorStageFilter(stage: CoordinatorStage) {
+  return stage === "implementer"
+    ? or(
+        eq(tasks.status, "implementing"),
+        and(eq(tasks.status, "plan_ready"), eq(tasks.autoMode, true)),
+      )
+    : stage === "improver"
+      ? inArray(tasks.status, ["improve"])
       : stage === "plan-checker"
         ? and(eq(tasks.status, "plan_ready"), eq(tasks.autoMode, true))
         : stage === "planner"
           ? inArray(tasks.status, ["planning"])
-          : inArray(tasks.status, ["review"]);
+          : stage === "verifier"
+            ? inArray(tasks.status, ["verify"])
+            : inArray(tasks.status, ["review"]);
+}
 
+function coordinatorAnyStageFilter() {
+  return or(
+    inArray(tasks.status, ["planning", "improve", "implementing", "verify", "review"]),
+    and(eq(tasks.status, "plan_ready"), eq(tasks.autoMode, true)),
+  );
+}
+
+function unlockedCoordinatorTaskFilter(nowIso: string) {
+  return and(
+    eq(tasks.paused, false),
+    or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
+  );
+}
+
+export function findCoordinatorTaskCandidates(stage: CoordinatorStage, limit: number): TaskRow[] {
   const nowIso = new Date().toISOString();
 
   return getDb()
     .select()
     .from(tasks)
-    .where(and(
-      stageFilter,
-      eq(tasks.paused, false),
-      or(
-        sql`${tasks.lockedBy} IS NULL`,
-        lte(tasks.lockedUntil, nowIso),
-      ),
-    ))
+    .where(and(coordinatorStageFilter(stage), unlockedCoordinatorTaskFilter(nowIso)))
     .orderBy(asc(tasks.position), asc(tasks.createdAt))
     .limit(limit)
     .all();
+}
+
+export function findCoordinatorTaskCandidatesForProject(
+  projectId: string,
+  stage: CoordinatorStage,
+  limit: number,
+): TaskRow[] {
+  const nowIso = new Date().toISOString();
+
+  return getDb()
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.projectId, projectId),
+        coordinatorStageFilter(stage),
+        unlockedCoordinatorTaskFilter(nowIso),
+      ),
+    )
+    .orderBy(asc(tasks.position), asc(tasks.createdAt))
+    .limit(limit)
+    .all();
+}
+
+export function listCoordinatorActionableProjectIds(limit: number): string[] {
+  const nowIso = new Date().toISOString();
+
+  return getDb()
+    .select({ projectId: tasks.projectId })
+    .from(tasks)
+    .where(and(coordinatorAnyStageFilter(), unlockedCoordinatorTaskFilter(nowIso)))
+    .groupBy(tasks.projectId)
+    .orderBy(min(tasks.createdAt), asc(tasks.projectId))
+    .limit(limit)
+    .all()
+    .map((row) => row.projectId);
 }
 
 /** Atomically claim a task for processing. Returns true if claim succeeded. */
@@ -1399,6 +1754,34 @@ export function claimTask(taskId: string, coordinatorId: string, lockDurationMs:
     .run();
 
   return result.changes > 0;
+}
+
+/**
+ * Atomically claim a coordinator candidate only while its actionable snapshot
+ * still matches. Returns the fresh row captured by the successful UPDATE.
+ */
+export function claimCoordinatorTaskIfEligible(
+  input: CoordinatorTaskClaimInput,
+): TaskRow | undefined {
+  const nowIso = new Date().toISOString();
+  const lockedUntil = new Date(Date.now() + input.lockDurationMs).toISOString();
+  const conditions = [
+    eq(tasks.id, input.taskId),
+    eq(tasks.projectId, input.expectedProjectId),
+    eq(tasks.status, input.expectedStatus),
+    eq(tasks.paused, false),
+    or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
+  ];
+  if (input.expectedAutoMode != null) {
+    conditions.push(eq(tasks.autoMode, input.expectedAutoMode));
+  }
+
+  return getDb()
+    .update(tasks)
+    .set({ lockedBy: input.coordinatorId, lockedUntil })
+    .where(and(...conditions))
+    .returning()
+    .get();
 }
 
 /**
@@ -1500,7 +1883,15 @@ export function countActivePipelineTasksForProject(projectId: string): number {
     .where(
       and(
         eq(tasks.projectId, projectId),
-        inArray(tasks.status, ["planning", "plan_ready", "implementing", "review", "blocked_external"]),
+        inArray(tasks.status, [
+          "planning",
+          "improve",
+          "plan_ready",
+          "implementing",
+          "review",
+          "verify",
+          "blocked_external",
+        ]),
       ),
     )
     .get();
@@ -1529,9 +1920,11 @@ export function hasActiveBranchBoundTasksForProject(projectId: string): boolean 
         inArray(tasks.status, [
           "backlog",
           "planning",
+          "improve",
           "plan_ready",
           "implementing",
           "review",
+          "verify",
           "blocked_external",
         ]),
       ),
@@ -1565,11 +1958,15 @@ export function renewTaskClaim(taskId: string, coordinatorId: string, lockDurati
 }
 
 /** Release a task claim after processing completes. */
-export function releaseTaskClaim(taskId: string): void {
+export function releaseTaskClaim(taskId: string, coordinatorId?: string): void {
+  const conditions = [eq(tasks.id, taskId)];
+  if (coordinatorId != null) {
+    conditions.push(eq(tasks.lockedBy, coordinatorId));
+  }
   getDb()
     .update(tasks)
     .set({ lockedBy: null, lockedUntil: null })
-    .where(eq(tasks.id, taskId))
+    .where(and(...conditions))
     .run();
 }
 
@@ -1589,7 +1986,7 @@ export function releaseStaleTaskClaims(): number {
         lte(tasks.lockedUntil, nowIso),
         // Process died: heartbeat stale, task still in-progress, and not freshly claimed
         and(
-          inArray(tasks.status, ["planning", "implementing", "review"]),
+          inArray(tasks.status, ["planning", "improve", "implementing", "review", "verify"]),
           // Ensure task was claimed at least 5 min ago (avoid race with fresh claims)
           lte(tasks.updatedAt, heartbeatDeadline),
           or(
@@ -1719,7 +2116,7 @@ export function listStaleInProgressTasks(): TaskRow[] {
     .from(tasks)
     .where(
       and(
-        inArray(tasks.status, ["planning", "implementing", "review"]),
+        inArray(tasks.status, ["planning", "improve", "implementing", "review", "verify"]),
         eq(tasks.paused, false),
         // Skip tasks with active (non-expired) locks — they're being processed
         or(

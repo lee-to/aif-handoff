@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved subagent workflows (Claude adapter first).
+Autonomous task management system with Kanban board and AI subagents. Tasks flow through stages automatically (Backlog → Planning → Plan Ready → Implementing → Review → Done), each handled by runtime-resolved workflows (Claude adapter first). Skills-mode tasks (`useSubagents=false`) can optionally insert Improve after Planning and Verify before Review.
 
 ## Tech Stack
 

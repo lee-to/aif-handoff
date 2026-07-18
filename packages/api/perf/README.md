@@ -32,8 +32,10 @@ Summaries land in `packages/api/perf/reports/<script>.summary.json`;
   p95 < 8s, p99 < 12s. Aimed at the server-side Codex session scan.
 - `chat-sessions.js` — 10 VU constant load on
   `/chat/sessions?projectId=<first>`. Thresholds: p95 < 3s, p99 < 6s.
-- `tasks.js` — 20 VU constant load on `/tasks`. Thresholds: p95 < 500ms,
-  p99 < 1s — this endpoint must not touch the filesystem.
+- `tasks.js` — 20 VU constant load on `/tasks?projectId=<first>` (scoped). Thresholds:
+  p95 < 1200ms, p99 < 2000ms. Payload is ~100KB per task list; serialization +
+  SQLite joins dominate under 20 VUs. This endpoint must not touch the filesystem.
+  `setup()` fails fast if no project is present in the dev DB.
 
 ## Adding a script
 

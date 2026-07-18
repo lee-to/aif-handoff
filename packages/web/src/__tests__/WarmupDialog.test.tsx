@@ -26,6 +26,8 @@ const project: Project = {
   planCheckerMaxBudgetUsd: null,
   implementerMaxBudgetUsd: null,
   reviewSidecarMaxBudgetUsd: null,
+  pinnedAt: null,
+  groupName: null,
   parallelEnabled: false,
   autoQueueMode: true,
   createdAt: "2026-01-01T00:00:00.000Z",

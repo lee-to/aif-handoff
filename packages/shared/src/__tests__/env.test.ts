@@ -61,6 +61,9 @@ describe("env validation", () => {
     expect(result.ACTIVITY_LOG_BATCH_MAX_AGE_MS).toBe(5000);
     expect(result.ACTIVITY_LOG_QUEUE_LIMIT).toBe(500);
     expect(result.AGENT_WAKE_ENABLED).toBe(true);
+    expect(result.COORDINATOR_MAX_CONCURRENT_TASKS).toBe(12);
+    expect(result.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT).toBe(3);
+    expect(result.COORDINATOR_MAX_CONCURRENT_PROJECTS).toBe(4);
     expect(result.AGENT_CHAT_MAX_TURNS).toBe(50);
     expect(result.AGENT_MAX_REVIEW_ITERATIONS).toBe(3);
     expect(result.AGENT_USE_SUBAGENTS).toBe(false);

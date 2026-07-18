@@ -17,6 +17,26 @@ export interface McpEnv {
   rateLimitReadBurst: number;
   /** Rate limit: burst size for write tools */
   rateLimitWriteBurst: number;
+  /**
+   * Opt-in flag for the stateless multi-session HTTP transport. Defaults to
+   * `false` (legacy single-session behavior). Set
+   * `AIF_MCP_HTTP_MULTI_SESSION_ENABLED` to 1/true/yes/on to let multiple
+   * clients (e.g. several Claude Code windows) connect concurrently to the same
+   * `/mcp` endpoint. Only relevant when `transport` is `http`.
+   */
+  httpMultiSession: boolean;
+}
+
+const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+
+/**
+ * Parse an opt-in boolean env flag. Defaults to `false` unless the value is one
+ * of 1/true/yes/on (case-insensitive) — matches `@aif/shared` env boolean
+ * semantics so operators get consistent behavior across packages.
+ */
+function parseBooleanFlag(value: string | undefined): boolean {
+  if (!value) return false;
+  return BOOLEAN_TRUE_VALUES.has(value.trim().toLowerCase());
 }
 
 function resolveMcpPort(value: string | undefined, transport: McpEnv["transport"]): number {
@@ -65,12 +85,14 @@ export function loadMcpEnv(): McpEnv {
     rateLimitWriteRpm: parseInt(process.env.MCP_RATE_LIMIT_WRITE_RPM || "30", 10),
     rateLimitReadBurst: parseInt(process.env.MCP_RATE_LIMIT_READ_BURST || "10", 10),
     rateLimitWriteBurst: parseInt(process.env.MCP_RATE_LIMIT_WRITE_BURST || "5", 10),
+    httpMultiSession: parseBooleanFlag(process.env.AIF_MCP_HTTP_MULTI_SESSION_ENABLED),
   };
 
   log.info(
     {
       transport: env.transport,
       httpPort: env.httpPort,
+      httpMultiSession: env.httpMultiSession,
     },
     "MCP environment loaded",
   );

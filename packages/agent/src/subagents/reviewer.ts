@@ -12,6 +12,25 @@ import {
 
 const log = logger("reviewer");
 
+function extractVerificationSection(reviewComments: string | null): string | null {
+  const normalizedComments = reviewComments?.trim();
+  if (!normalizedComments) return null;
+
+  const match = /^## Verification\b.*$/m.exec(normalizedComments);
+  if (!match || match.index === undefined) return null;
+
+  return normalizedComments.slice(match.index).trim();
+}
+
+function preserveVerificationSection(reviewComments: string | null, nextReviewComments: string) {
+  const verificationSection = extractVerificationSection(reviewComments);
+  if (!verificationSection) {
+    return nextReviewComments;
+  }
+
+  return `${nextReviewComments.trim()}\n\n${verificationSection}`;
+}
+
 async function runSidecar(
   prompt: string,
   taskId: string,
@@ -276,7 +295,7 @@ ${reviewOutputContract}`;
     }
 
     setTaskFields(taskId, {
-      reviewComments: combinedReview,
+      reviewComments: preserveVerificationSection(task.reviewComments, combinedReview),
       updatedAt: new Date().toISOString(),
     });
 

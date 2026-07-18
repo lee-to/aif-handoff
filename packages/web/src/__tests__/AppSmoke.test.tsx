@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 // Stub network-dependent hooks so the component tree renders without real API calls.
@@ -57,8 +57,21 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
 });
 
 const App = (await import("../App")).default;
+const { useProjectTaskOverviews } = await import("@/hooks/useProjects");
+const { useTasks } = await import("@/hooks/useTasks");
 
 describe("App smoke test", () => {
+  beforeEach(() => {
+    window.history.pushState(null, "", "/");
+    window.localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    window.history.pushState(null, "", "/");
+    window.localStorage.clear();
+  });
+
   it("renders without crashing (providers are wired correctly)", () => {
     expect(() => render(<App />)).not.toThrow();
   });
@@ -66,5 +79,15 @@ describe("App smoke test", () => {
   it("shows the empty-state message when no project is selected", () => {
     render(<App />);
     expect(screen.getByText("No projects yet")).toBeInTheDocument();
+  });
+
+  it("uses the project id from the URL for the initial task query", () => {
+    const projectId = "00000000-0000-4000-8000-000000000001";
+    window.history.pushState(null, "", `/project/${projectId}`);
+
+    render(<App />);
+
+    expect(vi.mocked(useTasks)).toHaveBeenCalledWith(projectId);
+    expect(vi.mocked(useProjectTaskOverviews)).toHaveBeenCalledWith(false);
   });
 });

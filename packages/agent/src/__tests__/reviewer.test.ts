@@ -135,4 +135,44 @@ describe("runReviewer", () => {
       }),
     );
   });
+
+  it("preserves verification output when review comments are rewritten", async () => {
+    testDb.current
+      .insert(tasks)
+      .values({
+        id: "task-verify-preserve",
+        projectId: "project-1",
+        title: "Task",
+        description: "Desc",
+        status: "review",
+        useSubagents: false,
+        implementationLog: "Implemented",
+        reviewComments:
+          '## Verification\n\nVerification passed with advisory\n\n```aif-gate-result\n{"status":"warn","blocking":false}\n```',
+      })
+      .run();
+
+    executeSubagentQueryMock
+      .mockResolvedValueOnce({
+        resultText:
+          "## Blocking Findings\n- none\n\n## Advisories\n- verify advisory should remain visible\n\n## Previous Findings\n- none",
+      })
+      .mockResolvedValueOnce({
+        resultText:
+          "## Blocking Findings\n- none\n\n## Advisories\n- none\n\n## Previous Findings\n- none",
+      });
+
+    await runReviewer("task-verify-preserve", "/tmp/reviewer-test");
+
+    const updatedTask = testDb.current
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, "task-verify-preserve"))
+      .get();
+
+    expect(updatedTask?.reviewComments).toContain("## Auto Review Metadata");
+    expect(updatedTask?.reviewComments).toContain("## Verification");
+    expect(updatedTask?.reviewComments).toContain("Verification passed with advisory");
+    expect(updatedTask?.reviewComments).toContain('"status":"warn"');
+  });
 });

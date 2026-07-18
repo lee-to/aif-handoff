@@ -1,22 +1,53 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 
 const READY_URL = process.env.AIF_WEB_URL ?? "http://localhost:5180";
 const READY_TIMEOUT_MS = 120_000;
 const READY_POLL_MS = 500;
+const WEB_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
-function commandName(name) {
-  return process.platform === "win32" ? `${name}.cmd` : name;
+function quoteWindowsArg(value) {
+  if (/^[\w./:=@-]+$/.test(value)) return value;
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function commandSpec(command, args) {
+  if (process.platform !== "win32") {
+    return { command, args };
+  }
+
+  return {
+    command: "cmd.exe",
+    args: ["/d", "/s", "/c", [command, ...args].map(quoteWindowsArg).join(" ")],
+  };
+}
+
+function isValidEnvKey(key) {
+  return key.length > 0 && !key.includes("=") && !key.includes("\0");
+}
+
+function buildSpawnEnv(extraEnv = {}) {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!isValidEnvKey(key) || value === undefined) continue;
+    env[key] = value;
+  }
+  for (const [key, value] of Object.entries(extraEnv)) {
+    if (!isValidEnvKey(key) || value === undefined) continue;
+    env[key] = String(value);
+  }
+  return env;
 }
 
 function spawnInherited(command, args, options = {}) {
-  return spawn(commandName(command), args, {
+  const { env: extraEnv, ...spawnOptions } = options;
+  const spec = commandSpec(command, args);
+  return spawn(spec.command, spec.args, {
     stdio: "inherit",
-    ...options,
-    env: {
-      ...process.env,
-      ...options.env,
-    },
+    ...spawnOptions,
+    env: buildSpawnEnv(extraEnv),
   });
 }
 
@@ -45,6 +76,12 @@ function stopDevServer(child) {
   if (child.exitCode !== null) return;
 
   try {
+    if (child.pid && process.platform === "win32") {
+      spawnSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: "ignore",
+      });
+      return;
+    }
     if (child.pid && process.platform !== "win32") {
       process.kill(-child.pid, "SIGTERM");
       return;
@@ -56,7 +93,8 @@ function stopDevServer(child) {
 }
 
 async function run() {
-  const dev = spawnInherited("npm", ["run", "dev:perf", "--prefix", "../.."], {
+  const dev = spawnInherited("npm", ["run", "dev:perf"], {
+    cwd: REPO_ROOT,
     detached: process.platform !== "win32",
     env: { AIF_ENABLE_CODEX_LOGIN_PROXY: "false" },
   });
@@ -67,6 +105,7 @@ async function run() {
     await waitForReady(dev);
 
     const perf = spawnInherited("playwright", ["test", "--config=playwright.config.ts"], {
+      cwd: WEB_ROOT,
       env: { AIF_SKIP_DEV_SERVER: "1" },
     });
     const [code, signal] = await once(perf, "exit");

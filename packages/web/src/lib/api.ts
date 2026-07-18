@@ -1,5 +1,6 @@
 import type {
   Task,
+  TaskListItem,
   CreateTaskInput,
   UpdateTaskInput,
   TaskEvent,
@@ -7,7 +8,9 @@ import type {
   TaskComment,
   CreateTaskCommentInput,
   Project,
+  ProjectTaskOverview,
   CreateProjectInput,
+  UpdateProjectOrganizationInput,
   ChatRequest,
   ChatSession,
   CreateChatSessionInput,
@@ -252,6 +255,17 @@ async function request<T>(
   return res.json();
 }
 
+// Task list fetch. projectId is required: the board/list view is always scoped.
+// The dashboard moved to GET /projects/overview (see #139), so the bare no-arg
+// listTasks() path has no remaining caller and is removed. The server route
+// still answers bare requests for backward compatibility, but the web client
+// never calls it.
+function listTasks(projectId: string): Promise<TaskListItem[]> {
+  const qs = `?projectId=${encodeURIComponent(projectId)}`;
+  console.debug("[api] GET /tasks?projectId=%s", projectId);
+  return request<TaskListItem[]>(`${API_BASE}${qs}`);
+}
+
 export const api = {
   getSettings(): Promise<SettingsResponse> {
     console.debug("[api] GET /settings");
@@ -282,6 +296,11 @@ export const api = {
     return request<Project[]>("/projects");
   },
 
+  listProjectTaskOverviews(): Promise<ProjectTaskOverview[]> {
+    console.debug("[api] GET /projects/overview");
+    return request<ProjectTaskOverview[]>("/projects/overview");
+  },
+
   createProject(input: CreateProjectInput): Promise<Project> {
     console.debug("[api] POST /projects", input);
     return request<Project>("/projects", {
@@ -294,6 +313,14 @@ export const api = {
     console.debug("[api] PUT /projects/%s", id, input);
     return request<Project>(`/projects/${id}`, {
       method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateProjectOrganization(id: string, input: UpdateProjectOrganizationInput): Promise<Project> {
+    console.debug("[api] PATCH /projects/%s/organization", id, input);
+    return request<Project>(`/projects/${encodeURIComponent(id)}/organization`, {
+      method: "PATCH",
       body: JSON.stringify(input),
     });
   },
@@ -351,11 +378,7 @@ export const api = {
   },
 
   // Tasks
-  listTasks(projectId?: string): Promise<Task[]> {
-    const qs = projectId ? `?projectId=${projectId}` : "";
-    console.debug("[api] GET /tasks%s", qs);
-    return request<Task[]>(`${API_BASE}${qs}`);
-  },
+  listTasks,
 
   getTask(id: string): Promise<Task> {
     console.debug("[api] GET /tasks/%s", id);

@@ -45,6 +45,15 @@ export const createProjectSchema = z.object({
   defaultChatRuntimeProfileId: z.string().min(1).nullable().optional(),
 });
 
+export const updateProjectOrganizationSchema = z
+  .object({
+    pinned: z.boolean().optional(),
+    groupName: z.string().trim().max(100).nullable().optional(),
+  })
+  .refine((value) => value.pinned !== undefined || value.groupName !== undefined, {
+    message: "At least one organization field is required",
+  });
+
 export const createTaskSchema = z.object({
   projectId: z.string().min(1, "Project ID is required"),
   title: z.string().min(1, "Title is required").max(500),
@@ -59,6 +68,8 @@ export const createTaskSchema = z.object({
   planTests: z.boolean().optional(),
   skipReview: z.boolean().optional(),
   useSubagents: z.boolean().default(getEnv().AGENT_USE_SUBAGENTS),
+  runPlanImprove: z.boolean().default(false),
+  runPostVerify: z.boolean().default(false),
   autoQa: z.boolean().optional(),
   maxReviewIterations: z
     .number()
@@ -88,6 +99,8 @@ export const updateTaskSchema = z.object({
   planTests: z.boolean().optional(),
   skipReview: z.boolean().optional(),
   useSubagents: z.boolean().optional(),
+  runPlanImprove: z.boolean().optional(),
+  runPostVerify: z.boolean().optional(),
   autoQa: z.boolean().optional(),
   maxReviewIterations: z.number().int().min(1).max(50).optional(),
   plan: z.string().nullable().optional(),

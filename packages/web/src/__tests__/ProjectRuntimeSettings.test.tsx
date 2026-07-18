@@ -114,6 +114,8 @@ const project: Project = {
   planCheckerMaxBudgetUsd: null,
   implementerMaxBudgetUsd: null,
   reviewSidecarMaxBudgetUsd: null,
+  pinnedAt: null,
+  groupName: null,
   parallelEnabled: false,
   autoQueueMode: false,
   defaultTaskRuntimeProfileId: "project-1",

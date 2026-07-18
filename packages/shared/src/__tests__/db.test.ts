@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { chatSessions } from "../schema.js";
 import { closeDb, createTestDb, getDb } from "../db.js";
 
-const CURRENT_SCHEMA_VERSION = 23;
+const CURRENT_SCHEMA_VERSION = 25;
 
 function removeSqliteArtifacts(dbPath: string): void {
   for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
@@ -82,6 +82,41 @@ describe("db", () => {
     const db2 = createTestDb();
     expect(db1).toBeDefined();
     expect(db2).toBeDefined();
+  });
+
+  it("migrates v24 project tables with pinning and grouping columns", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-project-org-${Date.now()}-${Math.random()}.sqlite`);
+    const sqlite = new Database(dbPath);
+    sqlite.exec(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    sqlite.pragma("user_version = 24");
+    sqlite.close();
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const migrated = new Database(dbPath, { readonly: true });
+      const columns = migrated.pragma("table_info(projects)") as Array<{ name: string }>;
+      const userVersion = migrated.pragma("user_version", { simple: true }) as number;
+      migrated.close();
+
+      expect(columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining(["pinned_at", "group_name"]),
+      );
+      expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
   });
 
   it("creates and seeds a singleton app_settings row", () => {

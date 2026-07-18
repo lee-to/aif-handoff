@@ -102,9 +102,9 @@ Short-lived in-memory caches exist only for dedupe/throttling repeated identical
 
 ## Agent Pipeline
 
-The coordinator (`packages/agent/src/coordinator.ts`) uses a dual-trigger model: it polls via `node-cron` every 30 seconds as a fallback and also reacts to real-time events from the API WebSocket (task creation, moves, and explicit `agent:wake` signals). Duplicate wakes are debounced. If the WebSocket is unavailable, the coordinator falls back to polling-only mode.
+The coordinator (`packages/agent/src/coordinator.ts`) uses a dual-trigger model: it polls via `node-cron` every 30 seconds as a fallback and also reacts to real-time events from the API WebSocket (task creation, moves, and explicit `agent:wake` signals). Duplicate wakes are debounced, and both trigger sources share a single-flight poll loop; a trigger received during an active cycle requests one coalesced follow-up cycle. If the WebSocket is unavailable, the coordinator falls back to polling-only mode.
 
-The coordinator supports **parallel task execution** (experimental, per-project). When a project has "Parallel Execution" enabled in settings, up to `COORDINATOR_MAX_CONCURRENT_TASKS` (default 3) tasks per stage run concurrently via `Promise.allSettled`. This value also serves as the global cap on total concurrent Claude processes across all stages and projects. Non-parallel projects always process 1 task at a time. Tasks are atomically claimed (`lockedBy`/`lockedUntil` columns) with lock duration tied to the stage timeout; heartbeats renew the lock periodically. Stale claims (expired TTL or dead heartbeat) are auto-released. On shutdown, active locks are released immediately.
+The coordinator supports **parallel task execution** (experimental, per-project). It first selects up to `COORDINATOR_MAX_CONCURRENT_PROJECTS` (default 4) independent project lanes and runs those lanes concurrently, while `COORDINATOR_MAX_CONCURRENT_TASKS` (default 12) remains a global safety ceiling across all lanes. A FIFO permit governor distributes global capacity across runnable lanes and waits for released slots instead of dropping later selected lanes. Within one lane, pipeline stages still drain sequentially to preserve project-local ordering. When a project has "Parallel Execution" enabled in settings, up to `COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT` (default 3) tasks per stage run concurrently via `Promise.allSettled`; non-parallel projects always process 1 task at a time. Tasks are atomically claimed (`lockedBy`/`lockedUntil` columns) with lock duration tied to the stage timeout; heartbeats renew the lock periodically. Stale claims (expired TTL or dead heartbeat) are auto-released. On shutdown, active locks are released immediately.
 
 It delegates workflow stages to `.claude/agents/` definitions, but actual execution transport/model/session behavior is adapter-owned through `@aif/runtime`:
 
@@ -118,13 +118,20 @@ Backlog ──[start_ai]──► Planning ──► Plan Ready ──► Implem
                             │                replanning]──┘
                             │
                      plan-coordinator          implement-coordinator        review + security sidecars
+
+Skills-mode tasks (`useSubagents=false`) can opt into two extra stages:
+
+Planning ──[runPlanImprove]──► Improve ──► Plan Ready
+Implementing ──[runPostVerify]──► Verify ──► Review
 ```
 
-| Stage Transition                                                                                 | Agent                                                                     | Description                                                                                                                                            |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Backlog → Planning → Plan Ready                                                                  | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                                                          |
-| Plan Ready → Implementing → Review                                                               | `implement-coordinator`                                                   | Parallel execution with worktrees + quality sidecars                                                                                                   |
-| Review → Done / Review → request_changes → Implementing / Review → Done + manual review required | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, structured blocking findings drive automatic rework until success or explicit manual handoff |
+| Stage Transition                                                                                 | Agent                                                                     | Description                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backlog → Planning → Plan Ready                                                                  | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                                                            |
+| Planning → Improve → Plan Ready                                                                  | `/aif-improve`                                                            | Optional skills-mode plan refinement. Enabled per task with `runPlanImprove`; ignored when `useSubagents=true`                                           |
+| Plan Ready → Implementing → Review                                                               | `implement-coordinator`                                                   | Parallel execution with worktrees + quality sidecars                                                                                                     |
+| Implementing → Verify → Review / Done                                                            | `/aif-verify`                                                             | Optional skills-mode implementation verification against the plan before review. Enabled per task with `runPostVerify`; ignored when `useSubagents=true` |
+| Review → Done / Review → request_changes → Implementing / Review → Done + manual review required | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, structured blocking findings drive automatic rework until success or explicit manual handoff   |
 
 ### Reliability Guards
 
@@ -132,7 +139,7 @@ The pipeline includes four reliability layers for long-running autonomous execut
 
 - **First-activity watchdog (SDK only):** After agent start, if no tool call or subagent spawn arrives within `AGENT_FIRST_ACTIVITY_TIMEOUT_MS` (default 60s), the agent is killed and restarted (up to 2 retries). Detects hung agents within seconds instead of waiting for the stale timeout. Disabled for CLI/API transports which do not stream tool events.
 - **Heartbeat liveness:** Task rows are updated with `lastHeartbeatAt` during agent activity and stage transitions.
-- **Stale-stage watchdog:** On each poll cycle, tasks stuck in `planning` / `implementing` / `review` beyond timeout are auto-recovered to `blocked_external` with retry backoff.
+- **Stale-stage watchdog:** On each poll cycle, tasks stuck in `planning` / `improve` / `implementing` / `review` / `verify` beyond timeout are auto-recovered to `blocked_external` with retry backoff.
 - **Runtime-limit auto-pause:** Exact/heuristic persisted runtime-limit snapshots can proactively move new work to `blocked_external` before a provider hard-fails, and structured `resetAt` / `retryAfterSeconds` replace random quota backoff when available.
 - **Transition reset:** valid transitions clear watchdog state (`blocked*`, `retryAfter`, `retryCount`) and refresh heartbeat baseline.
 
@@ -159,9 +166,11 @@ Defined in `packages/shared/src/stateMachine.ts`. Human actions available per st
 | ------------------ | -------------------------------------------------------- |
 | `backlog`          | `start_ai`                                               |
 | `planning`         | _(none — agent working)_                                 |
+| `improve`          | _(none — agent working)_                                 |
 | `plan_ready`       | `start_implementation`, `request_replanning`, `fast_fix` |
 | `implementing`     | _(none — agent working)_                                 |
 | `review`           | _(none — agent working)_                                 |
+| `verify`           | _(none — agent working)_                                 |
 | `blocked_external` | `retry_from_blocked`                                     |
 | `done`             | `approve_done`, `request_changes`                        |
 | `verified`         | _(terminal state)_                                       |
@@ -175,6 +184,25 @@ Auto-review strategy is controlled globally by `AGENT_AUTO_REVIEW_STRATEGY`:
 - If `closure_first` resolves previous blockers but the reviewer finds new blockers, or if max review iterations are reached, the task moves to `done` with `manualReviewRequired=true` and preserved `autoReviewState` for explicit human triage.
 
 Tasks also have a `skipReview` flag (default `false`). When `true`, the coordinator bypasses the review stage entirely — after successful implementation the task moves directly to `done`, skipping the `review-sidecar` and `security-sidecar` runs. This is useful for small changes or tasks where code review is unnecessary.
+
+Skills-mode tasks (`useSubagents=false`) also have two opt-in flags. `runPlanImprove` inserts `/aif-improve` after the initial plan and before `plan_ready`. This is plan refinement: it may replace the stored plan only when the improver returns a complete plan-shaped update. `runPostVerify` inserts `/aif-verify` after implementation and before review. This is an execution validation gate: it stores verification output, passes through to review/done on pass or warn, and moves to `blocked_external` for a blocking gate result. Both flags default to `false` and are ignored for subagent tasks.
+
+Flag interaction table:
+
+| `useSubagents` | `skipReview` | `runPlanImprove` | `runPostVerify` | Effective pipeline after planning starts                                |
+| -------------- | ------------ | ---------------- | --------------- | ----------------------------------------------------------------------- |
+| `true`         | `false`      | ignored          | ignored         | Planning → Plan Ready → Implementing → Review → Done                    |
+| `true`         | `true`       | ignored          | ignored         | Planning → Plan Ready → Implementing → Done                             |
+| `false`        | `false`      | `false`          | `false`         | Planning → Plan Ready → Implementing → Review → Done                    |
+| `false`        | `true`       | `false`          | `false`         | Planning → Plan Ready → Implementing → Done                             |
+| `false`        | `false`      | `true`           | `false`         | Planning → Improve → Plan Ready → Implementing → Review → Done          |
+| `false`        | `true`       | `true`           | `false`         | Planning → Improve → Plan Ready → Implementing → Done                   |
+| `false`        | `false`      | `false`          | `true`          | Planning → Plan Ready → Implementing → Verify → Review → Done           |
+| `false`        | `true`       | `false`          | `true`          | Planning → Plan Ready → Implementing → Verify → Done                    |
+| `false`        | `false`      | `true`           | `true`          | Planning → Improve → Plan Ready → Implementing → Verify → Review → Done |
+| `false`        | `true`       | `true`           | `true`          | Planning → Improve → Plan Ready → Implementing → Verify → Done          |
+
+`verify` remains a coordinator stage, not a human action. That keeps it covered by the same claim, timeout, watchdog, runtime-profile, and activity-log machinery as other autonomous work. The semantic contract is narrower than review: verify validates the implementation against the accepted plan, while review/security sidecars evaluate code quality and risk.
 
 ### QA Pipeline
 
@@ -236,7 +264,7 @@ which makes ordinary backlog creation FIFO instead of LIFO.
   pipeline status, not by lock — so transitions between stages do not open a
   window for early advance.
 - **Parallel project** (`parallelEnabled = true`): pool depth =
-  `COORDINATOR_MAX_CONCURRENT_TASKS`. Auto-queue keeps that many tasks in
+  `COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT`. Auto-queue keeps that many tasks in
   flight, advancing as soon as room frees up. For projects with
   `git.create_branches=true`, this parallel branch-isolated path is available
   only when `AIF_TASK_WORKTREES_ENABLED=true`; otherwise the project remains
@@ -248,7 +276,7 @@ which makes ordinary backlog creation FIFO instead of LIFO.
 
 The advance step:
 
-1. Compute `limit = parallelEnabled ? COORDINATOR_MAX_CONCURRENT_TASKS : 1`,
+1. Compute `limit = parallelEnabled ? COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT : 1`,
    then collapse it to `1` when branch isolation would use the shared project
    root.
 2. Read `active = countActivePipelineTasksForProject(project)` — counts tasks
@@ -328,6 +356,24 @@ Agent tool events are tracked in each task's `agentActivityLog` field. Two modes
 
 - **sync** (default): Each event writes immediately to the database.
 - **batch**: Events are buffered in an in-memory queue per task and flushed when the batch size, max age timer, or stage boundary is reached. Shutdown handlers ensure buffered entries are persisted on `SIGINT`/`SIGTERM`.
+
+## Task Read Models
+
+The API separates task list reads from task detail reads to keep project board
+loads bounded:
+
+- `GET /tasks?projectId=<uuid>` requires a project id and returns lightweight
+  `TaskListItem` rows from `listTaskListItems(projectId)`.
+- `TaskListItem` includes board, list, filtering, command-palette, runtime-limit,
+  and metric fields plus the derived `hasPlan` flag.
+- `TaskListItem` intentionally excludes heavy detail-only fields: attachments,
+  plan text, implementation log, review comments, agent activity log, runtime
+  options, auto-review state, and QA markdown artifacts.
+- `GET /tasks/:id` remains the full task detail endpoint for task detail, chat,
+  comments, and agent workflows.
+- `GET /projects/overview` uses `listProjectTaskOverviews()` to serve compact
+  per-project counts, metric totals, and small title previews without loading
+  every task row into the web client.
 
 ## Database
 

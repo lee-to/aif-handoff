@@ -23,15 +23,18 @@ export const options = {
 
 export function setup() {
   const projectId = resolveFirstProjectId();
+  if (!projectId) {
+    throw new Error(
+      "No project present in the dev DB — seed a project before running the k6 tasks canary.",
+    );
+  }
   return { projectId };
 }
 
 const check200 = okStatus("tasks");
 
 export default function (data) {
-  const url = data.projectId
-    ? `${BASE_URL}/tasks?projectId=${encodeURIComponent(data.projectId)}`
-    : `${BASE_URL}/tasks`;
+  const url = `${BASE_URL}/tasks?projectId=${encodeURIComponent(data.projectId)}`;
   const res = http.get(url, tag("tasks"));
   check200(res);
 }

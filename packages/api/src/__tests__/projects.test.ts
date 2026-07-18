@@ -131,6 +131,74 @@ describe("projects API", () => {
     expect(await res.json()).toEqual([]);
   });
 
+  it("returns compact project task overviews", async () => {
+    const db = testDb.current;
+    db.insert(projects)
+      .values([
+        { id: "overview-a", name: "Overview A", rootPath: "/tmp/a" },
+        { id: "overview-b", name: "Overview B", rootPath: "/tmp/b" },
+      ])
+      .run();
+    db.insert(tasks)
+      .values([
+        {
+          id: "task-a-1",
+          projectId: "overview-a",
+          title: "Backlog item",
+          status: "backlog",
+          plan: "heavy plan",
+          implementationLog: "heavy implementation log",
+          reviewComments: "heavy review comments",
+          agentActivityLog: "heavy activity log",
+          tokenInput: 10,
+          tokenOutput: 20,
+          tokenTotal: 30,
+          costUsd: 0.25,
+          updatedAt: "2026-01-01T10:00:00.000Z",
+        },
+        {
+          id: "task-a-2",
+          projectId: "overview-a",
+          title: "Done item",
+          status: "done",
+          retryCount: 2,
+          updatedAt: "2026-01-03T10:00:00.000Z",
+        },
+        {
+          id: "task-b-1",
+          projectId: "overview-b",
+          title: "Other item",
+          status: "review",
+        },
+      ])
+      .run();
+
+    const res = await app.request("/projects/overview");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const overviewA = body.find(
+      (overview: { projectId: string }) => overview.projectId === "overview-a",
+    );
+
+    expect(overviewA).toMatchObject({
+      projectId: "overview-a",
+      totalTasks: 2,
+      completedTasks: 1,
+      backlogTasks: 1,
+      totalRetries: 2,
+      totalTokenInput: 10,
+      totalTokenOutput: 20,
+      totalTokenTotal: 30,
+      totalCostUsd: 0.25,
+      lastActivityAt: "2026-01-03T10:00:00.000Z",
+    });
+    expect(overviewA.statusCounts.backlog).toBe(1);
+    expect(overviewA.statusCounts.done).toBe(1);
+    expect(overviewA.statusPreviews.backlog).toEqual([{ id: "task-a-1", title: "Backlog item" }]);
+    expect(overviewA.statusPreviews.backlog[0]).not.toHaveProperty("plan");
+    expect(overviewA.statusPreviews.backlog[0]).not.toHaveProperty("implementationLog");
+  });
+
   it("rejects invalid root path for create", async () => {
     const res = await app.request("/projects", {
       method: "POST",
@@ -162,6 +230,48 @@ describe("projects API", () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toBeDefined();
+  });
+
+  it("updates project pinning and grouping", async () => {
+    testDb.current
+      .insert(projects)
+      .values({ id: "organized", name: "Organized", rootPath: "/tmp/organized" })
+      .run();
+
+    const res = await app.request("/projects/organized/organization", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: true, groupName: "Platform" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      id: "organized",
+      groupName: "Platform",
+    });
+    expect(mockBroadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "project:organization_updated" }),
+    );
+  });
+
+  it("returns 404 when organizing a missing project", async () => {
+    const res = await app.request("/projects/missing/organization", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: true }),
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects an empty project organization patch", async () => {
+    const res = await app.request("/projects/missing/organization", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
   });
 
   it("maps Docker host project paths to the container project mount on create", async () => {

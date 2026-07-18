@@ -1,8 +1,8 @@
-# Browser performance suite
+# Browser E2E suite
 
-Playwright-driven synthetic perf tests. These exercise the real web stack
-(API + web bundle) against a running dev server and enforce latency budgets
-so regressions fail the suite instead of shipping.
+Playwright-driven browser tests. The suite exercises the real web stack
+(API + web bundle) against a running dev server, covers browser-only interaction
+regressions, and enforces latency budgets.
 
 ## Run
 
@@ -21,6 +21,8 @@ dev shell). Set `AIF_SKIP_DEV_SERVER=1` to bypass the auto-launch entirely and
 
 ## What each spec measures
 
+- `kanban-horizontal-scroll.spec.ts` — verifies horizontal wheel gestures over
+  a vertically scrollable card list still scroll the Kanban board.
 - `perf/dashboard-load.spec.ts` — cold kanban render. Asserts DOM-ready and
   LCP budgets after the first column paints.
 - `perf/runtime-profiles-endpoint.spec.ts` — cold + warm `/runtime-profiles`

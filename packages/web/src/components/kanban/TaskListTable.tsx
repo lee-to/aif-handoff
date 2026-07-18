@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef } from "react";
 import { ChevronUp, ChevronDown, Clock, Pause, Play } from "lucide-react";
-import { STATUS_CONFIG, type Task } from "@aif/shared/browser";
+import { STATUS_CONFIG, type TaskListItem } from "@aif/shared/browser";
 import { TableHeaderCell } from "@/components/ui/table-header-cell";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useReorderTask, useUpdateTask } from "@/hooks/useTasks";
 
 interface TaskListTableProps {
-  tasks: Task[];
+  tasks: TaskListItem[];
   isCompact: boolean;
   onTaskClick: (taskId: string) => void;
   onReorderBacklog?: () => void;

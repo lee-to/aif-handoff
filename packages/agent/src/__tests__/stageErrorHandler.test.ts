@@ -34,7 +34,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
   };
 });
 
-const { classifyStageError } = await import("../stageErrorHandler.js");
+const { classifyStageError, StageManualBlockError } = await import("../stageErrorHandler.js");
 import { appendTaskActivityLog } from "@aif/data";
 
 function makeInput(overrides: Record<string, unknown> = {}) {
@@ -90,6 +90,26 @@ describe("classifyStageError", () => {
       makeInput({ err: new RuntimeExecutionError("rate limit exceeded", undefined, "rate_limit") }),
     );
     expect(result.kind).toBe("blocked_external");
+  });
+
+  it("returns manual blocked_external for explicit stage gate blocks", () => {
+    const result = classifyStageError(
+      makeInput({
+        stageLabel: "verifier",
+        sourceStatus: "verify",
+        retryCount: 2,
+        err: new StageManualBlockError("Verify gate blocked this task."),
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "blocked_external",
+      blockedReason: "Verify gate blocked this task.",
+      retryAfter: null,
+      retryAfterSource: "none",
+      retryCount: 2,
+      limitSnapshot: null,
+    });
   });
 
   it("includes retryAfter ISO string for external failures", () => {

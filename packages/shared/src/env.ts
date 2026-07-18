@@ -108,7 +108,9 @@ const envSchema = z.object({
       return value;
     }, z.boolean())
     .default(true),
-  COORDINATOR_MAX_CONCURRENT_TASKS: z.coerce.number().min(1).max(10).default(3),
+  COORDINATOR_MAX_CONCURRENT_TASKS: z.coerce.number().min(1).max(100).default(12),
+  COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT: z.coerce.number().min(1).max(10).default(3),
+  COORDINATOR_MAX_CONCURRENT_PROJECTS: z.coerce.number().min(1).max(10).default(4),
   AGENT_CHAT_MAX_TURNS: z.coerce.number().min(1).default(50),
   AGENT_MAX_REVIEW_ITERATIONS: z.coerce.number().min(1).default(3),
   AGENT_AUTO_REVIEW_STRATEGY: z.enum(AUTO_REVIEW_STRATEGIES).default("full_re_review"),

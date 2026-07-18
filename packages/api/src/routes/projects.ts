@@ -22,14 +22,17 @@ import {
   broadcastProjectSchema,
   autoQueueModeSchema,
   warmupCreateSchema,
+  updateProjectOrganizationSchema,
 } from "../schemas.js";
 import { getAutoQueueMode, setAutoQueueMode } from "@aif/data";
 import { broadcast } from "../ws.js";
 import {
   listProjects,
+  listProjectTaskOverviews,
   findProjectById,
   createProject,
   updateProject,
+  updateProjectOrganization,
   deleteProject,
   getProjectMcpServers,
 } from "../repositories/projects.js";
@@ -195,6 +198,16 @@ projectsRouter.get("/", (c) => {
   return c.json(all);
 });
 
+// GET /projects/overview - compact task metrics and previews for the overview screen
+projectsRouter.get("/overview", (c) => {
+  const overview = listProjectTaskOverviews();
+  log.debug(
+    { projectCount: overview.length, responseType: "ProjectTaskOverview" },
+    "Listed project task overview",
+  );
+  return c.json(overview);
+});
+
 // POST /projects
 projectsRouter.post("/", jsonValidator(createProjectSchema), async (c) => {
   const body = c.req.valid("json");
@@ -263,6 +276,25 @@ projectsRouter.put("/:id", jsonValidator(createProjectSchema), async (c) => {
   log.debug({ projectId: id }, "Project updated");
   return c.json(updated);
 });
+
+// PATCH /projects/:id/organization - update picker organization metadata
+projectsRouter.patch(
+  "/:id/organization",
+  jsonValidator(updateProjectOrganizationSchema),
+  async (c) => {
+    const { id } = c.req.param();
+    const body = c.req.valid("json");
+    const updated = updateProjectOrganization(id, body);
+    if (!updated) return c.json({ error: "Project not found" }, 404);
+
+    log.debug(
+      { projectId: id, pinned: updated.pinnedAt != null, groupName: updated.groupName },
+      "[FIX:147] Project organization updated",
+    );
+    broadcast({ type: "project:organization_updated", payload: updated });
+    return c.json(updated);
+  },
+);
 
 // GET /projects/:id/mcp — read .mcp.json from project directory
 projectsRouter.get("/:id/mcp", (c) => {

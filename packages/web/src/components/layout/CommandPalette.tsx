@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect, type KeyboardEvent } from "react";
-import type { Project, Task } from "@aif/shared/browser";
+import type { Project, TaskListItem } from "@aif/shared/browser";
 import {
   Dialog,
   DialogClose,
@@ -14,7 +14,7 @@ interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projects: Project[];
-  tasks: Task[];
+  tasks: TaskListItem[];
   selectedProjectId: string | null;
   density: "comfortable" | "compact";
   theme: "dark" | "light";

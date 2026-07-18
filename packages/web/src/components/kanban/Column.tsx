@@ -1,12 +1,13 @@
-import type { Task, TaskStatus } from "@aif/shared/browser";
+import type { TaskListItem, TaskStatus } from "@aif/shared/browser";
 import { STATUS_CONFIG } from "@aif/shared/browser";
 import { TaskCard } from "./TaskCard";
 import { AddTaskForm } from "./AddTaskForm";
 import { useReorderTask, useUpdateTask } from "@/hooks/useTasks";
+import { ScrollableContainer } from "@/components/ui/scrollable-container";
 
 interface ColumnProps {
   status: TaskStatus;
-  tasks: Task[];
+  tasks: TaskListItem[];
   projectId: string;
   onTaskClick: (taskId: string) => void;
   totalVisibleTasks: number;
@@ -21,6 +22,9 @@ const OWNER_BADGES: Record<TaskStatus, Array<{ label: string; className: string 
   planning: [
     { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
   ],
+  improve: [
+    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
+  ],
   plan_ready: [
     { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
     { label: "Human decision", className: "text-green-300 border-green-500/35 bg-green-500/10" },
@@ -29,6 +33,9 @@ const OWNER_BADGES: Record<TaskStatus, Array<{ label: string; className: string 
     { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
   ],
   review: [
+    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
+  ],
+  verify: [
     { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
   ],
   blocked_external: [
@@ -43,7 +50,7 @@ const OWNER_BADGES: Record<TaskStatus, Array<{ label: string; className: string 
 };
 
 function reorderBacklog(
-  tasks: Task[],
+  tasks: TaskListItem[],
   idx: number,
   dir: "up" | "down",
   reorder: ReturnType<typeof useReorderTask>,
@@ -137,7 +144,10 @@ export function Column({
         </div>
       )}
 
-      <div className={`min-h-[100px] ${density === "compact" ? "space-y-1.5" : "space-y-2"}`}>
+      <ScrollableContainer
+        maxHeight="max-h-[calc(100vh-18rem)]"
+        className={`min-h-[100px] overscroll-y-contain pr-1 ${density === "compact" ? "space-y-1.5" : "space-y-2"}`}
+      >
         {tasks.map((task, idx) => {
           const reorderProps =
             status === "backlog"
@@ -166,7 +176,7 @@ export function Column({
             {hasActiveFilters ? "// no tasks for current filters" : "// no tasks"}
           </div>
         )}
-      </div>
+      </ScrollableContainer>
     </div>
   );
 }

@@ -32,6 +32,16 @@ const NON_RETRYABLE_RUNTIME_CATEGORIES = new Set([
   "content_filter",
 ]);
 
+export class StageManualBlockError extends Error {
+  readonly blockedReason: string;
+
+  constructor(blockedReason: string, message = blockedReason) {
+    super(message);
+    this.name = "StageManualBlockError";
+    this.blockedReason = blockedReason;
+  }
+}
+
 export type ErrorRecovery =
   | { kind: "fast_retry" }
   | {
@@ -50,6 +60,14 @@ interface StageErrorInput {
   sourceStatus: TaskStatus;
   retryCount: number;
   err: unknown;
+}
+
+function findStageManualBlockError(err: unknown): StageManualBlockError | null {
+  if (err instanceof StageManualBlockError) return err;
+  if (err instanceof Error && "cause" in err && err.cause) {
+    return findStageManualBlockError(err.cause);
+  }
+  return null;
 }
 
 function buildUserSafeExternalReason(err: unknown): string {
@@ -129,6 +147,33 @@ function resolveRetryAfter(err: unknown): {
  */
 export function classifyStageError(input: StageErrorInput): ErrorRecovery {
   const { taskId, stageLabel, sourceStatus, err } = input;
+
+  const manualBlockErr = findStageManualBlockError(err);
+  if (manualBlockErr) {
+    logActivity(
+      taskId,
+      "Agent",
+      `coordinator moved to blocked_external from ${sourceStatus} at ${stageLabel}; retryAfter=manual; source=none; reason=${truncateReason(manualBlockErr.blockedReason)}`,
+    );
+
+    log.warn(
+      {
+        taskId,
+        stage: stageLabel,
+        errorName: manualBlockErr.name,
+      },
+      "Subagent stage requested manual block",
+    );
+
+    return {
+      kind: "blocked_external",
+      blockedReason: manualBlockErr.blockedReason,
+      retryAfter: null,
+      retryAfterSource: "none",
+      retryCount: input.retryCount ?? 0,
+      limitSnapshot: null,
+    };
+  }
 
   // Branch / worktree isolation failures must NEVER fall into the generic
   // revert path — generic revert triggers unbounded re-planning on a

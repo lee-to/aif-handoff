@@ -35,6 +35,8 @@ export function AddTaskForm({ projectId }: Props) {
   const [planTests, setPlanTests] = useState(initialFlagDefaults.planTests);
   const [skipReview, setSkipReview] = useState(initialFlagDefaults.skipReview);
   const [useSubagents, setUseSubagents] = useState(false);
+  const [runPlanImprove, setRunPlanImprove] = useState(false);
+  const [runPostVerify, setRunPostVerify] = useState(false);
   const [autoQa, setAutoQa] = useState(false);
   const [maxReviewIterations, setMaxReviewIterations] = useState(3);
   const [runtimeProfileId, setRuntimeProfileId] = useState("");
@@ -78,6 +80,8 @@ export function AddTaskForm({ projectId }: Props) {
 
   const syncServerDefaultsIntoForm = useCallback(() => {
     setUseSubagents(useSubagentsDefault);
+    setRunPlanImprove(false);
+    setRunPostVerify(false);
     setAutoQa(false);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setPlanPath(defaultPlanPath);
@@ -106,6 +110,8 @@ export function AddTaskForm({ projectId }: Props) {
     setPlanTests(resetFlags.planTests);
     setSkipReview(resetFlags.skipReview);
     setUseSubagents(useSubagentsDefault);
+    setRunPlanImprove(false);
+    setRunPostVerify(false);
     setAutoQa(false);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setRuntimeProfileId("");
@@ -181,6 +187,8 @@ export function AddTaskForm({ projectId }: Props) {
         planTests,
         skipReview,
         useSubagents,
+        runPlanImprove: useSubagents ? false : runPlanImprove,
+        runPostVerify: useSubagents ? false : runPostVerify,
         autoQa,
         maxReviewIterations,
         runtimeProfileId: runtimeProfileId || null,
@@ -341,7 +349,14 @@ export function AddTaskForm({ projectId }: Props) {
         <label className="flex items-start gap-2 text-xs text-muted-foreground">
           <Checkbox
             checked={useSubagents}
-            onChange={(e) => setUseSubagents(e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setUseSubagents(checked);
+              if (checked) {
+                setRunPlanImprove(false);
+                setRunPostVerify(false);
+              }
+            }}
             className="mt-0.5 h-3.5 w-3.5"
           />
           <span>
@@ -351,6 +366,32 @@ export function AddTaskForm({ projectId }: Props) {
             }
           </span>
         </label>
+        {!useSubagents && (
+          <>
+            <label className="flex items-start gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={runPlanImprove}
+                onChange={(e) => setRunPlanImprove(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5"
+              />
+              <span>
+                <span className="font-medium text-foreground">Run improve</span>
+                {" - Refine the generated plan with aif-improve before implementation."}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={runPostVerify}
+                onChange={(e) => setRunPostVerify(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5"
+              />
+              <span>
+                <span className="font-medium text-foreground">Run verify</span>
+                {" - Validate the finished implementation with aif-verify before review."}
+              </span>
+            </label>
+          </>
+        )}
         {qaPipelineEnabled && (
           <label className="flex items-start gap-2 text-xs text-muted-foreground">
             <Checkbox

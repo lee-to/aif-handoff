@@ -183,8 +183,8 @@ describe("processAutoQueueAdvance", () => {
   describe("parallel project (synergy with parallelEnabled = true)", () => {
     beforeEach(() => seedProject("par", { autoQueue: true, parallel: true }));
 
-    it("fills the pool up to COORDINATOR_MAX_CONCURRENT_TASKS in a single tick", () => {
-      // Default COORDINATOR_MAX_CONCURRENT_TASKS = 3
+    it("fills the pool up to the per-project concurrency cap in a single tick", () => {
+      // Default COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT = 3
       seedTask("t1", "par", 100);
       seedTask("t2", "par", 200);
       seedTask("t3", "par", 300);

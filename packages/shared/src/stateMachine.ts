@@ -101,9 +101,11 @@ export function applyHumanTaskEvent(
 export const HUMAN_ACTIONS_BY_STATUS: Record<TaskStatus, TaskEvent[]> = {
   backlog: ["start_ai"],
   planning: [],
+  improve: [],
   plan_ready: ["start_implementation", "request_replanning", "fast_fix"],
   implementing: [],
   review: [],
+  verify: [],
   blocked_external: ["retry_from_blocked"],
   done: ["approve_done", "request_changes"],
   verified: [],

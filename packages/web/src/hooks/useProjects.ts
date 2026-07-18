@@ -1,5 +1,10 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { Project, CreateProjectInput } from "@aif/shared/browser";
+import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import type {
+  Project,
+  CreateProjectInput,
+  ProjectTaskOverview,
+  UpdateProjectOrganizationInput,
+} from "@aif/shared/browser";
 import { api, ApiError } from "../lib/api.js";
 import { invalidateProjectWarmupQueries } from "./useProjectWarmup.js";
 
@@ -28,12 +33,25 @@ export function useProjects() {
   });
 }
 
+export function invalidateProjectTaskOverviews(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ["projectTaskOverviews"] });
+}
+
+export function useProjectTaskOverviews(enabled = true) {
+  return useQuery<ProjectTaskOverview[]>({
+    queryKey: ["projectTaskOverviews"],
+    queryFn: api.listProjectTaskOverviews,
+    enabled,
+  });
+}
+
 export function useDeleteProject() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.deleteProject(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      invalidateProjectTaskOverviews(queryClient);
     },
   });
 }
@@ -45,9 +63,21 @@ export function useUpdateProject() {
       api.updateProject(id, input),
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      invalidateProjectTaskOverviews(queryClient);
       queryClient.invalidateQueries({ queryKey: ["effectiveChatRuntime"] });
       queryClient.invalidateQueries({ queryKey: ["effectiveTaskRuntime"] });
       invalidateProjectWarmupQueries(queryClient, id);
+    },
+  });
+}
+
+export function useUpdateProjectOrganization() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateProjectOrganizationInput }) =>
+      api.updateProjectOrganization(id, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
   });
 }
@@ -78,6 +108,7 @@ export function useCreateProject() {
     mutationFn: (input: CreateProjectInput) => api.createProject(input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      invalidateProjectTaskOverviews(queryClient);
     },
   });
 }

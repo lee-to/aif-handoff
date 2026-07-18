@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
-import type { Task } from "@aif/shared/browser";
+import type { TaskListItem } from "@aif/shared/browser";
 
 export type SortField = "updatedAt" | "priority" | "position" | "title";
 export type SortDirection = "asc" | "desc";
@@ -10,7 +10,7 @@ export interface UseTaskFilteringOptions {
 }
 
 export interface UseTaskFilteringResult {
-  filteredTasks: Task[];
+  filteredTasks: TaskListItem[];
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   sortField: SortField;
@@ -23,7 +23,7 @@ export interface UseTaskFilteringResult {
 }
 
 export function useTaskFiltering(
-  tasks: Task[],
+  tasks: TaskListItem[],
   options?: UseTaskFilteringOptions,
 ): UseTaskFilteringResult {
   const [searchQuery, setSearchQuery] = useState("");

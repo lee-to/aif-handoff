@@ -185,6 +185,19 @@ class StageSemaphore {
     return this.activeCount;
   }
 
+  /**
+   * True when any stage of `projectId` is currently held. Keys are
+   * `${projectId}:${stageLabel}`, so an overlapping poll cycle can use this to
+   * leave that project alone and preserve project-local stage ordering.
+   */
+  hasActiveProject(projectId: string): boolean {
+    const prefix = `${projectId}:`;
+    for (const [key, count] of this.counts) {
+      if (count > 0 && key.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
   trackedKeyCount(): number {
     return this.counts.size;
   }
@@ -985,9 +998,38 @@ export function processAutoQueueAdvance(): number {
 
 let activePollPromise: Promise<void> | null = null;
 let followUpPollRequested = false;
+let activePollCycles = 0;
 
-async function runPollCycle(): Promise<void> {
-  log.debug("Starting poll cycle");
+/**
+ * A poll cycle only settles once every stage it started has finished, and an
+ * implementer stage legitimately runs for hours. Serialising every cycle on
+ * that promise stalls the whole coordinator: housekeeping stops re-running and
+ * a task that lands in an already-passed stage waits for the longest running
+ * stage instead of the next tick. Allow a bounded number of overlapping cycles
+ * while stage slots are free — `stageSemaphore` stays the real concurrency
+ * limit, claims are atomic, and lanes revalidate candidates after acquiring a
+ * permit, so overlapping cycles cannot double-claim a task. Project-local stage
+ * order still holds: an overlapping cycle skips every project that already
+ * holds a stage (see `runPollCycle`), so only idle projects are picked up.
+ */
+const MAX_CONCURRENT_POLL_CYCLES = 8;
+
+function canStartOverlappingPollCycle(): boolean {
+  return (
+    activePollCycles < MAX_CONCURRENT_POLL_CYCLES &&
+    stageSemaphore.totalActive() < env.COORDINATOR_MAX_CONCURRENT_TASKS
+  );
+}
+
+/** Number of poll cycles currently in flight (overlapping cycles included). */
+export function getActivePollCycleCount(): number {
+  return activePollCycles;
+}
+
+async function runPollCycle(
+  options: { overlapping: boolean } = { overlapping: false },
+): Promise<void> {
+  log.debug({ overlapping: options.overlapping }, "Starting poll cycle");
 
   // Release stale locks BEFORE watchdog — otherwise watchdog moves task to blocked_external
   // and the lock remains orphaned (heartbeat cleanup filters by in-progress status)
@@ -1036,9 +1078,17 @@ async function runPollCycle(): Promise<void> {
     return cached;
   }
 
-  const projectIds = listCoordinatorActionableProjectIds(maxProjectLanes);
+  // An overlapping cycle runs while an earlier cycle still drains its stages.
+  // Skipping projects that already hold a stage keeps project-local stage order
+  // intact — a planner and an implementer of the same project must never share
+  // one working tree. Scan a wider lane window so busy projects do not hide the
+  // idle ones behind them.
+  const laneWindow = options.overlapping ? maxProjectLanes * 3 : maxProjectLanes;
+  const projectIds = listCoordinatorActionableProjectIds(laneWindow)
+    .filter((projectId) => !options.overlapping || !stageSemaphore.hasActiveProject(projectId))
+    .slice(0, maxProjectLanes);
   if (projectIds.length === 0) {
-    log.debug("No actionable project lanes");
+    log.debug({ overlapping: options.overlapping }, "No actionable project lanes");
     return;
   }
 
@@ -1233,21 +1283,31 @@ async function runPollCycle(): Promise<void> {
 }
 
 export function pollAndProcess(): Promise<void> {
-  if (activePollPromise) {
+  if (activePollCycles > 0 && !canStartOverlappingPollCycle()) {
     followUpPollRequested = true;
-    log.debug("Poll cycle already active; queued one follow-up cycle");
-    return activePollPromise;
+    log.debug(
+      { activePollCycles, activeTasks: stageSemaphore.totalActive() },
+      "Poll cycle active and no free stage slots; queued one follow-up cycle",
+    );
+    return activePollPromise ?? Promise.resolve();
   }
 
   async function drainPollRequests(): Promise<void> {
     do {
       followUpPollRequested = false;
-      await runPollCycle();
+      // This cycle counts itself, so anything above 1 means an earlier cycle is
+      // still draining its stages.
+      await runPollCycle({ overlapping: activePollCycles > 1 });
     } while (followUpPollRequested);
   }
 
-  activePollPromise = drainPollRequests().finally(() => {
-    activePollPromise = null;
+  activePollCycles += 1;
+  const cyclePromise = drainPollRequests().finally(() => {
+    activePollCycles -= 1;
+    if (activePollPromise === cyclePromise) {
+      activePollPromise = null;
+    }
   });
-  return activePollPromise;
+  activePollPromise = cyclePromise;
+  return cyclePromise;
 }

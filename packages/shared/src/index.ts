@@ -231,6 +231,7 @@ export type { PlannerMode, PlannerFlagDefaults } from "./plannerDefaults.js";
 // Utilities
 export { withTimeout } from "./withTimeout.js";
 export { parseMcpPortSetting, type ParsedMcpPortSetting } from "./mcpPort.js";
+export { internalBroadcastHeaders } from "./internalBroadcast.js";
 
 // Runtime-limit shared helpers
 export {

@@ -6,5 +6,6 @@ Run through this list whenever you touch anything under `packages/mcp/`.
 - [ ] All DB access goes through `@aif/data`. No direct drizzle/SQL imports here.
 - [ ] Validate every tool input with Zod and return structured errors — MCP clients parse them.
 - [ ] Add unit tests for each new tool (happy path + one failure path).
+- [ ] A tool that mutates task state calls `broadcastTaskChange`, and that call sends `internalBroadcastHeaders()` — without them the API answers `401`, so the board never live-updates and the coordinator's wake channel never fires.
 - [ ] `npm run lint`
 - [ ] `npm test`

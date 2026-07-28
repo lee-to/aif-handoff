@@ -41,13 +41,25 @@ const env = getEnv();
 // Ensure DB is ready
 listProjects();
 
-const pollScheduler = startPollScheduler(async () => {
-  try {
-    await pollAndProcess();
-  } catch (err) {
-    log.error({ err }, "Unexpected error in poll cycle");
-  }
-}, env.POLL_INTERVAL_MS);
+// `pollAndProcess()` settles only once every stage the cycle started has
+// finished, and an implementer stage legitimately runs for hours. Letting the
+// scheduler await that promise would hold its re-entrancy guard for the whole
+// run and silently drop every tick in between, leaving WebSocket wake events as
+// the coordinator's only trigger — a task that lands while a stage is running
+// would then wait for an external event instead of the next tick. Bounded
+// overlap is enforced inside pollAndProcess() (free stage slots +
+// MAX_CONCURRENT_POLL_CYCLES), so the tick only has to dispatch.
+const pollScheduler = startPollScheduler(
+  async () => {
+    try {
+      await pollAndProcess();
+    } catch (err) {
+      log.error({ err }, "Unexpected error in poll cycle");
+    }
+  },
+  env.POLL_INTERVAL_MS,
+  { awaitCallback: false },
+);
 
 // Pre-load runtime registry so project init includes all adapters
 bootstrapRuntimeRegistry({

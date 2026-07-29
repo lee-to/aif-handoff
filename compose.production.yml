@@ -12,6 +12,14 @@
 #     на хост, маршрутизация по docker.sock через Traefik labels.
 #   - Bind-mounts: ${HOME}/aif/projects (репо рабочих проектов) + ${HOME}/aif/data
 #     (SQLite, бэкапы). Путь из HOME → одинаков на любом сервере (cattle).
+#
+# Лимиты ресурсов:
+#   Все deploy.resources.limits параметризованы через переменные корневого .env
+#   (вольт env/docker.env). Дефолты рассчитаны на сервер 4 vCPU / 8G RAM.
+#   ВАЖНО: docker daemon ОТВЕРГАЕТ cpus больше числа доступных ядер
+#   ("range of CPUs is from 0.01 to N") — в отличие от memory, где overcommit
+#   разрешён. Поэтому ни один сервис не должен иметь дефолт cpus > 4.
+#   Для более крупного сервера задайте API_CPUS/AGENT_CPUS/... в env/docker.env.
 
 services:
 
@@ -51,8 +59,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4"
-          memory: 3G
+          cpus: "${API_CPUS:-2}"
+          memory: ${API_MEMORY:-2G}
     logging:
       driver: json-file
       options:
@@ -112,8 +120,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 512M
+          cpus: "${WEB_CPUS:-0.5}"
+          memory: ${WEB_MEMORY:-256M}
     logging:
       driver: json-file
       options:
@@ -156,8 +164,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "8"
-          memory: 6G
+          cpus: "${AGENT_CPUS:-2}"
+          memory: ${AGENT_MEMORY:-3G}
     logging:
       driver: json-file
       options:
@@ -197,8 +205,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1"
-          memory: 1G
+          cpus: "${MCP_CPUS:-0.5}"
+          memory: ${MCP_MEMORY:-512M}
     logging:
       driver: json-file
       options:

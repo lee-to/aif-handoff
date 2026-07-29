@@ -367,6 +367,8 @@ export interface SubagentQueryOptions {
   includePartialMessages?: boolean;
   /** Optional max turns for runtime adapters that support it. */
   maxTurns?: number;
+  /** Usage accounting source. Coordinator stages default to SUBAGENT. */
+  usageSource?: UsageSource;
 }
 
 export interface SubagentQueryResult {
@@ -460,9 +462,11 @@ function createRuntimeRegistryLogger(): RuntimeRegistryLogger {
 async function getRuntimeRegistry(): Promise<RuntimeRegistry> {
   if (runtimeRegistryPromise) return runtimeRegistryPromise;
 
+  const env = getEnv();
   runtimeRegistryPromise = bootstrapRuntimeRegistry({
     logger: createRuntimeRegistryLogger(),
-    runtimeModules: getEnv().AIF_RUNTIME_MODULES,
+    runtimeModules: env.AIF_RUNTIME_MODULES,
+    modelEffortDiscoveryEnabled: env.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED,
     usageSink: createDbUsageSink({
       onRecorded: (event) => {
         notifyRuntimeUsageRefresh({
@@ -1068,7 +1072,7 @@ export async function executeSubagentQuery(
         options: context.options,
         execution: executionIntent,
         usageContext: {
-          source: UsageSource.SUBAGENT,
+          source: options.usageSource ?? UsageSource.SUBAGENT,
           projectId: projectIdForUsage,
           taskId,
         },

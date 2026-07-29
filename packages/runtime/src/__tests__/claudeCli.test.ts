@@ -395,8 +395,8 @@ describe("runClaudeCli", () => {
     expect(cliArgs).toContain("claude-opus-4-1");
   });
 
-  it("includes --effort flag when options.effort is set to a valid level", async () => {
-    const input = createInput({ options: { effort: "high" } });
+  it("includes --effort for a fallback level", async () => {
+    const input = createInput({ options: { effort: " High " } });
     const promise = runClaudeCli(input);
 
     simulateStreamAndClose(0, successfulStream({ sessionId: "sess-effort", text: "Done" }));

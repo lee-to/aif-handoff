@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebSocketServer } from "ws";
 
 const createAdaptorServerMock = vi.fn();
 
@@ -33,10 +34,10 @@ describe("startServer", () => {
     process.exitCode = undefined;
   });
 
-  it("injects WebSocket support before listening and logs successful startup", async () => {
+  it("passes WebSocket support to the adapter and logs successful startup", async () => {
     const server = new FakeServer();
     const logger = createLogger();
-    const injectWebSocket = vi.fn();
+    const webSocketServer = { options: { noServer: true } } as unknown as WebSocketServer;
     const onStarted = vi.fn();
 
     createAdaptorServerMock.mockReturnValue(server);
@@ -46,8 +47,40 @@ describe("startServer", () => {
     startServer({
       fetch: vi.fn(),
       port: 3009,
-      injectWebSocket,
+      webSocketServer,
       onStarted,
+      logger,
+    });
+
+    expect(createAdaptorServerMock).toHaveBeenCalledWith({
+      fetch: expect.any(Function),
+      hostname: undefined,
+      websocket: { server: webSocketServer },
+    });
+    expect(logger.debug).toHaveBeenCalledWith(
+      { hostname: undefined, port: 3009 },
+      "WebSocket configured for server",
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      { hostname: undefined, port: 3009 },
+      "API server started",
+    );
+    expect(onStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the legacy WebSocket bridge reachable without adapter WebSocket options", async () => {
+    const server = new FakeServer();
+    const logger = createLogger();
+    const injectWebSocket = vi.fn();
+
+    createAdaptorServerMock.mockReturnValue(server);
+
+    const { startServer } = await import("../serverBootstrap.js");
+
+    startServer({
+      fetch: vi.fn(),
+      port: 3009,
+      injectWebSocket,
       logger,
     });
 
@@ -56,18 +89,10 @@ describe("startServer", () => {
       hostname: undefined,
     });
     expect(injectWebSocket).toHaveBeenCalledWith(server);
-    expect(injectWebSocket.mock.invocationCallOrder[0]).toBeLessThan(
-      server.listen.mock.invocationCallOrder[0],
-    );
     expect(logger.debug).toHaveBeenCalledWith(
       { hostname: undefined, port: 3009 },
-      "WebSocket injected into server",
+      "WebSocket configured for server",
     );
-    expect(logger.info).toHaveBeenCalledWith(
-      { hostname: undefined, port: 3009 },
-      "API server started",
-    );
-    expect(onStarted).toHaveBeenCalledTimes(1);
   });
 
   it("logs an actionable error message when the port is already in use", async () => {
@@ -90,7 +115,6 @@ describe("startServer", () => {
       startServer({
         fetch: vi.fn(),
         port: 3009,
-        injectWebSocket: vi.fn(),
         logger,
       }),
     ).not.toThrow();
@@ -125,7 +149,6 @@ describe("startServer", () => {
       startServer({
         fetch: vi.fn(),
         port: 3009,
-        injectWebSocket: vi.fn(),
         logger,
       }),
     ).not.toThrow();

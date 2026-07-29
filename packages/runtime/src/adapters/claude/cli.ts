@@ -204,7 +204,7 @@ function buildCliArgs(input: RuntimeRunInput): string[] {
   }
 
   // Effort level (low, medium, high, max)
-  const effort = normalizeClaudeEffort(options.effort);
+  const effort = normalizeClaudeEffort(options.effort, options);
   if (effort) {
     args.push("--effort", effort);
   }

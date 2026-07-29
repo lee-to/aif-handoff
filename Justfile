@@ -3,8 +3,8 @@
 # Использование:  just logs api  |  just ps  |  just shell  |  just push-db
 
 # ─── Подключение к серверу ───────────────────────────────────
-ssh_user := "helm-prod"
-ssh_host := "178.104.168.5"
+ssh_user := "observability"
+ssh_host := "157.90.123.67"
 ssh_port := "29504"
 ssh_key  := "~/.ssh/id_ed25519_servers"
 

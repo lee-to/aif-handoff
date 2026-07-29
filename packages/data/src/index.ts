@@ -61,6 +61,7 @@ import {
   type Task,
   type TaskListItem,
   type TaskStatus,
+  type AutoQueueCommitStatus,
   type ProjectTaskOverview,
   type UpdateProjectOrganizationInput,
   resolveRuntimeLimitFutureHint,
@@ -1847,7 +1848,13 @@ export function blockTaskForRuntimeGateIfEligible(input: {
  * Clears `scheduledAt` in the same write so the scheduler can't re-fire a
  * task that auto-queue already advanced (or vice versa).
  */
-export function claimBacklogTaskForAdvance(taskId: string): boolean {
+export function claimBacklogTaskForAdvance(
+  taskId: string,
+  autoQueueCommit?: {
+    status: Extract<AutoQueueCommitStatus, "pending" | "not_applicable">;
+    baseSha: string | null;
+  },
+): boolean {
   const nowIso = new Date().toISOString();
   const result = getDb()
     .update(tasks)
@@ -1862,12 +1869,42 @@ export function claimBacklogTaskForAdvance(taskId: string): boolean {
       reviewIterationCount: 0,
       manualReviewRequired: false,
       autoReviewStateJson: null,
+      ...(autoQueueCommit
+        ? {
+            autoQueueCommitStatus: autoQueueCommit.status,
+            autoQueueCommitBaseSha: autoQueueCommit.baseSha,
+            commitSha: null,
+            autoQueueCommitError: null,
+            autoQueueCommitCompletedAt: null,
+          }
+        : {}),
       lastHeartbeatAt: nowIso,
       updatedAt: nowIso,
     })
     .where(and(eq(tasks.id, taskId), eq(tasks.status, "backlog"), eq(tasks.paused, false)))
     .run();
   return result.changes > 0;
+}
+
+export function hasBlockingAutoQueueCommitForProject(projectId: string): boolean {
+  const row = getDb()
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.projectId, projectId),
+        or(
+          eq(tasks.autoQueueCommitStatus, "failed"),
+          and(
+            inArray(tasks.status, ["done", "verified"]),
+            inArray(tasks.autoQueueCommitStatus, ["pending", "running"]),
+          ),
+        ),
+      ),
+    )
+    .limit(1)
+    .get();
+  return row != null;
 }
 
 /**

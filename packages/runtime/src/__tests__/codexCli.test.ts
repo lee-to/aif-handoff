@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateRuntimeModelEffort } from "../modelEffort.js";
+import type { RuntimeRunInput } from "../types.js";
 import { getCliSpawnInvocation } from "./helpers/cliSpawn.js";
 import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
@@ -100,6 +102,48 @@ describe("codex cli transport", () => {
     expect(result.outputText).toBe("plain output");
     expect(result.sessionId).toBe("session-1");
     expect(result.raw).toBe("plain output");
+  });
+
+  it("passes provider-advertised reasoning effort without a static allowlist", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+    const validation = validateRuntimeModelEffort(
+      createRunInput({ options: { modelReasoningEffort: " Ultra " } }) as RuntimeRunInput,
+      [
+        {
+          id: "gpt-5.4",
+          metadata: {
+            supportsEffort: true,
+            supportedEffortLevels: ["ultra"],
+          },
+        },
+      ],
+    );
+
+    const runPromise = runCodexCli(validation.input);
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args).toContain('model_reasoning_effort="ultra"');
+
+    child.stdout.emit("data", "plain output");
+    child.emit("close", 0);
+
+    await runPromise;
+  });
+
+  it("does not pass an unvalidated reasoning effort", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValueOnce(child);
+
+    const runPromise = runCodexCli(createRunInput({ options: { modelReasoningEffort: "bogus" } }));
+
+    const { cliArgs: args } = getSpawnInvocation();
+    expect(args.join(" ")).not.toContain("model_reasoning_effort");
+
+    child.stdout.emit("data", "plain output");
+    child.emit("close", 0);
+
+    await runPromise;
   });
 
   it("prepends execution.systemPromptAppend to stdin prompt (no --system-prompt CLI flag)", async () => {

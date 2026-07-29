@@ -5,8 +5,8 @@ import type { UserInput } from "./UserInput";
 
 export type TurnSteerParams = {
   threadId: string;
-  input: Array<UserInput>;
-  /**
+  clientUserMessageId?: string | null;
+  input: Array<UserInput>; /**
    * Required active turn id precondition. The request fails when it does not
    * match the currently active turn.
    */

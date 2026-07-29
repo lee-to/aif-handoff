@@ -6,4 +6,10 @@ export type ExternalAgentConfigMigrationItemType =
   | "AGENTS_MD"
   | "CONFIG"
   | "SKILLS"
-  | "MCP_SERVER_CONFIG";
+  | "PLUGINS"
+  | "MCP_SERVER_CONFIG"
+  | "SUBAGENTS"
+  | "HOOKS"
+  | "COMMANDS"
+  | "MEMORY"
+  | "SESSIONS";

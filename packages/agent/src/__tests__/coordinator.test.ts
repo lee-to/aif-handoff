@@ -4,19 +4,25 @@ import { createTestDb } from "@aif/shared/server";
 import { RuntimeExecutionError } from "@aif/runtime";
 import { eq } from "drizzle-orm";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createGitTestRoot } from "./gitTestUtils.js";
 
 // Flag defaults to false (opt-in). Coordinator tests assert on persisted
 // limitSnapshot, which requires the gate to be open.
 process.env.AIF_USAGE_LIMITS_ENABLED = "true";
+process.env.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED = "true";
 resetEnvCache();
 
 // Set up test db
 const testDb = { current: createTestDb() };
 const blockTaskForRuntimeGateIfEligibleMock = vi.fn();
 const claimCoordinatorTaskIfEligibleMock = vi.fn();
+const executeSubagentQueryMock = vi.fn();
+
+function createGitRoot(prefix: string): string {
+  return createGitTestRoot(prefix, { readme: "# auto queue\n" }).rootPath;
+}
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
@@ -40,6 +46,14 @@ vi.mock("@aif/data", async (importOriginal) => {
     claimCoordinatorTaskIfEligible: (
       ...args: Parameters<typeof actual.claimCoordinatorTaskIfEligible>
     ) => claimCoordinatorTaskIfEligibleMock(...args),
+  };
+});
+
+vi.mock("../subagentQuery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../subagentQuery.js")>();
+  return {
+    ...actual,
+    executeSubagentQuery: (...args: unknown[]) => executeSubagentQueryMock(...args),
   };
 });
 
@@ -109,6 +123,7 @@ describe("coordinator", () => {
       .values({ id: "test-project", name: "Test", rootPath: "/tmp/test" })
       .run();
     vi.clearAllMocks();
+    executeSubagentQueryMock.mockResolvedValue({ resultText: "done" });
     resetCoordinatorRuntimeCountersForTests();
     getStageSemaphore().reset();
   });
@@ -171,6 +186,118 @@ describe("coordinator", () => {
     expect(runVerifier).not.toHaveBeenCalled();
     const task = db.select().from(tasks).where(eq(tasks.id, "task-1")).get();
     expect(task!.status).toBe("done");
+  });
+
+  it("commits a completed auto-queue task before the next task can start", async () => {
+    const db = testDb.current;
+    const rootPath = createGitRoot("coordinator-auto-commit-");
+
+    db.insert(projects)
+      .values({
+        id: "auto-commit-project",
+        name: "Auto Commit",
+        rootPath,
+        autoQueueMode: true,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "auto-commit-task-a",
+        projectId: "auto-commit-project",
+        title: "Task A",
+        status: "backlog",
+        position: 100,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "auto-commit-task-b",
+        projectId: "auto-commit-project",
+        title: "Task B",
+        status: "backlog",
+        position: 200,
+      })
+      .run();
+
+    vi.mocked(runImplementer).mockImplementationOnce(async () => {
+      writeFileSync(join(rootPath, "task-a.txt"), "task A\n");
+    });
+    executeSubagentQueryMock.mockImplementationOnce(async (input: { projectRoot: string }) => {
+      execFileSync("git", ["add", "-A"], { cwd: input.projectRoot, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "feat: complete task A"], {
+        cwd: input.projectRoot,
+        stdio: "ignore",
+      });
+      return { resultText: "commit created" };
+    });
+
+    await pollAndProcess();
+
+    const taskA = db.select().from(tasks).where(eq(tasks.id, "auto-commit-task-a")).get();
+    const taskB = db.select().from(tasks).where(eq(tasks.id, "auto-commit-task-b")).get();
+    const status = execFileSync("git", ["status", "--porcelain"], {
+      cwd: rootPath,
+      encoding: "utf8",
+    });
+
+    expect(taskA?.status).toBe("done");
+    expect(taskA?.autoQueueCommitStatus).toBe("committed");
+    expect(taskA?.commitSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(taskB?.status).toBe("backlog");
+    expect(executeSubagentQueryMock).toHaveBeenCalledTimes(1);
+    expect(status).toBe("");
+
+    await pollAndProcess();
+
+    expect(runPlanner).toHaveBeenCalledWith("auto-commit-task-b", rootPath);
+  });
+
+  it("blocks the next auto-queue task when the completion commit is not created", async () => {
+    const db = testDb.current;
+    const rootPath = createGitRoot("coordinator-auto-commit-failure-");
+    db.insert(projects)
+      .values({
+        id: "auto-commit-failure-project",
+        name: "Auto Commit Failure",
+        rootPath,
+        autoQueueMode: true,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "auto-commit-failure-a",
+        projectId: "auto-commit-failure-project",
+        title: "Task A",
+        status: "backlog",
+        position: 100,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "auto-commit-failure-b",
+        projectId: "auto-commit-failure-project",
+        title: "Task B",
+        status: "backlog",
+        position: 200,
+      })
+      .run();
+    vi.mocked(runImplementer).mockImplementationOnce(async () => {
+      writeFileSync(join(rootPath, "task-a.txt"), "task A\n");
+    });
+    executeSubagentQueryMock.mockResolvedValueOnce({ resultText: "did not commit" });
+
+    await pollAndProcess();
+    await pollAndProcess();
+
+    const taskA = db.select().from(tasks).where(eq(tasks.id, "auto-commit-failure-a")).get();
+    const taskB = db.select().from(tasks).where(eq(tasks.id, "auto-commit-failure-b")).get();
+
+    expect(taskA?.status).toBe("blocked_external");
+    expect(taskA?.blockedFromStatus).toBe("review");
+    expect(taskA?.autoQueueCommitStatus).toBe("failed");
+    expect(taskA?.commitSha).toBeNull();
+    expect(taskB?.status).toBe("backlog");
+    expect(runPlanner).not.toHaveBeenCalledWith("auto-commit-failure-b", rootPath);
   });
 
   it("should run optional improve stage only for skills-mode tasks", async () => {
@@ -1569,19 +1696,7 @@ describe("coordinator", () => {
 
   it("should serialize branch-isolated parallel projects while task worktrees are disabled", async () => {
     const db = testDb.current;
-    const rootPath = mkdtempSync(join(tmpdir(), "coordinator-branch-isolated-"));
-    execFileSync("git", ["init", "--initial-branch=main"], { cwd: rootPath, stdio: "ignore" });
-    execFileSync("git", ["config", "user.email", "t@t.local"], {
-      cwd: rootPath,
-      stdio: "ignore",
-    });
-    execFileSync("git", ["config", "user.name", "T"], { cwd: rootPath, stdio: "ignore" });
-    writeFileSync(join(rootPath, "README.md"), "# t\n");
-    execFileSync("git", ["add", "README.md"], { cwd: rootPath, stdio: "ignore" });
-    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
-      cwd: rootPath,
-      stdio: "ignore",
-    });
+    const rootPath = createGitTestRoot("coordinator-branch-isolated-").rootPath;
 
     db.insert(projects)
       .values({
@@ -1614,6 +1729,46 @@ describe("coordinator", () => {
       ([, calledRoot]: [string, string]) => calledRoot === rootPath,
     );
     expect(plannerCalls).toHaveLength(1);
+  });
+
+  it("should preserve parallel execution for a non-auto-queue project sharing one Git worktree", async () => {
+    const db = testDb.current;
+    const rootPath = createGitTestRoot("coordinator-manual-shared-git-", {
+      configYaml: "git:\n  create_branches: false\n",
+    }).rootPath;
+
+    db.insert(projects)
+      .values({
+        id: "parallel-manual-git",
+        name: "Parallel Manual Git",
+        rootPath,
+        parallelEnabled: true,
+        autoQueueMode: false,
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "manual-git-task-1",
+        projectId: "parallel-manual-git",
+        title: "T1",
+        status: "planning",
+      })
+      .run();
+    db.insert(tasks)
+      .values({
+        id: "manual-git-task-2",
+        projectId: "parallel-manual-git",
+        title: "T2",
+        status: "planning",
+      })
+      .run();
+
+    await pollAndProcess();
+
+    const plannerCalls = (runPlanner as any).mock.calls.filter(
+      ([, calledRoot]: [string, string]) => calledRoot === rootPath,
+    );
+    expect(plannerCalls).toHaveLength(2);
   });
 
   it("should process only 1 task at a time for non-parallel project", async () => {

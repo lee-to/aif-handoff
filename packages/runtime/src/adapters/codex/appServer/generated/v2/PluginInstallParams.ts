@@ -4,10 +4,7 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 
 export type PluginInstallParams = {
-  marketplacePath: AbsolutePathBuf;
+  marketplacePath?: AbsolutePathBuf | null;
+  remoteMarketplaceName?: string | null;
   pluginName: string;
-  /**
-   * When true, apply the remote plugin change before the local install flow.
-   */
-  forceRemoteSync?: boolean;
 };

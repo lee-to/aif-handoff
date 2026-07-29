@@ -13,7 +13,9 @@ import {
   describeDirtyWorkingTree,
   ensureFeatureBranch,
   ensureTaskWorktree,
+  countCommitsBetween,
   getCurrentBranch,
+  getHeadCommitSha,
   isBranchIsolationError,
   isGitRepo,
   projectUsesSharedBranchIsolation,
@@ -85,14 +87,29 @@ describe("gitIsolation", () => {
     "detects git repository and current branch state",
     () => {
       expect(isGitRepo(projectRoot)).toBe(false);
+      expect(getHeadCommitSha(projectRoot)).toBeNull();
 
       initRepo(projectRoot);
 
+      const baseSha = getHeadCommitSha(projectRoot);
       expect(isGitRepo(projectRoot)).toBe(true);
+      expect(baseSha).toMatch(/^[0-9a-f]{40}$/);
       expect(getCurrentBranch(projectRoot)).toBe("main");
       expect(branchExists(projectRoot, "main")).toBe(true);
       expect(workingTreeClean(projectRoot)).toBe(true);
       expect(describeDirtyWorkingTree(projectRoot)).toBeNull();
+
+      writeFileSync(join(projectRoot, "next.txt"), "next\n");
+      git(projectRoot, ["add", "next.txt"]);
+      git(projectRoot, ["commit", "-m", "test: next commit"]);
+      const headSha = getHeadCommitSha(projectRoot);
+
+      expect(headSha).toMatch(/^[0-9a-f]{40}$/);
+      if (!baseSha || !headSha) {
+        throw new Error("Expected committed Git repository to have base and head SHAs");
+      }
+      expect(countCommitsBetween(projectRoot, baseSha, headSha)).toBe(1);
+      expect(countCommitsBetween(projectRoot, "invalid", headSha)).toBeNull();
     },
     GIT_TEST_TIMEOUT_MS,
   );

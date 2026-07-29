@@ -13,6 +13,14 @@ export const TASK_STATUSES = [
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
+export type AutoQueueCommitStatus =
+  | "pending"
+  | "running"
+  | "committed"
+  | "no_changes"
+  | "not_applicable"
+  | "failed";
+
 export const AUTO_REVIEW_STRATEGIES = ["full_re_review", "closure_first"] as const;
 
 export type AutoReviewStrategy = (typeof AUTO_REVIEW_STRATEGIES)[number];
@@ -164,6 +172,11 @@ export interface Task {
   scheduledAt: string | null;
   branchName: string | null;
   worktreePath: string | null;
+  autoQueueCommitStatus?: AutoQueueCommitStatus | null;
+  autoQueueCommitBaseSha?: string | null;
+  commitSha?: string | null;
+  autoQueueCommitError?: string | null;
+  autoQueueCommitCompletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

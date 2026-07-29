@@ -19,7 +19,36 @@ export type PluginInterface = {
    */
   defaultPrompt: Array<string> | null;
   brandColor: string | null;
+  /**
+   * Local composer icon path, resolved from the installed plugin package.
+   */
   composerIcon: AbsolutePathBuf | null;
+  /**
+   * Remote composer icon URL from the plugin catalog.
+   */
+  composerIconUrl: string | null;
+  /**
+   * Local logo path, resolved from the installed plugin package.
+   */
   logo: AbsolutePathBuf | null;
+  /**
+   * Local dark-mode logo path, resolved from the installed plugin package.
+   */
+  logoDark: AbsolutePathBuf | null;
+  /**
+   * Remote logo URL from the plugin catalog.
+   */
+  logoUrl: string | null;
+  /**
+   * Remote dark-mode logo URL from the plugin catalog.
+   */
+  logoUrlDark: string | null;
+  /**
+   * Local screenshot paths, resolved from the installed plugin package.
+   */
   screenshots: Array<AbsolutePathBuf>;
+  /**
+   * Remote screenshot URLs from the plugin catalog.
+   */
+  screenshotUrls: Array<string>;
 };

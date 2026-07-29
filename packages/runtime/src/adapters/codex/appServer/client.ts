@@ -60,6 +60,7 @@ export class CodexAppServerClient {
       },
       capabilities: {
         experimentalApi: false,
+        requestAttestation: false,
       },
     });
     return await this.request("model/list", params);
@@ -127,6 +128,7 @@ export class CodexAppServerClient {
       },
       capabilities: {
         experimentalApi: false,
+        requestAttestation: false,
       },
     });
   }

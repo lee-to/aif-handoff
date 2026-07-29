@@ -211,7 +211,7 @@ POST /projects
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Project name (1-200 chars) |
-| `rootPath` | string | yes | Absolute path to project root |
+| `rootPath` | string | yes | Absolute path to project root, for example `/Users/me/projects/my-project`. With Docker, paths outside `PROJECTS_MOUNT` are resolved below that mount |
 | `plannerMaxBudgetUsd` | number | no | Budget for planner agent. If omitted, unlimited |
 | `planCheckerMaxBudgetUsd` | number | no | Budget for plan-checker agent. If omitted, unlimited |
 | `implementerMaxBudgetUsd` | number | no | Budget for implementer agent. If omitted, unlimited |
@@ -349,7 +349,14 @@ Returns the current auto-queue state for the project. When enabled, the
 coordinator advances the next backlog task with the smallest `position` into
 planning whenever the project has no active/locked task. Ordinary `POST /tasks`
 creation appends new backlog rows to the tail of that project's backlog, so the
-default create path is FIFO.
+default create path is FIFO. When
+`AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED=true`, a Git task does not become
+terminal until its local completion commit is verified. The resulting SHA is
+exposed as `commitSha`; `autoQueueCommitStatus` reports `committed`,
+`no_changes`, `not_applicable`, or a non-terminal/failure state. A failed
+commit moves the task to `blocked_external` and prevents the next queued task
+from starting. The flag defaults to `false`, which preserves legacy terminal
+transitions and queue concurrency.
 
 **Response:** `200 OK`
 
@@ -376,7 +383,10 @@ clients can update their board indicator.
 
 Parallel auto-queue with `git.create_branches=true` requires
 `AIF_TASK_WORKTREES_ENABLED=true`. Queued full-mode tasks then receive isolated
-git worktrees when planning starts.
+git worktrees when planning starts. Git projects without isolated task
+worktrees are processed serially while the completion-commit flag is enabled,
+preserving task-scoped commit boundaries. Non-auto-queue projects retain their
+existing concurrency behavior.
 
 ### Get Project Warmup State
 

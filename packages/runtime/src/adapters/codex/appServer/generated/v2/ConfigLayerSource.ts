@@ -14,12 +14,30 @@ export type ConfigLayerSource =
       file: AbsolutePathBuf;
     }
   | {
+      type: "enterpriseManaged";
+      /**
+       * Stable identifier for the delivered layer.
+       */
+      id: string;
+      /**
+       * Admin-facing name for the delivered layer. This is surfaced in
+       * diagnostics so users know which cloud layer needs administrator
+       * attention.
+       */
+      name: string;
+    }
+  | {
       type: "user";
       /**
        * This is the path to the user's config.toml file, though it is not
        * guaranteed to exist.
        */
       file: AbsolutePathBuf;
+      /**
+       * Name of the selected profile-v2 config layered on top of the base
+       * user config, when this layer represents one.
+       */
+      profile: string | null;
     }
   | { type: "project"; dotCodexFolder: AbsolutePathBuf }
   | { type: "sessionFlags" }

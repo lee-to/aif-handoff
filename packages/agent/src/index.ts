@@ -52,6 +52,7 @@ const pollScheduler = startPollScheduler(async () => {
 // Pre-load runtime registry so project init includes all adapters
 bootstrapRuntimeRegistry({
   runtimeModules: env.AIF_RUNTIME_MODULES,
+  modelEffortDiscoveryEnabled: env.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED,
   usageSink: createDbUsageSink({
     onRecorded: (event) => {
       if (!event.context.projectId || !event.profileId) return;

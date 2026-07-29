@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateRuntimeModelEffort } from "../modelEffort.js";
+import type { RuntimeRunInput } from "../types.js";
 import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 const queryMock = vi.fn();
@@ -120,7 +122,7 @@ function discoverySession(
     displayName: string;
     description: string;
     supportsEffort?: boolean;
-    supportedEffortLevels?: Array<"low" | "medium" | "high" | "max">;
+    supportedEffortLevels?: string[];
     supportsAdaptiveThinking?: boolean;
     supportsFastMode?: boolean;
     supportsAutoMode?: boolean;
@@ -639,7 +641,7 @@ describe("Claude runtime adapter", () => {
           displayName: "Claude Sonnet 4.6",
           description: "Balanced model",
           supportsEffort: true,
-          supportedEffortLevels: ["low", "medium", "high"],
+          supportedEffortLevels: ["low", " Ultra ", "low"],
           supportsAdaptiveThinking: true,
         },
       ]),
@@ -660,12 +662,34 @@ describe("Claude runtime adapter", () => {
         metadata: {
           description: "Balanced model",
           supportsEffort: true,
-          supportedEffortLevels: ["low", "medium", "high"],
+          supportedEffortLevels: ["low", "ultra"],
           supportsAdaptiveThinking: true,
         },
       },
     ]);
     expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves explicit lack of Claude effort support", async () => {
+    queryMock.mockImplementation(() =>
+      discoverySession([
+        {
+          value: "claude-basic",
+          displayName: "Claude Basic",
+          description: "No effort control",
+          supportsEffort: false,
+        },
+      ]),
+    );
+    const adapter = createClaudeRuntimeAdapter();
+
+    const models = await adapter.listModels!({
+      runtimeId: "claude",
+      providerId: "anthropic",
+      profileId: "profile-1",
+    });
+
+    expect(models[0]?.metadata).toMatchObject({ supportsEffort: false });
   });
 
   it("forwards temporary API key input into Claude model discovery env", async () => {
@@ -887,25 +911,34 @@ describe("Claude runtime adapter", () => {
     expect(serializedLogs).not.toContain("secret prompt text");
   });
 
-  it("forwards effort to Claude query options", async () => {
+  it("forwards provider-advertised effort to Claude query options", async () => {
     queryMock.mockImplementation(immediateSuccess("effort-ok"));
     const adapter = createClaudeRuntimeAdapter();
-
-    const result = await adapter.run(
+    const validation = validateRuntimeModelEffort(
       createRunInput({
         model: "sonnet",
         options: {
           apiKeyEnvVar: "ANTHROPIC_API_KEY",
-          effort: "high",
+          effort: " Ultra ",
         },
-      }),
+      }) as RuntimeRunInput,
+      [
+        {
+          id: "sonnet",
+          metadata: {
+            supportsEffort: true,
+            supportedEffortLevels: ["ultra"],
+          },
+        },
+      ],
     );
+    const result = await adapter.run(validation.input);
 
     expect(result.outputText).toBe("effort-ok");
     expect(queryMock).toHaveBeenCalledTimes(1);
     const call = queryMock.mock.calls[0][0];
     expect(call.options.model).toBe("sonnet");
-    expect(call.options.effort).toBe("high");
+    expect(call.options.effort).toBe("ultra");
   });
 
   it("forwards profile.options.environment to Claude SDK env with documented precedence", async () => {

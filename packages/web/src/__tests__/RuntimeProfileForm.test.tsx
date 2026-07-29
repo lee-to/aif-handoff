@@ -72,7 +72,7 @@ describe("RuntimeProfileForm", () => {
     vi.useRealTimers();
   });
 
-  it("uses runtime default transport, keeps manual model input, and stores codex effort separately", async () => {
+  it("uses effort levels discovered for the selected Codex model", async () => {
     vi.useFakeTimers();
     mockRuntimeModels.mutateAsync.mockResolvedValue({
       models: [
@@ -80,7 +80,7 @@ describe("RuntimeProfileForm", () => {
           id: "gpt-5.4",
           label: "GPT-5.4",
           metadata: {
-            supportedEffortLevels: ["minimal", "low", "medium", "high", "xhigh"],
+            supportedEffortLevels: ["low", "medium", "high", "max", "ultra"],
           },
         },
       ],
@@ -123,12 +123,9 @@ describe("RuntimeProfileForm", () => {
     expect(screen.getByDisplayValue("gpt-5.4")).toBeInTheDocument();
     vi.useRealTimers();
 
-    fireEvent.change(screen.getByDisplayValue("gpt-5.4"), {
-      target: { value: "gpt-5.4-custom" },
-    });
-
     fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
-    fireEvent.click(screen.getByRole("button", { name: "XHIGH" }));
+    expect(screen.queryByRole("button", { name: "XHIGH" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "ULTRA" }));
     fireEvent.click(screen.getByRole("button", { name: /create profile/i }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -138,12 +135,143 @@ describe("RuntimeProfileForm", () => {
         runtimeId: "codex",
         providerId: "openai",
         transport: "cli",
-        defaultModel: "gpt-5.4-custom",
+        defaultModel: "gpt-5.4",
         options: {
-          modelReasoningEffort: "xhigh",
+          modelReasoningEffort: "ultra",
         },
       }),
     );
+  });
+
+  it("recomputes effort levels when the selected model changes", async () => {
+    mockRuntimeModels.mutateAsync.mockResolvedValue({
+      models: [
+        {
+          id: "model-a",
+          label: "Model A",
+          metadata: {
+            supportedEffortLevels: ["low", "ultra"],
+          },
+        },
+        {
+          id: "model-b",
+          label: "Model B",
+          metadata: {
+            supportedEffortLevels: ["medium", "max"],
+          },
+        },
+      ],
+      profile: {},
+    });
+    const onSubmit = vi.fn();
+
+    render(
+      <RuntimeProfileForm
+        mode="create"
+        projectId={null}
+        runtimes={[
+          createRuntimeDescriptor({
+            id: "codex",
+            providerId: "openai",
+            displayName: "Codex",
+            defaultTransport: "cli",
+            defaultApiKeyEnvVar: "OPENAI_API_KEY",
+            defaultModelPlaceholder: "model-a",
+            supportedTransports: ["cli"],
+          }),
+        ]}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByDisplayValue("model-a")).toBeInTheDocument());
+    expect(screen.getByText("Levels for model-a: low, ultra")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
+    fireEvent.click(screen.getByRole("button", { name: "ULTRA" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model A (model-a)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model B (model-b)" }));
+
+    expect(screen.getByText("Levels for model-b: medium, max")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
+    expect(screen.getByRole("button", { name: "MAX" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ULTRA" })).toBeNull();
+
+    fireEvent.click(screen.getAllByRole("button", { name: /runtime default/i })[1]);
+    fireEvent.click(screen.getByRole("button", { name: /create profile/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultModel: "model-b",
+        options: {},
+      }),
+    );
+  });
+
+  it("uses the runtime fallback when model effort metadata is unavailable", async () => {
+    mockRuntimeModels.mutateAsync.mockResolvedValue({
+      models: [{ id: "gpt-unknown", label: "GPT Unknown" }],
+      profile: {},
+    });
+
+    render(
+      <RuntimeProfileForm
+        mode="create"
+        projectId={null}
+        runtimes={[
+          createRuntimeDescriptor({
+            id: "codex",
+            providerId: "openai",
+            displayName: "Codex",
+            defaultTransport: "cli",
+            defaultApiKeyEnvVar: "OPENAI_API_KEY",
+            defaultModelPlaceholder: "gpt-unknown",
+            supportedTransports: ["cli"],
+          }),
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByDisplayValue("gpt-unknown")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
+    expect(screen.getByRole("button", { name: "XHIGH" })).toBeInTheDocument();
+  });
+
+  it("hides effort when the selected model explicitly does not support it", async () => {
+    mockRuntimeModels.mutateAsync.mockResolvedValue({
+      models: [
+        {
+          id: "non-reasoning",
+          label: "Non Reasoning",
+          metadata: { supportsEffort: false },
+        },
+      ],
+      profile: {},
+    });
+
+    render(
+      <RuntimeProfileForm
+        mode="create"
+        projectId={null}
+        runtimes={[
+          createRuntimeDescriptor({
+            id: "openrouter",
+            providerId: "openrouter",
+            displayName: "OpenRouter",
+            defaultTransport: "api",
+            defaultApiKeyEnvVar: "OPENROUTER_API_KEY",
+            defaultModelPlaceholder: "non-reasoning",
+            supportedTransports: ["api"],
+          }),
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByDisplayValue("non-reasoning")).toBeInTheDocument());
+    expect(screen.queryByText(/^Effort$/)).toBeNull();
   });
 
   it("allows selecting codex app-server transport from runtime-supported transport options", async () => {

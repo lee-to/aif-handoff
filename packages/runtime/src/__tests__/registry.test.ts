@@ -15,10 +15,13 @@ import {
   resolveRuntimeModuleRegistrar,
   UsageReporting,
   UsageSource,
+  RuntimeTransport,
   type RuntimeAdapter,
+  type RuntimeRunInput,
   type RuntimeUsageEvent,
   type RuntimeUsageSink,
 } from "../index.js";
+import { CODEX_MODEL_EFFORT_LEVELS, resolveModelEffortOption } from "../modelEffort.js";
 import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
 function createAdapter(runtimeId: string, providerId = "provider"): RuntimeAdapter {
@@ -85,6 +88,227 @@ describe("RuntimeRegistry", () => {
     expect(registry.tryResolveRuntime("missing")).toBeNull();
     expect(registry.listRuntimes().map((item) => item.id)).toEqual(["Claude", "codex"]);
     expect(logger.debug).toHaveBeenCalled();
+  });
+
+  it("validates dynamic effort against cached selected-model metadata", async () => {
+    const listModels = vi.fn(async () => [
+      {
+        id: "gpt-current",
+        metadata: {
+          supportsEffort: true,
+          supportedEffortLevels: ["ultra"],
+        },
+      },
+    ]);
+    const run = vi.fn(async (input: RuntimeRunInput) => {
+      expect(
+        resolveModelEffortOption(
+          input.options ?? {},
+          "modelReasoningEffort",
+          CODEX_MODEL_EFFORT_LEVELS,
+        ),
+      ).toBe("ultra");
+      return { outputText: "ok", usage: null };
+    });
+    const registry = createRuntimeRegistry({
+      modelEffortDiscoveryEnabled: true,
+      builtInAdapters: [
+        {
+          descriptor: {
+            id: "codex",
+            providerId: "openai",
+            displayName: "Codex",
+            capabilities: {
+              ...DEFAULT_RUNTIME_CAPABILITIES,
+              supportsModelDiscovery: true,
+            },
+          },
+          listModels,
+          run,
+        },
+      ],
+    });
+    const adapter = registry.resolveRuntime("codex");
+    const input = {
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+      transport: RuntimeTransport.CLI,
+      prompt: "run",
+      model: "gpt-current",
+      options: { modelReasoningEffort: " Ultra " },
+      usageContext: TEST_USAGE_CONTEXT,
+    };
+
+    await adapter.run(input);
+    await adapter.run(input);
+
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.not.objectContaining({
+          modelReasoningEffort: expect.anything(),
+        }),
+      }),
+    );
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops stale effort with a structured warning before adapter execution", async () => {
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    const run = vi.fn(async (input: RuntimeRunInput) => {
+      expect(input.options).not.toHaveProperty("modelReasoningEffort");
+      return { outputText: "ok", usage: null };
+    });
+    const registry = createRuntimeRegistry({
+      logger,
+      modelEffortDiscoveryEnabled: true,
+      builtInAdapters: [
+        {
+          descriptor: {
+            id: "codex",
+            providerId: "openai",
+            displayName: "Codex",
+            capabilities: {
+              ...DEFAULT_RUNTIME_CAPABILITIES,
+              supportsModelDiscovery: true,
+            },
+          },
+          async listModels() {
+            return [
+              {
+                id: "gpt-current",
+                metadata: {
+                  supportsEffort: true,
+                  supportedEffortLevels: ["low", "high"],
+                },
+              },
+            ];
+          },
+          run,
+        },
+      ],
+    });
+
+    await registry.resolveRuntime("codex").run({
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+      transport: RuntimeTransport.CLI,
+      prompt: "run",
+      model: "gpt-current",
+      options: { modelReasoningEffort: "bogus" },
+      usageContext: TEST_USAGE_CONTEXT,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuredEffort: "bogus",
+        model: "gpt-current",
+        reasonCode: "unsupported_model_effort",
+        validationSource: "discovery",
+      }),
+      "Ignoring unsupported runtime model effort",
+    );
+  });
+
+  it("uses the fallback allowlist when model discovery is unavailable", async () => {
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    const run = vi.fn(async (input: RuntimeRunInput) => {
+      expect(
+        resolveModelEffortOption(
+          input.options ?? {},
+          "modelReasoningEffort",
+          CODEX_MODEL_EFFORT_LEVELS,
+        ),
+      ).toBe("high");
+      return { outputText: "ok", usage: null };
+    });
+    const registry = createRuntimeRegistry({
+      logger,
+      modelEffortDiscoveryEnabled: true,
+      builtInAdapters: [
+        {
+          descriptor: {
+            id: "codex",
+            providerId: "openai",
+            displayName: "Codex",
+            capabilities: {
+              ...DEFAULT_RUNTIME_CAPABILITIES,
+              supportsModelDiscovery: true,
+            },
+          },
+          async listModels() {
+            throw new Error("discovery failed");
+          },
+          run,
+        },
+      ],
+    });
+
+    await registry.resolveRuntime("codex").run({
+      runtimeId: "codex",
+      providerId: "openai",
+      profileId: "profile-1",
+      transport: RuntimeTransport.CLI,
+      prompt: "run",
+      model: "gpt-current",
+      options: { modelReasoningEffort: "high" },
+      usageContext: TEST_USAGE_CONTEXT,
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-current",
+        reasonCode: "model_effort_discovery_unavailable",
+      }),
+      "Runtime model effort discovery was unavailable; using fallback allowlist",
+    );
+  });
+
+  it("hides dynamic effort metadata while the rollout flag is disabled", async () => {
+    const adapter = createAdapter("codex", "openai");
+    adapter.descriptor.capabilities.supportsModelDiscovery = true;
+    adapter.listModels = async () => [
+      {
+        id: "gpt-current",
+        metadata: {
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "ultra"],
+          defaultEffort: "low",
+          contextLength: 200_000,
+        },
+      },
+    ];
+    const registry = createRuntimeRegistry({
+      builtInAdapters: [adapter],
+      modelEffortDiscoveryEnabled: false,
+    });
+    const resolvedAdapter = registry.resolveRuntime("codex");
+    if (!resolvedAdapter.listModels) {
+      throw new Error("Codex listModels wrapper is missing");
+    }
+
+    await expect(
+      resolvedAdapter.listModels({
+        runtimeId: "codex",
+        providerId: "openai",
+      }),
+    ).resolves.toEqual([
+      {
+        id: "gpt-current",
+        metadata: {
+          contextLength: 200_000,
+        },
+      },
+    ]);
   });
 
   it("throws for duplicate runtime registration without replace", () => {

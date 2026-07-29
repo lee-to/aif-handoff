@@ -20,8 +20,11 @@ describe("Turbo environment passthrough", () => {
     const documentedFeatureFlags = [...new Set(docs.match(/AIF_[A-Z0-9_]+_ENABLED/g) ?? [])].sort();
 
     expect(documentedFeatureFlags).toEqual([
+      "AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED",
+      "AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED",
       "AIF_QA_PIPELINE_ENABLED",
       "AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED",
+      "AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED",
       "AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED",
       "AIF_RUNTIME_SESSION_FORK_ENABLED",
       "AIF_STAGE_RUNTIME_PIN_ENABLED",

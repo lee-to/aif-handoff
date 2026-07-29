@@ -4,11 +4,20 @@
 
 export type ExternalAgentConfigDetectParams = {
   /**
-   * If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
+   * If true, include detection under the user's home directory.
    */
   includeHome?: boolean;
   /**
    * Zero or more working directories to include for repo-scoped detection.
    */
   cwds?: Array<string> | null;
+  /**
+   * Deprecated field retained for compatibility. This field is ignored; use `migrationSource`
+   * to select the migration source.
+   */
+  source?: string | null;
+  /**
+   * Optional migration-source selector. Missing or unrecognized values use the default source.
+   */
+  migrationSource?: string | null;
 };

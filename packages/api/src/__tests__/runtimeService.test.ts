@@ -20,6 +20,7 @@ const mockGetEnv = vi.fn(() => ({
   AIF_DEFAULT_RUNTIME_ID: "claude",
   AIF_DEFAULT_PROVIDER_ID: "anthropic",
   AIF_USAGE_LIMITS_ENABLED: true,
+  AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: false,
   API_RUNTIME_START_TIMEOUT_MS: 60_000,
   API_RUNTIME_RUN_TIMEOUT_MS: 120_000,
 }));
@@ -229,6 +230,7 @@ describe("runtime service", () => {
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
       AIF_USAGE_LIMITS_ENABLED: true,
+      AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: true,
       API_RUNTIME_START_TIMEOUT_MS: 60_000,
       API_RUNTIME_RUN_TIMEOUT_MS: 120_000,
     });
@@ -253,6 +255,7 @@ describe("runtime service", () => {
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
       AIF_USAGE_LIMITS_ENABLED: true,
+      AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: true,
       API_RUNTIME_START_TIMEOUT_MS: 60_000,
       API_RUNTIME_RUN_TIMEOUT_MS: 120_000,
     });
@@ -263,6 +266,7 @@ describe("runtime service", () => {
     expect(mockBootstrapRuntimeRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         runtimeModules: ["@org/runtime-a", "file:///runtime-b.mjs"],
+        modelEffortDiscoveryEnabled: true,
       }),
     );
   });
@@ -704,6 +708,7 @@ describe("runtime service", () => {
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",
       AIF_USAGE_LIMITS_ENABLED: true,
+      AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: true,
       API_RUNTIME_START_TIMEOUT_MS: 90_000,
       API_RUNTIME_RUN_TIMEOUT_MS: 240_000,
     });

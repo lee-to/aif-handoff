@@ -10,4 +10,11 @@ export type ThreadListResponse = {
    * if None, there are no more items to return.
    */
   nextCursor: string | null;
+  /**
+   * Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+   * This is only populated when the page contains at least one thread.
+   * Use it with the opposite `sortDirection`; for timestamp sorts it anchors
+   * at the start of the page timestamp so same-second updates are not skipped.
+   */
+  backwardsCursor: string | null;
 };

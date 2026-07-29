@@ -189,7 +189,7 @@ export function createOpenRouterRuntimeAdapter(
 
     async listModels(input: RuntimeModelListInput): Promise<RuntimeModel[]> {
       try {
-        const models = await listOpenRouterApiModels(input);
+        const models = await listOpenRouterApiModels(input, logger);
         if (models.length > 0) {
           logger.debug?.(
             {

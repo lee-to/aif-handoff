@@ -69,6 +69,21 @@ The API exposes effective selection endpoints:
 
 Capabilities are **transport-aware**: the same adapter may expose different capabilities depending on the selected transport. For example, Codex supports resume on SDK/CLI/App Server, session fork only on App Server, and session discovery on SDK/App Server. Use `resolveAdapterCapabilities(adapter, transport)` to get the effective set.
 
+### Model-specific effort discovery
+
+Reasoning effort is model metadata, not a runtime-wide enum. The profile form reads the supported values from the currently selected model:
+
+| Runtime    | Discovery source                             | Profile option         |
+| ---------- | -------------------------------------------- | ---------------------- |
+| Claude     | Agent SDK `supportedModels()`                | `effort`               |
+| Codex      | App Server `model/list` reasoning efforts    | `modelReasoningEffort` |
+| OpenCode   | Provider model `variants[*].reasoningEffort` | `reasoningEffort`      |
+| OpenRouter | `/models` `reasoning.supported_efforts`      | `effort`               |
+
+The rollout is controlled by `AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED=false`. While disabled, the profile form and execution paths keep the stable runtime-specific allowlists. When enabled, adapters normalize and deduplicate provider-advertised values, a model with `supportsEffort: false` hides the control, and execution validates the persisted value against cached metadata for the selected model. If metadata is unavailable, execution retains the runtime-specific fallback allowlist. Stale or unsupported profile values are ignored with a structured warning before any provider request is built.
+
+OpenRouter reports `reasoning.supported_efforts: null` when a model accepts every gateway effort value. In discovery mode this expands to `max`, `xhigh`, `high`, `medium`, `low`, `minimal`, and `none`; the flag-off fallback remains unchanged.
+
 ### Runtime Proxy Support
 
 All built-in runtime adapters understand `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` plus lowercase variants. SDK/CLI/App Server transports receive these variables in their curated child-process environment. API transports use an undici dispatcher directly, so native Node `fetch` does not silently bypass the configured proxy.
@@ -256,7 +271,7 @@ SDK-specific options:
 - `codexConfig` — JSON object of CLI config overrides (flattened to `--config` flags)
 - `sandboxMode` — one of `read-only`, `workspace-write`, `danger-full-access`
 - `approvalPolicy` — one of `untrusted`, `on-failure`, `on-request`, `never`
-- `modelReasoningEffort` — one of `minimal`, `low`, `medium`, `high`, `xhigh`
+- `modelReasoningEffort` — a reasoning effort advertised by the selected model; the UI discovers the available values at runtime
 - `codexSubagentStrategy` — `native` or `isolated`; native Codex subagents are additionally gated by `AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED=true` and required `.codex` assets on disk. Leave unset or use `isolated` to keep the legacy fresh-session skill workflow.
 - `skipGitRepoCheck` — bypass the Codex guard that refuses to run outside a git repo (SDK, App Server, and CLI)
 
@@ -315,7 +330,7 @@ App Server operational notes:
 - Does not add a transport-local hard run timeout. Long-running stages are governed by the shared runtime execution config; `options.appServerRequestTimeoutMs` only controls individual JSONL RPC request waits.
 - Human approval bridging is not implemented yet. App Server approval requests, including command, file-change, permissions, apply-patch, and exec-command requests, are denied by design and surfaced as permission failures/events; App Server therefore reports `supportsApprovals: false` even though approval request events are observable. Unattended App Server profiles should use `approvalPolicy="never"` only when the caller has intentionally accepted that trust level.
 - Session list APIs are supported through `thread/list` and `thread/read`; AIF stores Codex thread IDs as runtime session IDs for resume.
-- Docker images must have the `codex` executable on `PATH` or set `CODEX_CLI_PATH`; they mount persistent `~/.codex` auth state (`codex-auth` volume).
+- Docker images resolve the Codex SDK and its matching CLI during image build using `CODEX_VERSION` (`0.145.0` by default, with npm dist-tags, exact versions, and semver ranges supported as explicit overrides). The bundled executable is placed on `PATH` and selected through `CODEX_CLI_PATH`; containers mount persistent `~/.codex` auth state (`codex-auth` volume).
 - On Windows, configured `codexCliPath` / `CODEX_CLI_PATH` values are treated as executable paths or shim names, not shell snippets. Values containing command-shell metacharacters are rejected before spawn.
 
 ### Codex (API transport)
@@ -442,6 +457,7 @@ OpenRouter-specific options:
 - `httpReferer` — URL of your app, used for OpenRouter rankings and rate limit priority
 - `appTitle` — app name shown in OpenRouter dashboard (defaults to `AIF Handoff`)
 - `baseUrl` — custom endpoint (defaults to `https://openrouter.ai/api/v1`)
+- `effort` — a reasoning effort advertised for the selected model by the `/models` response
 
 Environment variables:
 
@@ -476,6 +492,7 @@ OpenCode-specific options:
 - `serverUsername` — Basic auth username for protected servers (defaults to `opencode`)
 - `serverPassword` — Basic auth password for protected servers (or set `OPENCODE_SERVER_PASSWORD`)
 - `timeoutMs` — Request timeout override for OpenCode API calls
+- `reasoningEffort` — a value derived from the selected model's OpenCode variants
 
 Environment variables:
 

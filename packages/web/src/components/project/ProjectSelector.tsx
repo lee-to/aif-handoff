@@ -626,8 +626,8 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
                 className="font-mono text-sm"
               />
               <p className="mt-1 text-xs text-muted-foreground">
-                Absolute path where agents will create files. In Docker, host paths under
-                PROJECTS_DIR are saved as the mounted container path.
+                Absolute path where agents will create files. In Docker, paths are stored under
+                PROJECTS_MOUNT; host paths under PROJECTS_DIR use the same mount.
               </p>
             </div>
             {dialogMode === "edit" && (

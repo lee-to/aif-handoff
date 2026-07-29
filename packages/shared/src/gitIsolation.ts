@@ -164,6 +164,23 @@ export function getCurrentBranch(projectRoot: string): string | null {
   return stdout;
 }
 
+export function getHeadCommitSha(projectRoot: string): string | null {
+  const { stdout, status } = runGit(projectRoot, ["rev-parse", "--verify", "HEAD"], {
+    ignoreExit: true,
+  });
+  return status === 0 && stdout ? stdout : null;
+}
+
+export function countCommitsBetween(
+  projectRoot: string,
+  baseSha: string,
+  headSha: string,
+): number | null {
+  const { stdout, status } = runGit(projectRoot, ["rev-list", "--count", `${baseSha}..${headSha}`]);
+  if (status !== 0 || !/^\d+$/.test(stdout)) return null;
+  return Number.parseInt(stdout, 10);
+}
+
 export function branchExists(projectRoot: string, branchName: string): boolean {
   const { status } = runGit(
     projectRoot,

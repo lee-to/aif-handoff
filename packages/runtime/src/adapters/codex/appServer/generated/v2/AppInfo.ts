@@ -13,6 +13,8 @@ export type AppInfo = {
   description: string | null;
   logoUrl: string | null;
   logoUrlDark: string | null;
+  iconAssets: { [key in string]?: string } | null;
+  iconDarkAssets: { [key in string]?: string } | null;
   distributionChannel: string | null;
   branding: AppBranding | null;
   appMetadata: AppMetadata | null;

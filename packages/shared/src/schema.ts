@@ -1,6 +1,6 @@
 import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
-import type { TaskStatus } from "./types.js";
+import type { AutoQueueCommitStatus, TaskStatus } from "./types.js";
 
 export const projects = sqliteTable("projects", {
   id: text("id")
@@ -118,6 +118,11 @@ export const tasks = sqliteTable("tasks", {
   scheduledAt: text("scheduled_at"),
   branchName: text("branch_name"),
   worktreePath: text("worktree_path"),
+  autoQueueCommitStatus: text("auto_queue_commit_status").$type<AutoQueueCommitStatus | null>(),
+  autoQueueCommitBaseSha: text("auto_queue_commit_base_sha"),
+  commitSha: text("commit_sha"),
+  autoQueueCommitError: text("auto_queue_commit_error"),
+  autoQueueCommitCompletedAt: text("auto_queue_commit_completed_at"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),

@@ -14,6 +14,11 @@ import type {
 import { getEnv, redactProviderText } from "@aif/shared";
 import { Agent, type Dispatcher } from "undici";
 import { resolveProxyDispatcher } from "../../proxyEnv.js";
+import {
+  normalizeModelEffortLevels,
+  OPENCODE_MODEL_EFFORT_LEVELS,
+  resolveModelEffortOption,
+} from "../../modelEffort.js";
 import { classifyOpenCodeRuntimeError, OpenCodeRuntimeAdapterError } from "./errors.js";
 
 export interface OpenCodeApiLogger {
@@ -83,27 +88,6 @@ function toIso(value: unknown): string {
     if (!Number.isNaN(date.getTime())) return date.toISOString();
   }
   return new Date().toISOString();
-}
-
-const OPENCODE_EFFORT_LEVELS = new Set([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const);
-
-type OpenCodeEffortLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
-function normalizeOpenCodeEffort(value: unknown): OpenCodeEffortLevel | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim().toLowerCase();
-    if (OPENCODE_EFFORT_LEVELS.has(trimmed as OpenCodeEffortLevel)) {
-      return trimmed as OpenCodeEffortLevel;
-    }
-  }
-  return null;
 }
 
 function stripSensitiveOptions(
@@ -448,7 +432,7 @@ export async function runOpenCodeApi(
   }
 
   const options = asRecord(input.options);
-  const effort = normalizeOpenCodeEffort(options.reasoningEffort);
+  const effort = resolveModelEffortOption(options, "reasoningEffort", OPENCODE_MODEL_EFFORT_LEVELS);
   if (effort) {
     body.reasoningEffort = effort;
   }
@@ -658,34 +642,54 @@ function extractModelsFromProvider(provider: unknown): RuntimeModel[] {
   const record = asRecord(provider);
   const providerID = readString(record.id) ?? readString(record.providerID) ?? "opencode";
   const modelsValue = record.models;
-
-  if (!Array.isArray(modelsValue)) {
-    return [];
-  }
+  const modelEntries: Array<[string | null, unknown]> = Array.isArray(modelsValue)
+    ? modelsValue.map((model) => [null, model])
+    : Object.entries(asRecord(modelsValue));
 
   const models: RuntimeModel[] = [];
-  for (const model of modelsValue) {
+  for (const [fallbackModelID, model] of modelEntries) {
     if (typeof model === "string") {
+      const modelID = fallbackModelID ?? readString(model);
+      if (!modelID) continue;
       models.push({
-        id: `${providerID}/${model}`,
-        label: `${providerID}/${model}`,
+        id: `${providerID}/${modelID}`,
+        label: `${providerID}/${modelID}`,
         supportsStreaming: true,
       });
       continue;
     }
 
     const modelRecord = asRecord(model);
-    const modelID = readString(modelRecord.id) ?? readString(modelRecord.modelID);
+    const modelID =
+      readString(modelRecord.id) ?? readString(modelRecord.modelID) ?? fallbackModelID;
     if (!modelID) continue;
+
+    const metadata: Record<string, unknown> = {
+      providerID,
+      modelID,
+    };
+    const variants = asRecord(modelRecord.variants);
+    const supportedEffortLevels = normalizeModelEffortLevels(
+      Object.values(variants).map((variant) => {
+        const variantRecord = asRecord(variant);
+        return variantRecord.disabled === true ? null : variantRecord.reasoningEffort;
+      }),
+    );
+    if (supportedEffortLevels) {
+      metadata.supportsEffort = true;
+      metadata.supportedEffortLevels = supportedEffortLevels;
+    } else {
+      const reasoningCapability = asRecord(modelRecord.capabilities).reasoning;
+      if (typeof reasoningCapability === "boolean") {
+        metadata.supportsEffort = reasoningCapability;
+      }
+    }
 
     models.push({
       id: `${providerID}/${modelID}`,
       label: readString(modelRecord.name) ?? `${providerID}/${modelID}`,
       supportsStreaming: true,
-      metadata: {
-        providerID,
-        modelID,
-      },
+      metadata,
     });
   }
 

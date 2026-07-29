@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { chatSessions } from "../schema.js";
 import { closeDb, createTestDb, getDb } from "../db.js";
 
-const CURRENT_SCHEMA_VERSION = 25;
+const CURRENT_SCHEMA_VERSION = 26;
 
 function removeSqliteArtifacts(dbPath: string): void {
   for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
@@ -112,6 +112,57 @@ describe("db", () => {
       expect(columns.map((column) => column.name)).toEqual(
         expect.arrayContaining(["pinned_at", "group_name"]),
       );
+      expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
+  });
+
+  it("migrates v25 tasks with restart-safe auto-queue commit columns", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-auto-commit-${Date.now()}-${Math.random()}.sqlite`);
+    const sqlite = new Database(dbPath);
+    sqlite.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'backlog',
+        position REAL NOT NULL DEFAULT 1000,
+        retry_after TEXT,
+        locked_by TEXT,
+        locked_until TEXT,
+        scheduled_at TEXT,
+        runtime_profile_id TEXT
+      );
+      INSERT INTO tasks (id, project_id, title) VALUES ('task-1', 'project-1', 'Existing task');
+    `);
+    sqlite.pragma("user_version = 25");
+    sqlite.close();
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const migrated = new Database(dbPath, { readonly: true });
+      const columns = migrated.pragma("table_info(tasks)") as Array<{ name: string }>;
+      const task = migrated
+        .prepare("SELECT title, commit_sha FROM tasks WHERE id = 'task-1'")
+        .get() as { title: string; commit_sha: string | null };
+      const userVersion = migrated.pragma("user_version", { simple: true }) as number;
+      migrated.close();
+
+      expect(columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          "auto_queue_commit_status",
+          "auto_queue_commit_base_sha",
+          "commit_sha",
+          "auto_queue_commit_error",
+          "auto_queue_commit_completed_at",
+        ]),
+      );
+      expect(task).toEqual({ title: "Existing task", commit_sha: null });
       expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
     } finally {
       closeDb();

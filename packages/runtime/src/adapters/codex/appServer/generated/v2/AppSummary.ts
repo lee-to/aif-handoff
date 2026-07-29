@@ -10,5 +10,5 @@ export type AppSummary = {
   name: string;
   description: string | null;
   installUrl: string | null;
-  needsAuth: boolean;
+  category: string | null;
 };

@@ -19,7 +19,7 @@ const log = logger("projects-repo");
 
 function readContainerProjectsMount(): string {
   const configured = process.env.PROJECTS_MOUNT?.trim();
-  return configured && isAbsolute(configured) ? configured : "/home/www";
+  return configured && posix.isAbsolute(configured) ? posix.resolve(configured) : "/home/www";
 }
 
 function isWithinPath(basePath: string, candidatePath: string): boolean {
@@ -31,6 +31,11 @@ function normalizeWindowsPath(value: string): string {
   return value.replaceAll("/", "\\");
 }
 
+function isWithinPosixPath(basePath: string, candidatePath: string): boolean {
+  const rel = posix.relative(basePath, candidatePath);
+  return rel === "" || (rel !== ".." && !rel.startsWith("../") && !posix.isAbsolute(rel));
+}
+
 function resolveHostProjectsDir(hostProjectsDir: string): string {
   if (isAbsolute(hostProjectsDir)) return resolve(hostProjectsDir);
 
@@ -40,33 +45,48 @@ function resolveHostProjectsDir(hostProjectsDir: string): string {
     : resolve(hostProjectsDir);
 }
 
-function mapHostProjectPathToContainer(rootPath: string): string {
+function mapProjectPathToContainer(rootPath: string): string {
   const hostProjectsDir = process.env.PROJECTS_DIR?.trim();
-  if (!hostProjectsDir) return rootPath;
-
   const containerProjectsMount = readContainerProjectsMount();
-  const resolvedRootPath = resolve(rootPath);
-  const resolvedHostProjectsDir = resolveHostProjectsDir(hostProjectsDir);
 
-  if (isWithinPath(resolvedHostProjectsDir, resolvedRootPath)) {
-    const rel = relative(resolvedHostProjectsDir, resolvedRootPath);
-    return rel
-      ? posix.join(containerProjectsMount, rel.split(sep).join(posix.sep))
-      : containerProjectsMount;
-  }
+  if (hostProjectsDir) {
+    const resolvedRootPath = resolve(rootPath);
+    const resolvedHostProjectsDir = resolveHostProjectsDir(hostProjectsDir);
 
-  if (win32.isAbsolute(hostProjectsDir) && win32.isAbsolute(rootPath)) {
-    const windowsHostProjectsDir = win32.resolve(normalizeWindowsPath(hostProjectsDir));
-    const windowsRootPath = win32.resolve(normalizeWindowsPath(rootPath));
-    const rel = win32.relative(windowsHostProjectsDir, windowsRootPath);
-    if (rel === "" || (rel !== ".." && !rel.startsWith("..\\") && !win32.isAbsolute(rel))) {
+    if (isWithinPath(resolvedHostProjectsDir, resolvedRootPath)) {
+      const rel = relative(resolvedHostProjectsDir, resolvedRootPath);
       return rel
-        ? posix.join(containerProjectsMount, rel.split("\\").join(posix.sep))
+        ? posix.join(containerProjectsMount, rel.split(sep).join(posix.sep))
         : containerProjectsMount;
+    }
+
+    if (win32.isAbsolute(hostProjectsDir) && win32.isAbsolute(rootPath)) {
+      const windowsHostProjectsDir = win32.resolve(normalizeWindowsPath(hostProjectsDir));
+      const windowsRootPath = win32.resolve(normalizeWindowsPath(rootPath));
+      const rel = win32.relative(windowsHostProjectsDir, windowsRootPath);
+      if (rel === "" || (rel !== ".." && !rel.startsWith("..\\") && !win32.isAbsolute(rel))) {
+        return rel
+          ? posix.join(containerProjectsMount, rel.split("\\").join(posix.sep))
+          : containerProjectsMount;
+      }
     }
   }
 
-  return rootPath;
+  const configuredProjectsMount = process.env.PROJECTS_MOUNT?.trim();
+  if (
+    !configuredProjectsMount ||
+    !posix.isAbsolute(configuredProjectsMount) ||
+    !posix.isAbsolute(rootPath)
+  ) {
+    return rootPath;
+  }
+
+  const normalizedRootPath = posix.resolve(rootPath);
+  if (isWithinPosixPath(containerProjectsMount, normalizedRootPath)) {
+    return normalizedRootPath;
+  }
+
+  return posix.join(containerProjectsMount, normalizedRootPath.slice(1));
 }
 
 export async function createProject(input: {
@@ -82,7 +102,7 @@ export async function createProject(input: {
   defaultReviewRuntimeProfileId?: string | null;
   defaultChatRuntimeProfileId?: string | null;
 }): Promise<{ project: ProjectRow | undefined; pathError?: string; initError?: string }> {
-  const normalizedInput = { ...input, rootPath: mapHostProjectPathToContainer(input.rootPath) };
+  const normalizedInput = { ...input, rootPath: mapProjectPathToContainer(input.rootPath) };
   const pathError = validateProjectRootPath(normalizedInput.rootPath);
   if (pathError) return { project: undefined, pathError };
 
@@ -134,7 +154,7 @@ export function updateProject(
     defaultChatRuntimeProfileId?: string | null;
   },
 ): { project: ProjectRow | undefined; pathError?: string } {
-  const normalizedInput = { ...input, rootPath: mapHostProjectPathToContainer(input.rootPath) };
+  const normalizedInput = { ...input, rootPath: mapProjectPathToContainer(input.rootPath) };
   const pathError = validateProjectRootPath(normalizedInput.rootPath);
   if (pathError) return { project: undefined, pathError };
 

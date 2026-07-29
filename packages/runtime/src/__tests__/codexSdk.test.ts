@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { validateRuntimeModelEffort } from "../modelEffort.js";
 import type { RuntimeRunInput } from "../types.js";
 import { TEST_USAGE_CONTEXT } from "./helpers/usageContext.js";
 
@@ -295,6 +296,75 @@ describe("runCodexSdk", () => {
     await runCodexSdk(createRunInput({ model: "gpt-5.4" }));
 
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-5.4" }));
+  });
+
+  it("passes a supported reasoning effort to thread options", async () => {
+    mockRunStreamed.mockResolvedValue({
+      events: createMockEvents([
+        { type: "thread.started", thread_id: "thread-effort" },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 },
+        },
+      ]),
+    });
+
+    await runCodexSdk(createRunInput({ options: { modelReasoningEffort: " XHIGH " } }));
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ modelReasoningEffort: "xhigh" }),
+    );
+  });
+
+  it("passes a selected-model dynamic reasoning effort after validation", async () => {
+    mockRunStreamed.mockResolvedValue({
+      events: createMockEvents([
+        { type: "thread.started", thread_id: "thread-dynamic-effort" },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 },
+        },
+      ]),
+    });
+    const validation = validateRuntimeModelEffort(
+      createRunInput({
+        model: "gpt-current",
+        options: { modelReasoningEffort: " Ultra " },
+      }),
+      [
+        {
+          id: "gpt-current",
+          metadata: {
+            supportsEffort: true,
+            supportedEffortLevels: ["ultra"],
+          },
+        },
+      ],
+    );
+
+    await runCodexSdk(validation.input);
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ modelReasoningEffort: "ultra" }),
+    );
+  });
+
+  it("does not claim an arbitrary reasoning effort is supported by the SDK", async () => {
+    mockRunStreamed.mockResolvedValue({
+      events: createMockEvents([
+        { type: "thread.started", thread_id: "thread-no-effort" },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0 },
+        },
+      ]),
+    });
+
+    await runCodexSdk(createRunInput({ options: { modelReasoningEffort: "bogus" } }));
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.not.objectContaining({ modelReasoningEffort: expect.anything() }),
+    );
   });
 
   it("passes approval policy and sandbox mode from hooks to thread options (overriding non-bypass defaults)", async () => {

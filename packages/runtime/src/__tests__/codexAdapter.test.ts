@@ -338,6 +338,14 @@ describe("Codex runtime adapter", () => {
 
     expect(result.ok).toBe(true);
     expect(appServerInitializeMock).toHaveBeenCalledTimes(1);
+    expect(appServerInitializeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capabilities: {
+          experimentalApi: false,
+          requestAttestation: false,
+        },
+      }),
+    );
     expect(terminateCodexAppServerProcessMock).toHaveBeenCalledTimes(1);
   });
 

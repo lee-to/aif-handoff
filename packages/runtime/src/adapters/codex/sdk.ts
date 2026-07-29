@@ -6,6 +6,7 @@ import {
   type ThreadEvent,
   type ThreadItem,
   type Usage,
+  type ModelReasoningEffort,
 } from "@openai/codex-sdk";
 import type {
   RuntimeEvent,
@@ -29,6 +30,11 @@ import {
 } from "./permissions.js";
 import { getCodexSessionLimitSnapshot } from "./sessions.js";
 import { PROXY_ENV_VARS } from "../../proxyEnv.js";
+import {
+  CODEX_MODEL_EFFORT_LEVELS,
+  isModelEffortLevel,
+  resolveModelEffortOption,
+} from "../../modelEffort.js";
 
 export interface CodexSdkLogger {
   debug?(context: Record<string, unknown>, message: string): void;
@@ -305,15 +311,19 @@ function buildThreadOptions(input: RuntimeRunInput, logger?: CodexSdkLogger): Th
   }
 
   // Reasoning effort
-  const effort = readString(options.modelReasoningEffort) ?? readString(hooks.modelReasoningEffort);
-  if (
-    effort === "minimal" ||
-    effort === "low" ||
-    effort === "medium" ||
-    effort === "high" ||
-    effort === "xhigh"
-  ) {
+  const effortOptions =
+    options.modelReasoningEffort == null
+      ? { ...options, modelReasoningEffort: hooks.modelReasoningEffort }
+      : options;
+  const effort = resolveModelEffortOption(
+    effortOptions,
+    "modelReasoningEffort",
+    CODEX_MODEL_EFFORT_LEVELS,
+  );
+  if (isModelEffortLevel<ModelReasoningEffort>(effort, CODEX_MODEL_EFFORT_LEVELS)) {
     threadOpts.modelReasoningEffort = effort;
+  } else if (effort) {
+    Reflect.set(threadOpts, "modelReasoningEffort", effort);
   }
 
   logger?.debug?.(

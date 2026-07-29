@@ -4,6 +4,7 @@
 import type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "./ExecCommandApprovalParams";
 import type { RequestId } from "./RequestId";
+import type { AttestationGenerateParams } from "./v2/AttestationGenerateParams";
 import type { ChatgptAuthTokensRefreshParams } from "./v2/ChatgptAuthTokensRefreshParams";
 import type { CommandExecutionRequestApprovalParams } from "./v2/CommandExecutionRequestApprovalParams";
 import type { DynamicToolCallParams } from "./v2/DynamicToolCallParams";
@@ -43,5 +44,6 @@ export type ServerRequest =
       id: RequestId;
       params: ChatgptAuthTokensRefreshParams;
     }
+  | { method: "attestation/generate"; id: RequestId; params: AttestationGenerateParams }
   | { method: "applyPatchApproval"; id: RequestId; params: ApplyPatchApprovalParams }
   | { method: "execCommandApproval"; id: RequestId; params: ExecCommandApprovalParams };

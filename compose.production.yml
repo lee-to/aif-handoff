@@ -22,11 +22,10 @@
 #   Для более крупного сервера задайте API_CPUS/AGENT_CPUS/... в env/docker.env.
 
 services:
-
   # ============================ api ====================================
   api:
     image: ghcr.io/burlet-dev/aif-handoff-app:${IMAGE_TAG:-latest}
-    build: !reset null  # на сервере не собираем, тянем готовый образ из GHCR
+    build: !reset null # на сервере не собираем, тянем готовый образ из GHCR
     env_file: !override
       - ./env/aif.env.decrypted
     ports: !reset []

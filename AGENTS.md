@@ -80,6 +80,7 @@ packages/
     └── src/
         ├── index.ts         # Agent entry point
         ├── coordinator.ts   # Polling coordinator (node-cron)
+        ├── autoQueueCommit.ts # Awaited Git commit gate before auto-queue terminal states
         ├── subagentQuery.ts # Universal runtime-backed query execution
         ├── reviewGate.ts    # Auto-review gate using adapter lightModel
         ├── hooks.ts         # Activity logging, project root
@@ -96,17 +97,18 @@ data/                    # SQLite database files (gitignored)
 
 ## Key Entry Points
 
-| File                                  | Purpose                               |
-| ------------------------------------- | ------------------------------------- |
-| `packages/api/src/index.ts`           | API server entry (Hono, port 3009)    |
-| `packages/web/src/main.tsx`           | Web app entry (React, port 5180)      |
-| `packages/agent/src/index.ts`         | Agent coordinator entry               |
-| `packages/agent/src/subagentQuery.ts` | Runtime-aware subagent execution path |
-| `packages/runtime/src/index.ts`       | Shared runtime/provider contracts     |
-| `packages/data/src/index.ts`          | Centralized data-access API           |
-| `packages/shared/src/schema.ts`       | Database schema (drizzle-orm)         |
-| `packages/shared/src/stateMachine.ts` | Task state transitions                |
-| `turbo.json`                          | Turborepo task definitions            |
+| File                                    | Purpose                               |
+| --------------------------------------- | ------------------------------------- |
+| `packages/api/src/index.ts`             | API server entry (Hono, port 3009)    |
+| `packages/web/src/main.tsx`             | Web app entry (React, port 5180)      |
+| `packages/agent/src/index.ts`           | Agent coordinator entry               |
+| `packages/agent/src/autoQueueCommit.ts` | Auto-queue completion commit gate     |
+| `packages/agent/src/subagentQuery.ts`   | Runtime-aware subagent execution path |
+| `packages/runtime/src/index.ts`         | Shared runtime/provider contracts     |
+| `packages/data/src/index.ts`            | Centralized data-access API           |
+| `packages/shared/src/schema.ts`         | Database schema (drizzle-orm)         |
+| `packages/shared/src/stateMachine.ts`   | Task state transitions                |
+| `turbo.json`                            | Turborepo task definitions            |
 
 ## Documentation
 

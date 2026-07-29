@@ -78,7 +78,7 @@ function getEffortOptionKey(
   return null;
 }
 
-function getRuntimeEffortLevels(runtimeId: string): string[] {
+function getDefaultEffortLevels(runtimeId: string): string[] {
   if (runtimeId === "claude") return ["low", "medium", "high", "max"];
   if (runtimeId === "codex") return ["minimal", "low", "medium", "high", "xhigh"];
   if (runtimeId === "openrouter") return ["minimal", "low", "medium", "high", "xhigh"];
@@ -88,11 +88,23 @@ function getRuntimeEffortLevels(runtimeId: string): string[] {
 
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  const unique = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const normalized = item.trim().toLowerCase();
+    if (normalized.length > 0) unique.add(normalized);
+  }
+  return [...unique];
 }
 
 function getModelEffortLevels(model: RuntimeModelOption | null): string[] {
   return readStringArray(model?.metadata?.supportedEffortLevels);
+}
+
+function resolveEffortLevels(runtimeId: string, model: RuntimeModelOption | null): string[] {
+  if (model?.metadata?.supportsEffort === false) return [];
+  const byModel = getModelEffortLevels(model);
+  return byModel.length > 0 ? byModel : getDefaultEffortLevels(runtimeId);
 }
 
 function mergeManagedOptions(
@@ -176,10 +188,7 @@ export function RuntimeProfileForm({
     discoveredModels.find((model) => model.id === defaultModel.trim()) ??
     (defaultModel.trim().length === 0 ? preferredDiscoveredModel : null);
   const shouldShowModelFilter = discoveredModels.length > 5;
-  const effortLevels = (() => {
-    const byModel = getModelEffortLevels(selectedDiscoveredModel);
-    return byModel.length > 0 ? byModel : getRuntimeEffortLevels(runtimeId);
-  })();
+  const effortLevels = resolveEffortLevels(runtimeId, selectedDiscoveredModel);
   const effortOptions = effortLevels.map((level) => ({
     value: level,
     label: level.toUpperCase(),

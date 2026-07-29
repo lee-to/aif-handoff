@@ -21,6 +21,7 @@ import {
   type RuntimeSessionListInput,
 } from "../../types.js";
 import { RuntimeCapabilityError, RuntimeExecutionError } from "../../errors.js";
+import { normalizeModelEffortLevels } from "../../modelEffort.js";
 import { diagnoseClaudeError } from "./diagnostics.js";
 import { getClaudeMcpStatus, installClaudeMcpServer, uninstallClaudeMcpServer } from "./mcp.js";
 import { initClaudeProject } from "./project.js";
@@ -372,21 +373,24 @@ async function listClaudeModels(
       "[runtime:claude] Claude model discovery finished",
     );
     if (models.length > 0) {
-      return models.map((model) => ({
-        id: model.value,
-        label: model.displayName,
-        supportsStreaming: true,
-        metadata: {
-          description: model.description,
-          ...(model.supportsEffort ? { supportsEffort: true } : {}),
-          ...(model.supportedEffortLevels
-            ? { supportedEffortLevels: [...model.supportedEffortLevels] }
-            : {}),
-          ...(model.supportsAdaptiveThinking ? { supportsAdaptiveThinking: true } : {}),
-          ...(model.supportsFastMode ? { supportsFastMode: true } : {}),
-          ...(model.supportsAutoMode ? { supportsAutoMode: true } : {}),
-        },
-      }));
+      return models.map((model) => {
+        const supportedEffortLevels = normalizeModelEffortLevels(model.supportedEffortLevels);
+        return {
+          id: model.value,
+          label: model.displayName,
+          supportsStreaming: true,
+          metadata: {
+            description: model.description,
+            ...(typeof model.supportsEffort === "boolean"
+              ? { supportsEffort: model.supportsEffort }
+              : {}),
+            ...(supportedEffortLevels ? { supportedEffortLevels } : {}),
+            ...(model.supportsAdaptiveThinking ? { supportsAdaptiveThinking: true } : {}),
+            ...(model.supportsFastMode ? { supportsFastMode: true } : {}),
+            ...(model.supportsAutoMode ? { supportsAutoMode: true } : {}),
+          },
+        };
+      });
     }
   } catch (error) {
     discoveryError = error;

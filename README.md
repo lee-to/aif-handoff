@@ -86,16 +86,25 @@ docker compose exec agent claude login
 docker compose restart agent
 ```
 
+Docker resolves the Codex SDK and CLI during the image build. `CODEX_VERSION`
+defaults to the reviewed `0.145.0` baseline and also accepts an npm dist-tag,
+exact version, or semver range as an explicit override. When using a moving
+selector, rebuild with `docker compose build --no-cache` to force a fresh
+registry lookup. Verify the result with `docker compose exec agent codex
+--version`.
+
 Development starts three services by default. If `MCP_PORT` is set to a valid integer port, it starts a fourth service for MCP over HTTP. Docker starts all four services.
 
 #### Project paths (host ↔ container)
 
-When you create a project in the UI, the **Root Path** field expects a host
-path (for example `/Users/you/projects/my-app`). The dev compose mounts
-the host directory `PROJECTS_DIR` onto `PROJECTS_MOUNT` (default
-`/home/www`) inside every container. The API/agent containers see your
-project as `/home/www/my-app` and the API transparently translates the
-host path you typed to the matching container path when persisting it.
+When you create a project in the UI, the **Root Path** field accepts an absolute
+path such as `/Users/me/projects/my-project`. The dev compose mounts the host
+directory `PROJECTS_DIR` at `PROJECTS_MOUNT` (default `/home/www`) in every
+container. With `PROJECTS_DIR=/Users/me/projects`, the example path is persisted
+as `/home/www/my-project`.
+
+Other POSIX absolute paths are resolved below `PROJECTS_MOUNT` instead of the
+container filesystem root.
 
 The default `PROJECTS_DIR` is `${PWD}/projects` (relative to the compose
 file). To use a different host directory:
@@ -298,16 +307,16 @@ Only ports 80/443 are exposed. API is bound to localhost only. Includes security
 | `PROJECTS_MOUNT`     | `/home/www`  | Project files path inside containers                         |
 | `PROJECTS_HOST_ROOT` | `${PWD}`     | Compose-internal repo root for relative `PROJECTS_DIR` (dev) |
 
-In the dev Compose setup, project roots are used by processes inside the
-containers. Host paths under `PROJECTS_DIR` are accepted in the UI and
-automatically saved as the matching `PROJECTS_MOUNT` path, so
-`/Users/me/projects/app` becomes `/home/www/app` with the default mount. If
-`PROJECTS_DIR` is relative, Compose resolves it from `PROJECTS_HOST_ROOT`; leave
-`PROJECTS_HOST_ROOT` unset unless you are replacing the compose wiring.
+In Docker, paths outside `PROJECTS_MOUNT` are resolved below that mount instead
+of the container filesystem root. In the dev Compose setup, host paths under
+`PROJECTS_DIR` are automatically saved as the matching `PROJECTS_MOUNT` path,
+so `/Users/me/projects/my-project` becomes `/home/www/my-project` when
+`PROJECTS_DIR=/Users/me/projects`. If `PROJECTS_DIR` is relative, Compose
+resolves it from `PROJECTS_HOST_ROOT`; leave `PROJECTS_HOST_ROOT` unset unless
+you are replacing the compose wiring.
 
 Production Compose uses a named Docker volume at `PROJECTS_MOUNT` instead of
-the dev bind mount. Create and select projects by their in-container path in
-production, for example `/home/www/app`.
+the dev bind mount. Portable paths use the same resolution in production.
 
 A `.devcontainer/` config is also included for JetBrains / VS Code.
 

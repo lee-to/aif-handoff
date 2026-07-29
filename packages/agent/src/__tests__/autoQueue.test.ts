@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tasks, projects } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
+import { createGitTestRoot } from "./gitTestUtils.js";
 
 const testDb = { current: createTestDb() };
 
@@ -23,6 +22,7 @@ const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
 // Coordinator reads env at module load. This suite covers the rollout-on
 // auto-queue behavior for branch-isolated projects.
 vi.stubEnv("AIF_TASK_WORKTREES_ENABLED", "true");
+vi.stubEnv("AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED", "true");
 
 const { processAutoQueueAdvance, processDueScheduledTasks } = await import("../coordinator.js");
 const { createTask, findTaskById, setAutoQueueMode, updateTaskStatus, setTaskFields } =
@@ -222,6 +222,17 @@ describe("processAutoQueueAdvance", () => {
       expect(findTaskById("t4")?.status).toBe("backlog");
     });
 
+    it("does not refill the pool while a task has a failed commit gate", () => {
+      seedTask("failed", "par", 100, {
+        status: "blocked_external",
+        autoQueueCommitStatus: "failed",
+      });
+      seedTask("next", "par", 200);
+
+      expect(processAutoQueueAdvance()).toBe(0);
+      expect(findTaskById("next")?.status).toBe("backlog");
+    });
+
     it("backfills as one task reaches done", () => {
       seedTask("t1", "par", 100, { status: "planning" });
       seedTask("t2", "par", 200, { status: "implementing" });
@@ -280,6 +291,30 @@ describe("processAutoQueueAdvance", () => {
       expect(processDueScheduledTasks()).toBe(0);
       expect(findTaskById("t1")?.status).toBe("backlog");
     });
+
+    it("does not fire an auto-queue scheduled task from a dirty Git worktree", () => {
+      const root = createGitTestRoot("autoqueue-scheduled-dirty-", {
+        readme: "# scheduled\n",
+      }).rootPath;
+
+      testDb.current
+        .insert(projects)
+        .values({
+          id: "scheduled-dirty",
+          name: "scheduled-dirty",
+          rootPath: root,
+          autoQueueMode: true,
+        })
+        .run();
+      const past = new Date(Date.now() - 60_000).toISOString();
+      seedTask("scheduled-dirty-task", "scheduled-dirty", 100, { scheduledAt: past });
+      writeFileSync(join(root, "unrelated.txt"), "do not commit\n");
+
+      expect(processDueScheduledTasks()).toBe(0);
+      expect(findTaskById("scheduled-dirty-task")?.status).toBe("backlog");
+      expect(findTaskById("scheduled-dirty-task")?.scheduledAt).toBe(past);
+      expect(findTaskById("scheduled-dirty-task")?.autoQueueCommitStatus).toBeNull();
+    });
   });
 
   describe("CAS race protection", () => {
@@ -314,16 +349,9 @@ describe("processAutoQueueAdvance", () => {
 
   describe("dirty-worktree gate", () => {
     it("pauses advance when the project work tree has uncommitted changes", () => {
-      const root = mkdtempSync(join(tmpdir(), "autoqueue-dirty-"));
-      execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "user.name", "T"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root, stdio: "ignore" });
-      writeFileSync(join(root, "README.md"), "# t\n");
-      execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["commit", "-m", "init", "--no-verify"], { cwd: root, stdio: "ignore" });
-      mkdirSync(join(root, ".ai-factory"), { recursive: true });
-      writeFileSync(join(root, ".ai-factory", "config.yaml"), "git:\n  create_branches: false\n");
+      const root = createGitTestRoot("autoqueue-dirty-", {
+        configYaml: "git:\n  create_branches: false\n",
+      }).rootPath;
 
       // Project points at a REAL git repo; seedProject uses /tmp/<id>,
       // so insert directly with the real path.
@@ -348,14 +376,7 @@ describe("processAutoQueueAdvance", () => {
     });
 
     it("advances normally once the work tree is clean again", () => {
-      const root = mkdtempSync(join(tmpdir(), "autoqueue-clean-"));
-      execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "user.name", "T"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root, stdio: "ignore" });
-      writeFileSync(join(root, "README.md"), "# t\n");
-      execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["commit", "-m", "init", "--no-verify"], { cwd: root, stdio: "ignore" });
+      const root = createGitTestRoot("autoqueue-clean-").rootPath;
 
       testDb.current
         .insert(projects)
@@ -374,14 +395,7 @@ describe("processAutoQueueAdvance", () => {
     });
 
     it("fills the parallel pool for worktree-capable branch-isolated git projects", () => {
-      const root = mkdtempSync(join(tmpdir(), "autoqueue-parallel-branch-"));
-      execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "user.name", "T"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root, stdio: "ignore" });
-      writeFileSync(join(root, "README.md"), "# t\n");
-      execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
-      execFileSync("git", ["commit", "-m", "init", "--no-verify"], { cwd: root, stdio: "ignore" });
+      const root = createGitTestRoot("autoqueue-parallel-branch-").rootPath;
 
       testDb.current
         .insert(projects)
@@ -401,6 +415,29 @@ describe("processAutoQueueAdvance", () => {
       expect(findTaskById("t-branch-1")?.status).toBe("planning");
       expect(findTaskById("t-branch-2")?.status).toBe("planning");
       expect(findTaskById("t-branch-3")?.status).toBe("planning");
+    });
+
+    it("serializes a parallel auto-queue project when tasks share one Git working tree", () => {
+      const root = createGitTestRoot("autoqueue-shared-git-", {
+        configYaml: "git:\n  create_branches: false\n",
+      }).rootPath;
+
+      testDb.current
+        .insert(projects)
+        .values({
+          id: "parallel-shared",
+          name: "parallel-shared",
+          rootPath: root,
+          parallelEnabled: true,
+          autoQueueMode: true,
+        })
+        .run();
+      seedTask("t-shared-1", "parallel-shared", 100);
+      seedTask("t-shared-2", "parallel-shared", 200);
+
+      expect(processAutoQueueAdvance()).toBe(1);
+      expect(findTaskById("t-shared-1")?.status).toBe("planning");
+      expect(findTaskById("t-shared-2")?.status).toBe("backlog");
     });
   });
 });

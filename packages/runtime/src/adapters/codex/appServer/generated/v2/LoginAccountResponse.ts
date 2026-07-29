@@ -24,4 +24,5 @@ export type LoginAccountResponse =
        */
       userCode: string;
     }
-  | { type: "chatgptAuthTokens" };
+  | { type: "chatgptAuthTokens" }
+  | { type: "amazonBedrock" };

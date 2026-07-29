@@ -73,6 +73,9 @@ describe("env validation", () => {
     expect(result.AIF_RUNTIME_SESSION_FORK_ENABLED).toBe(false);
     expect(result.AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED).toBe(false);
     expect(result.AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED).toBe(false);
+    expect(result.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED).toBe(false);
+    expect(result.AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED).toBe(false);
+    expect(result.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED).toBe(false);
   });
 
   it("should parse AIF_WARMUP_ENABLED boolean values", () => {
@@ -86,19 +89,31 @@ describe("env validation", () => {
     const enabled = validateEnv({
       AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED: "yes",
       AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED: "on",
+      AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: "true",
+      AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED: "1",
+      AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED: "yes",
       AIF_STAGE_RUNTIME_PIN_ENABLED: "true",
     });
     expect(enabled.AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED).toBe(true);
     expect(enabled.AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED).toBe(true);
+    expect(enabled.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED).toBe(true);
+    expect(enabled.AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED).toBe(true);
+    expect(enabled.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED).toBe(true);
     expect(enabled.AIF_STAGE_RUNTIME_PIN_ENABLED).toBe(true);
 
     const disabled = validateEnv({
       AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED: "no",
       AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED: "off",
+      AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: "false",
+      AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED: "0",
+      AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED: "off",
       AIF_STAGE_RUNTIME_PIN_ENABLED: "0",
     });
     expect(disabled.AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED).toBe(false);
     expect(disabled.AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED).toBe(false);
+    expect(disabled.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED).toBe(false);
+    expect(disabled.AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED).toBe(false);
+    expect(disabled.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED).toBe(false);
     expect(disabled.AIF_STAGE_RUNTIME_PIN_ENABLED).toBe(false);
   });
 

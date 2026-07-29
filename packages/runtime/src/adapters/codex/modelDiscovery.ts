@@ -79,6 +79,7 @@ export async function startCodexAppServerWithRetry(
           },
           capabilities: {
             experimentalApi: false,
+            requestAttestation: false,
           },
         },
         DEFAULT_APP_SERVER_CONNECT_TIMEOUT_MS,

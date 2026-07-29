@@ -131,6 +131,11 @@ function ensureTables(sqlite: Database.Database): void {
       scheduled_at TEXT,
       branch_name TEXT,
       worktree_path TEXT,
+      auto_queue_commit_status TEXT,
+      auto_queue_commit_base_sha TEXT,
+      commit_sha TEXT,
+      auto_queue_commit_error TEXT,
+      auto_queue_commit_completed_at TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
@@ -740,6 +745,17 @@ const MIGRATIONS: Migration[] = [
     sql: `
       ALTER TABLE projects ADD COLUMN pinned_at TEXT;
       ALTER TABLE projects ADD COLUMN group_name TEXT;
+    `,
+  },
+  {
+    version: 26,
+    description: "Persist restart-safe auto-queue commit state and task commit SHA",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN auto_queue_commit_status TEXT;
+      ALTER TABLE tasks ADD COLUMN auto_queue_commit_base_sha TEXT;
+      ALTER TABLE tasks ADD COLUMN commit_sha TEXT;
+      ALTER TABLE tasks ADD COLUMN auto_queue_commit_error TEXT;
+      ALTER TABLE tasks ADD COLUMN auto_queue_commit_completed_at TEXT;
     `,
   },
 ];

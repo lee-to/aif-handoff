@@ -12,5 +12,6 @@ export type ReviewDecision =
   | { approved_execpolicy_amendment: { proposed_execpolicy_amendment: ExecPolicyAmendment } }
   | "approved_for_session"
   | { network_policy_amendment: { network_policy_amendment: NetworkPolicyAmendment } }
-  | "denied"
+  | { denied: { rejection: string } }
+  | "timed_out"
   | "abort";

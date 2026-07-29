@@ -51,6 +51,7 @@ export type {
 export {
   TASK_STATUSES,
   type TaskStatus,
+  type AutoQueueCommitStatus,
   AUTO_REVIEW_STRATEGIES,
   type AutoReviewStrategy,
   AUTO_REVIEW_FINDING_SOURCES,
@@ -159,10 +160,12 @@ export {
   branchExists,
   buildBranchName,
   buildTaskWorktreePath,
+  countCommitsBetween,
   describeDirtyWorkingTree,
   ensureFeatureBranch,
   ensureTaskWorktree,
   getCurrentBranch,
+  getHeadCommitSha,
   isBranchIsolationError,
   isGitRepo,
   projectSupportsTaskWorktrees,
@@ -177,6 +180,8 @@ export {
   type EnsureTaskWorktreeResult,
   type RestorePersistedBranchInput,
 } from "./gitIsolation.js";
+
+export { buildCommitPrompt } from "./commitWorkflow.js";
 
 // Attachment utilities
 export {

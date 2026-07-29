@@ -19,6 +19,7 @@ export interface BootstrapRuntimeRegistryOptions {
    * usage is silently dropped — only suitable for tests and CLI tools.
    */
   usageSink?: RuntimeUsageSink;
+  modelEffortDiscoveryEnabled?: boolean;
 }
 
 /**
@@ -39,6 +40,7 @@ export async function bootstrapRuntimeRegistry(
     ],
     logger: options.logger,
     usageSink: options.usageSink,
+    modelEffortDiscoveryEnabled: options.modelEffortDiscoveryEnabled,
   });
 
   for (const moduleSpecifier of options.runtimeModules ?? []) {

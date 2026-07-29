@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateRuntimeModelEffort } from "../../../../modelEffort.js";
 import {
   RuntimeTransport,
   UsageSource,
@@ -163,6 +164,128 @@ describe("codex app-server run transport", () => {
     expect(observedEvents).toContain("system:init");
     expect(observedEvents).toContain("stream:text");
     expect(observedEvents).toContain("result:success");
+  });
+
+  it("normalizes the removed on-failure approval policy for app-server", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const result = await runCodexAppServer(
+      createRunInput({
+        options: {
+          testScenario: "run-success",
+          approvalPolicy: "on-failure",
+          sandboxMode: "workspace-write",
+        },
+      }),
+      logger,
+    );
+
+    expect(result.outputText).toContain("Hello from fake app-server");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedApprovalPolicy: "on-failure",
+        resolvedApprovalPolicy: "on-request",
+      }),
+      "WARN [runtime:codex] App-server approval policy normalized for current protocol",
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalPolicy: "on-request" }),
+      "DEBUG [runtime:codex] Resolved app-server approval and sandbox settings",
+    );
+  });
+
+  it("passes a supported reasoning effort to the generated protocol", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const result = await runCodexAppServer(
+      createRunInput({
+        options: {
+          testScenario: "run-success",
+          approvalPolicy: "on-request",
+          sandboxMode: "workspace-write",
+          modelReasoningEffort: " XHIGH ",
+        },
+      }),
+      logger,
+    );
+
+    expect(result.outputText).toContain("Hello from fake app-server");
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ hasReasoningEffort: true }),
+      "DEBUG [runtime:codex] Resolved app-server approval and sandbox settings",
+    );
+  });
+
+  it("passes a selected-model dynamic reasoning effort after validation", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const validation = validateRuntimeModelEffort(
+      createRunInput({
+        model: "gpt-current",
+        options: {
+          testScenario: "run-success",
+          approvalPolicy: "on-request",
+          sandboxMode: "workspace-write",
+          modelReasoningEffort: " Ultra ",
+        },
+      }),
+      [
+        {
+          id: "gpt-current",
+          metadata: {
+            supportsEffort: true,
+            supportedEffortLevels: ["ultra"],
+          },
+        },
+      ],
+    );
+
+    await runCodexAppServer(validation.input, logger);
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ hasReasoningEffort: true }),
+      "DEBUG [runtime:codex] Resolved app-server approval and sandbox settings",
+    );
+  });
+
+  it("does not cast an arbitrary reasoning effort into the generated protocol", async () => {
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await runCodexAppServer(
+      createRunInput({
+        options: {
+          testScenario: "run-success",
+          approvalPolicy: "on-request",
+          sandboxMode: "workspace-write",
+          modelReasoningEffort: "bogus",
+        },
+      }),
+      logger,
+    );
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ hasReasoningEffort: false }),
+      "DEBUG [runtime:codex] Resolved app-server approval and sandbox settings",
+    );
   });
 
   it("uses thread/resume for resumed turns and keeps the existing thread id", async () => {

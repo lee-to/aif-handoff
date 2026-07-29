@@ -11,4 +11,5 @@ export type ToolRequestUserInputParams = {
   turnId: string;
   itemId: string;
   questions: Array<ToolRequestUserInputQuestion>;
+  autoResolutionMs: number | null;
 };

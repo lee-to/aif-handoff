@@ -1,16 +1,17 @@
 import type { Hono } from "hono";
-import { createNodeWebSocket } from "@hono/node-ws";
+import { upgradeWebSocket as upgradeNodeServerV2WebSocket } from "@hono/node-server";
+import type { ServerType } from "@hono/node-server";
 import type { WsEvent } from "@aif/shared";
 import { logger } from "@aif/shared";
-import type { WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
+import { createLegacyWebSocketBridge } from "./legacyWebSocket.js";
 
 const log = logger("ws");
 
 let clients: Set<WebSocket> = new Set();
 const clientMap: Map<string, WebSocket> = new Map();
 const socketToClientId: Map<WebSocket, string> = new Map();
-let injectWebSocketFn: ReturnType<typeof createNodeWebSocket>["injectWebSocket"];
 
 function getRawWebSocket(ws: unknown): WebSocket | null {
   if (!ws || typeof ws !== "object") return null;
@@ -19,45 +20,61 @@ function getRawWebSocket(ws: unknown): WebSocket | null {
   return candidate as WebSocket;
 }
 
-export function setupWebSocket(app: Hono) {
-  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
-  injectWebSocketFn = injectWebSocket;
-
-  app.get(
-    "/ws",
-    upgradeWebSocket(() => ({
-      onOpen(_event: Event, ws: unknown) {
-        const raw = getRawWebSocket(ws);
-        if (!raw) return;
-        const clientId = randomUUID();
-        clients.add(raw);
-        clientMap.set(clientId, raw);
-        socketToClientId.set(raw, clientId);
-        log.debug({ clientId, clientCount: clients.size }, "WebSocket client connected");
-        raw.send(JSON.stringify({ type: "ws:connected", payload: { clientId } }));
-      },
-      onClose(_event: Event, ws: unknown) {
-        const raw = getRawWebSocket(ws);
-        if (!raw) return;
-        const clientId = socketToClientId.get(raw);
-        clients.delete(raw);
-        if (clientId) {
-          clientMap.delete(clientId);
-          socketToClientId.delete(raw);
-        }
-        log.debug({ clientId, clientCount: clients.size }, "WebSocket client disconnected");
-      },
-      onError(error: Event) {
-        log.error({ error }, "WebSocket error");
-      },
-    })),
-  );
-
-  return { injectWebSocket, upgradeWebSocket };
+export interface WebSocketSetup {
+  injectWebSocket?: (server: ServerType) => void;
+  webSocketServer?: WebSocketServer;
 }
 
-export function getInjectWebSocket() {
-  return injectWebSocketFn;
+function createWebSocketEvents() {
+  return {
+    onOpen(_event: Event, ws: unknown) {
+      const raw = getRawWebSocket(ws);
+      if (!raw) return;
+      const clientId = randomUUID();
+      clients.add(raw);
+      clientMap.set(clientId, raw);
+      socketToClientId.set(raw, clientId);
+      log.debug({ clientId, clientCount: clients.size }, "WebSocket client connected");
+      raw.send(JSON.stringify({ type: "ws:connected", payload: { clientId } }));
+    },
+    onClose(_event: Event, ws: unknown) {
+      const raw = getRawWebSocket(ws);
+      if (!raw) return;
+      const clientId = socketToClientId.get(raw);
+      clients.delete(raw);
+      if (clientId) {
+        clientMap.delete(clientId);
+        socketToClientId.delete(raw);
+      }
+      log.debug({ clientId, clientCount: clients.size }, "WebSocket client disconnected");
+    },
+    onError(error: Event) {
+      log.error({ error }, "WebSocket error");
+    },
+  };
+}
+
+export function setupWebSocket(app: Hono, nodeServerV2Enabled = false): WebSocketSetup {
+  if (nodeServerV2Enabled) {
+    const webSocketServer = new WebSocketServer({ noServer: true });
+    app.get(
+      "/ws",
+      upgradeNodeServerV2WebSocket(() => createWebSocketEvents()),
+    );
+    return { webSocketServer };
+  }
+
+  const legacyBridge = createLegacyWebSocketBridge(app);
+  app.get(
+    "/ws",
+    legacyBridge.upgradeWebSocket(() => createWebSocketEvents(), {
+      onError(error) {
+        log.error({ error }, "Legacy WebSocket handler error");
+      },
+    }),
+  );
+
+  return { injectWebSocket: legacyBridge.injectWebSocket };
 }
 
 export function sendToClient(clientId: string, event: WsEvent): boolean {
@@ -84,6 +101,10 @@ export function broadcast(event: WsEvent): void {
     { event: event.type, clientsSent: sent, clientsTotal: clients.size },
     "Broadcast WS event",
   );
+}
+
+export function getConnectedWebSocketClientCount(): number {
+  return clients.size;
 }
 
 /**

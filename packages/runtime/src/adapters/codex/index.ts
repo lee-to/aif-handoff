@@ -355,6 +355,7 @@ async function validateCodexAppServerConnection(
       },
       capabilities: {
         experimentalApi: asRecord(input.options).experimentalApi === true,
+        requestAttestation: false,
       },
     });
     return {

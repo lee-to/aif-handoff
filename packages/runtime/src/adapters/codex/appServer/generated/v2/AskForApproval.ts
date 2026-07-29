@@ -4,7 +4,6 @@
 
 export type AskForApproval =
   | "untrusted"
-  | "on-failure"
   | "on-request"
   | {
       granular: {

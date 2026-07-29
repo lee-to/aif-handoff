@@ -1,4 +1,5 @@
 import type { RuntimeRunInput, RuntimeRunResult, RuntimeSessionForkInput } from "../../../types.js";
+import { CODEX_MODEL_EFFORT_LEVELS, resolveModelEffortOption } from "../../../modelEffort.js";
 import {
   isRetriableTimeoutError,
   makeProcessRunTimeoutError,
@@ -28,8 +29,6 @@ import {
 export type CodexAppServerRunLogger = CodexAppServerEventMapperLogger;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 8_000;
-
-const CODEX_EFFORT_LEVELS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh"]);
 
 type CodexAppServerJsonObject = { [key: string]: JsonValue };
 
@@ -234,6 +233,7 @@ async function runCodexAppServerAttempt(
       },
       capabilities: {
         experimentalApi: experimentalApiEnabled,
+        requestAttestation: false,
       },
     });
 
@@ -735,14 +735,27 @@ function resolveCodexPermissionOverrides(
     normalizedValue: explicitSandbox,
   });
 
-  const rawEffort = readString(options.modelReasoningEffort)?.toLowerCase() ?? null;
-  const modelReasoningEffort =
-    rawEffort && CODEX_EFFORT_LEVELS.has(rawEffort as ReasoningEffort)
-      ? (rawEffort as ReasoningEffort)
-      : null;
+  const modelReasoningEffort = resolveModelEffortOption(
+    options,
+    "modelReasoningEffort",
+    CODEX_MODEL_EFFORT_LEVELS,
+  );
+  const approvalPolicy = explicitApproval === "on-failure" ? "on-request" : explicitApproval;
+
+  if (explicitApproval === "on-failure") {
+    logger?.warn?.(
+      {
+        runtimeId: input.runtimeId,
+        transport: "app-server",
+        requestedApprovalPolicy: explicitApproval,
+        resolvedApprovalPolicy: approvalPolicy,
+      },
+      "WARN [runtime:codex] App-server approval policy normalized for current protocol",
+    );
+  }
 
   return {
-    approvalPolicy: explicitApproval ?? (bypass ? "never" : "on-request"),
+    approvalPolicy: approvalPolicy ?? (bypass ? "never" : "on-request"),
     sandboxMode: explicitSandbox ?? (bypass ? "danger-full-access" : "workspace-write"),
     modelReasoningEffort,
   };
@@ -778,11 +791,9 @@ function buildSandboxPolicy(sandboxMode: string, input: RuntimeRunInput): Sandbo
     return { type: "dangerFullAccess" };
   }
 
-  const fullReadAccess = { type: "fullAccess" } as const;
   if (sandboxMode === "read-only") {
     return {
       type: "readOnly",
-      access: fullReadAccess,
       networkAccess: false,
     };
   }
@@ -790,7 +801,6 @@ function buildSandboxPolicy(sandboxMode: string, input: RuntimeRunInput): Sandbo
   return {
     type: "workspaceWrite",
     writableRoots: [input.cwd ?? input.projectRoot ?? process.cwd()],
-    readOnlyAccess: fullReadAccess,
     networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,

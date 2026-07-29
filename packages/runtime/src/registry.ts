@@ -7,13 +7,26 @@ import {
   RuntimeResolutionError,
 } from "./errors.js";
 import { buildLanguageDirective } from "./languagePolicy.js";
+import {
+  getRuntimeModelEffortConfig,
+  hasConfiguredModelEffort,
+  normalizeConfiguredModelEffort,
+  stripRuntimeModelEffortMetadata,
+  validateRuntimeModelEffort,
+} from "./modelEffort.js";
+import {
+  createRuntimeModelDiscoveryService,
+  type RuntimeModelDiscoveryService,
+} from "./modelDiscovery.js";
 import { resolveRuntimeModuleRegistrar } from "./module.js";
 import { transformSkillCommandPrefix } from "./promptPolicy.js";
+import type { ResolvedRuntimeProfile } from "./resolution.js";
 import {
   resolveAdapterCapabilities,
   UsageReporting,
   type RuntimeAdapter,
   type RuntimeDescriptor,
+  type RuntimeModel,
   type RuntimeRunInput,
   type RuntimeRunResult,
   type RuntimeSessionForkInput,
@@ -41,6 +54,7 @@ export interface RuntimeRegistryOptions {
    * is recorded to `usage_events` and rolled up into task/project aggregates.
    */
   usageSink?: RuntimeUsageSink;
+  modelEffortDiscoveryEnabled?: boolean;
 }
 
 function createFallbackLogger(): RuntimeRegistryLogger {
@@ -78,6 +92,11 @@ function wrapAdapter(
   adapter: RuntimeAdapter,
   usageSink: RuntimeUsageSink,
   log: RuntimeRegistryLogger,
+  modelEffortDiscoveryEnabled: boolean,
+  applyModelEffortPolicy: (
+    adapter: RuntimeAdapter,
+    input: RuntimeRunInput,
+  ) => Promise<RuntimeRunInput>,
 ): RuntimeAdapter {
   const prefix = adapter.descriptor.skillCommandPrefix;
   const needsPromptTransform = Boolean(prefix) && prefix !== "/";
@@ -228,8 +247,9 @@ function wrapAdapter(
 
   async function wrappedRun(input: RuntimeRunInput): Promise<RuntimeRunResult> {
     const transformed = applyLanguageDirective(transformPrompt(input));
-    const result = await adapter.run(transformed);
-    recordUsage(transformed, result);
+    const validated = await applyModelEffortPolicy(adapter, transformed);
+    const result = await adapter.run(validated);
+    recordUsage(validated, result);
     return result;
   }
 
@@ -244,8 +264,11 @@ function wrapAdapter(
     const transformed = applyLanguageDirective(transformPrompt(input)) as RuntimeRunInput & {
       sessionId: string;
     };
-    const result = await adapter.resume(transformed);
-    recordUsage(transformed, result);
+    const validated = (await applyModelEffortPolicy(adapter, transformed)) as RuntimeRunInput & {
+      sessionId: string;
+    };
+    const result = await adapter.resume(validated);
+    recordUsage(validated, result);
     return result;
   }
 
@@ -256,9 +279,20 @@ function wrapAdapter(
       );
     }
     const transformed = applyLanguageDirective(transformPrompt(input)) as RuntimeSessionForkInput;
-    const result = await adapter.forkSession(transformed);
-    recordUsage(transformed, result);
+    const validated = (await applyModelEffortPolicy(
+      adapter,
+      transformed,
+    )) as RuntimeSessionForkInput;
+    const result = await adapter.forkSession(validated);
+    recordUsage(validated, result);
     return result;
+  }
+
+  async function wrappedListModels(
+    input: Parameters<NonNullable<RuntimeAdapter["listModels"]>>[0],
+  ) {
+    const models = await adapter.listModels!(input);
+    return modelEffortDiscoveryEnabled ? models : stripRuntimeModelEffortMetadata(models);
   }
 
   return {
@@ -266,6 +300,7 @@ function wrapAdapter(
     run: wrappedRun,
     resume: adapter.resume ? wrappedResume : undefined,
     forkSession: adapter.forkSession ? wrappedForkSession : undefined,
+    listModels: adapter.listModels ? wrappedListModels : undefined,
   };
 }
 
@@ -273,14 +308,119 @@ export class RuntimeRegistry {
   private readonly adapters = new Map<string, RuntimeAdapter>();
   private readonly log: RuntimeRegistryLogger;
   private readonly usageSink: RuntimeUsageSink;
+  private readonly modelEffortDiscoveryEnabled: boolean;
+  private modelEffortDiscoveryService: RuntimeModelDiscoveryService | null = null;
 
   constructor(options: RuntimeRegistryOptions = {}) {
     this.log = options.logger ?? createFallbackLogger();
     this.usageSink = options.usageSink ?? createNoopUsageSink();
+    this.modelEffortDiscoveryEnabled = options.modelEffortDiscoveryEnabled === true;
 
     if (options.builtInAdapters?.length) {
       this.registerBuiltInRuntimes(options.builtInAdapters);
     }
+  }
+
+  private getModelEffortDiscoveryService(): RuntimeModelDiscoveryService {
+    if (!this.modelEffortDiscoveryService) {
+      this.modelEffortDiscoveryService = createRuntimeModelDiscoveryService({
+        registry: this,
+        cacheTtlMs: 60_000,
+        logger: this.log,
+      });
+    }
+    return this.modelEffortDiscoveryService;
+  }
+
+  private buildModelEffortDiscoveryProfile(
+    adapter: RuntimeAdapter,
+    input: RuntimeRunInput,
+  ): ResolvedRuntimeProfile | null {
+    if (!input.transport) {
+      return null;
+    }
+
+    const options: Record<string, unknown> = {
+      ...(input.options ?? {}),
+      ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+    };
+    const effortConfig = getRuntimeModelEffortConfig(input.runtimeId);
+    if (effortConfig) {
+      delete options[effortConfig.optionKey];
+    }
+    const readOption = (key: string): string | null => {
+      const value = options[key];
+      return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+    };
+
+    return {
+      source: "runtime-execution",
+      profileId: input.profileId ?? null,
+      runtimeId: input.runtimeId,
+      providerId: input.providerId ?? adapter.descriptor.providerId,
+      transport: input.transport,
+      baseUrl: readOption("baseUrl"),
+      apiKeyEnvVar: readOption("apiKeyEnvVar"),
+      apiKey: readOption("apiKey"),
+      model: input.model ?? null,
+      headers: input.headers ?? {},
+      options,
+    };
+  }
+
+  private async applyModelEffortPolicy(
+    adapter: RuntimeAdapter,
+    input: RuntimeRunInput,
+  ): Promise<RuntimeRunInput> {
+    if (!this.modelEffortDiscoveryEnabled) {
+      return input;
+    }
+
+    const config = getRuntimeModelEffortConfig(input.runtimeId);
+    const rawEffort = config ? input.options?.[config.optionKey] : null;
+    if (!config || !hasConfiguredModelEffort(rawEffort)) {
+      return input;
+    }
+    const configuredEffort = normalizeConfiguredModelEffort(input.runtimeId, rawEffort);
+
+    let models: RuntimeModel[] | null = null;
+    const discoveryProfile = this.buildModelEffortDiscoveryProfile(adapter, input);
+    if (configuredEffort && discoveryProfile && input.model && adapter.listModels) {
+      try {
+        models = await this.getModelEffortDiscoveryService().listModels(discoveryProfile);
+      } catch (error) {
+        this.log.warn(
+          {
+            runtimeId: input.runtimeId,
+            providerId: input.providerId ?? adapter.descriptor.providerId,
+            profileId: input.profileId ?? null,
+            model: input.model,
+            reasonCode: "model_effort_discovery_unavailable",
+            errorName: error instanceof Error ? error.name : typeof error,
+          },
+          "Runtime model effort discovery was unavailable; using fallback allowlist",
+        );
+      }
+    }
+
+    const validation = validateRuntimeModelEffort(input, models);
+    if (validation.reasonCode) {
+      this.log.warn(
+        {
+          runtimeId: input.runtimeId,
+          providerId: input.providerId ?? adapter.descriptor.providerId,
+          profileId: input.profileId ?? null,
+          model: input.model ?? null,
+          configuredEffort: validation.configuredEffort,
+          allowedEffortLevels: validation.allowedEffortLevels,
+          validationSource: validation.source,
+          reasonCode: validation.reasonCode,
+        },
+        "Ignoring unsupported runtime model effort",
+      );
+    }
+
+    return validation.input;
   }
 
   registerBuiltInRuntime(adapter: RuntimeAdapter): void {
@@ -325,7 +465,13 @@ export class RuntimeRegistry {
     }
 
     this.log.debug({ runtimeId: normalizedRuntimeId }, "Resolved runtime adapter");
-    return wrapAdapter(adapter, this.usageSink, this.log);
+    return wrapAdapter(
+      adapter,
+      this.usageSink,
+      this.log,
+      this.modelEffortDiscoveryEnabled,
+      (resolvedAdapter, input) => this.applyModelEffortPolicy(resolvedAdapter, input),
+    );
   }
 
   tryResolveRuntime(runtimeId: string): RuntimeAdapter | null {
@@ -336,7 +482,15 @@ export class RuntimeRegistry {
       this.log.debug({ runtimeId: normalizedRuntimeId }, "Resolved runtime adapter");
     }
 
-    return adapter ? wrapAdapter(adapter, this.usageSink, this.log) : null;
+    return adapter
+      ? wrapAdapter(
+          adapter,
+          this.usageSink,
+          this.log,
+          this.modelEffortDiscoveryEnabled,
+          (resolvedAdapter, input) => this.applyModelEffortPolicy(resolvedAdapter, input),
+        )
+      : null;
   }
 
   hasRuntime(runtimeId: string): boolean {

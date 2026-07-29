@@ -80,6 +80,7 @@ export function extractRuntimeLimitSnapshotFromError(
 
 export async function getApiRuntimeRegistry(): Promise<RuntimeRegistry> {
   if (!runtimeRegistryPromise) {
+    const env = getEnv();
     runtimeRegistryPromise = bootstrapRuntimeRegistry({
       logger: {
         debug(context, message) {
@@ -92,7 +93,8 @@ export async function getApiRuntimeRegistry(): Promise<RuntimeRegistry> {
           log.error({ ...context }, `ERROR [runtime-registry] ${message}`);
         },
       },
-      runtimeModules: getEnv().AIF_RUNTIME_MODULES ?? [],
+      runtimeModules: env.AIF_RUNTIME_MODULES ?? [],
+      modelEffortDiscoveryEnabled: env.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED,
       // DB-backed sink persists every successful run through the registry
       // wrapper. Structurally matches @aif/runtime's RuntimeUsageSink —
       // no cross-package type import needed.

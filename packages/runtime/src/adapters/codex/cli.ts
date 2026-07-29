@@ -19,6 +19,7 @@ import {
   type CodexSandboxMode,
 } from "./permissions.js";
 import { PROXY_ENV_VARS } from "../../proxyEnv.js";
+import { CODEX_MODEL_EFFORT_LEVELS, resolveModelEffortOption } from "../../modelEffort.js";
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -39,20 +40,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-const CODEX_CLI_EFFORT_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh"] as const);
-
-type CodexCliEffortLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
-
-function normalizeCodexCliEffort(value: unknown): CodexCliEffortLevel | null {
-  if (typeof value === "string") {
-    const trimmed = value.trim().toLowerCase();
-    if (CODEX_CLI_EFFORT_LEVELS.has(trimmed as CodexCliEffortLevel)) {
-      return trimmed as CodexCliEffortLevel;
-    }
-  }
-  return null;
 }
 
 /**
@@ -182,9 +169,13 @@ function normalizeCliArgs(
   if (input.model) {
     args.push("--model", input.model);
   }
-  const effort = normalizeCodexCliEffort(options.modelReasoningEffort);
+  const effort = resolveModelEffortOption(
+    options,
+    "modelReasoningEffort",
+    CODEX_MODEL_EFFORT_LEVELS,
+  );
   if (effort) {
-    args.push("-c", `model_reasoning_effort="${effort}"`);
+    args.push("-c", `model_reasoning_effort=${JSON.stringify(effort)}`);
   }
 
   // Skip git repo check — opt-in via profile for non-git working directories

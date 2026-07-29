@@ -41,7 +41,7 @@ describe("codex model discovery model catalog", () => {
         id: "custom-model",
         label: "Custom model",
         metadata: {
-          supportedEffortLevels: ["low", "invalid", "high"],
+          supportedEffortLevels: [" low ", "", "high", "low"],
           supportedReasoningEfforts: [{ reasoningEffort: "xhigh" }],
           defaultReasoningEffort: "medium",
           experimentalFeature: true,
@@ -83,9 +83,11 @@ describe("codex model discovery model catalog", () => {
       supportedReasoningEfforts: [
         { reasoningEffort: "minimal" },
         { reasoningEffort: "high" },
-        { reasoningEffort: "invalid" },
+        { reasoningEffort: "max" },
+        { reasoningEffort: "ultra" },
+        { reasoningEffort: "   " },
       ],
-      defaultReasoningEffort: "medium",
+      defaultReasoningEffort: "ultra",
       hidden: false,
       isDefault: true,
       supportsPersonality: true,
@@ -102,8 +104,8 @@ describe("codex model discovery model catalog", () => {
       metadata: {
         description: "General purpose model",
         supportsEffort: true,
-        supportedEffortLevels: ["minimal", "high"],
-        defaultEffort: "medium",
+        supportedEffortLevels: ["minimal", "high", "max", "ultra"],
+        defaultEffort: "ultra",
         hidden: false,
         isDefault: true,
         supportsPersonality: true,
@@ -120,5 +122,14 @@ describe("codex model discovery model catalog", () => {
     expect(parseCodexRuntimeModel("not-an-object")).toBeNull();
     expect(parseCodexRuntimeModel({})).toBeNull();
     expect(parseCodexRuntimeModel({ id: "   " })).toBeNull();
+  });
+
+  it("preserves explicit lack of Codex effort support", () => {
+    const parsed = parseCodexRuntimeModel({
+      model: "codex-basic",
+      supportedReasoningEfforts: [],
+    });
+
+    expect(parsed?.metadata).toMatchObject({ supportsEffort: false });
   });
 });

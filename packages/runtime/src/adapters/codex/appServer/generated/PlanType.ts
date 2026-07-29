@@ -7,6 +7,7 @@ export type PlanType =
   | "go"
   | "plus"
   | "pro"
+  | "prolite"
   | "team"
   | "self_serve_business_usage_based"
   | "business"

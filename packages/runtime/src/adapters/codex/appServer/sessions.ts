@@ -134,6 +134,7 @@ async function withAppServerSessionClient<T>(
       },
       capabilities: {
         experimentalApi: false,
+        requestAttestation: false,
       },
     });
     return await run(client);

@@ -3,6 +3,7 @@
 export {
   TASK_STATUSES,
   type TaskStatus,
+  type AutoQueueCommitStatus,
   AUTO_REVIEW_STRATEGIES,
   type AutoReviewStrategy,
   AUTO_REVIEW_FINDING_SOURCES,

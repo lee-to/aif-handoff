@@ -1,8 +1,7 @@
 import type { RuntimeModel } from "../../../types.js";
+import { normalizeModelEffort, normalizeModelEffortLevels } from "../../../modelEffort.js";
 
-const CODEX_EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
-
-type CodexEffortLevel = (typeof CODEX_EFFORT_LEVELS)[number];
+const DEFAULT_CODEX_EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"];
 
 const DEFAULT_CODEX_MODELS: RuntimeModel[] = [
   {
@@ -11,7 +10,7 @@ const DEFAULT_CODEX_MODELS: RuntimeModel[] = [
     supportsStreaming: true,
     metadata: {
       supportsEffort: true,
-      supportedEffortLevels: [...CODEX_EFFORT_LEVELS],
+      supportedEffortLevels: [...DEFAULT_CODEX_EFFORT_LEVELS],
     },
   },
   {
@@ -20,7 +19,7 @@ const DEFAULT_CODEX_MODELS: RuntimeModel[] = [
     supportsStreaming: true,
     metadata: {
       supportsEffort: true,
-      supportedEffortLevels: [...CODEX_EFFORT_LEVELS],
+      supportedEffortLevels: [...DEFAULT_CODEX_EFFORT_LEVELS],
     },
   },
   {
@@ -29,7 +28,7 @@ const DEFAULT_CODEX_MODELS: RuntimeModel[] = [
     supportsStreaming: true,
     metadata: {
       supportsEffort: true,
-      supportedEffortLevels: [...CODEX_EFFORT_LEVELS],
+      supportedEffortLevels: [...DEFAULT_CODEX_EFFORT_LEVELS],
     },
   },
   {
@@ -38,7 +37,7 @@ const DEFAULT_CODEX_MODELS: RuntimeModel[] = [
     supportsStreaming: true,
     metadata: {
       supportsEffort: true,
-      supportedEffortLevels: [...CODEX_EFFORT_LEVELS],
+      supportedEffortLevels: [...DEFAULT_CODEX_EFFORT_LEVELS],
     },
   },
 ];
@@ -101,10 +100,13 @@ export function parseCodexRuntimeModel(value: unknown): RuntimeModel | null {
   if (supportedEffortLevels) {
     metadata.supportsEffort = true;
     metadata.supportedEffortLevels = supportedEffortLevels;
+  } else if (Array.isArray(model.supportedReasoningEfforts)) {
+    metadata.supportsEffort = false;
   }
 
-  const defaultEffort = normalizeEffortLevel(model.defaultReasoningEffort);
+  const defaultEffort = normalizeModelEffort(model.defaultReasoningEffort);
   if (defaultEffort) {
+    metadata.supportsEffort = true;
     metadata.defaultEffort = defaultEffort;
   }
 
@@ -164,22 +166,26 @@ function mergeModelMetadata(
     ...(discovered ? structuredCloneCompatible(discovered) : {}),
   };
 
-  const supportedEffortLevels =
-    normalizeEffortLevels(merged.supportedEffortLevels) ??
-    normalizeSupportedReasoningEfforts(merged.supportedReasoningEfforts);
-  if (supportedEffortLevels) {
-    merged.supportedEffortLevels = supportedEffortLevels;
-    merged.supportsEffort = true;
-  } else {
+  if (merged.supportsEffort === false) {
     delete merged.supportedEffortLevels;
-    if (merged.supportsEffort !== true) {
-      delete merged.supportsEffort;
+  } else {
+    const supportedEffortLevels =
+      normalizeModelEffortLevels(merged.supportedEffortLevels) ??
+      normalizeSupportedReasoningEfforts(merged.supportedReasoningEfforts);
+    if (supportedEffortLevels) {
+      merged.supportedEffortLevels = supportedEffortLevels;
+      merged.supportsEffort = true;
+    } else {
+      delete merged.supportedEffortLevels;
+      if (merged.supportsEffort !== true) {
+        delete merged.supportsEffort;
+      }
     }
   }
 
   const defaultEffort =
-    normalizeEffortLevel(merged.defaultEffort) ??
-    normalizeEffortLevel(merged.defaultReasoningEffort);
+    normalizeModelEffort(merged.defaultEffort) ??
+    normalizeModelEffort(merged.defaultReasoningEffort);
   if (defaultEffort) {
     merged.defaultEffort = defaultEffort;
   } else {
@@ -191,39 +197,17 @@ function mergeModelMetadata(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function normalizeEffortLevel(value: unknown): CodexEffortLevel | null {
-  return typeof value === "string" && CODEX_EFFORT_LEVELS.includes(value as CodexEffortLevel)
-    ? (value as CodexEffortLevel)
-    : null;
-}
-
-function normalizeEffortLevels(value: unknown): CodexEffortLevel[] | undefined {
+function normalizeSupportedReasoningEfforts(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
 
-  const unique = new Set<CodexEffortLevel>();
-  for (const entry of value) {
-    const normalized = normalizeEffortLevel(entry);
-    if (normalized) {
-      unique.add(normalized);
-    }
-  }
-
-  return unique.size > 0 ? [...unique] : undefined;
-}
-
-function normalizeSupportedReasoningEfforts(value: unknown): CodexEffortLevel[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-
-  const unique = new Set<CodexEffortLevel>();
+  const unique = new Set<string>();
   for (const entry of value) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const normalized = normalizeEffortLevel((entry as Record<string, unknown>).reasoningEffort);
+    const normalized = normalizeModelEffort((entry as Record<string, unknown>).reasoningEffort);
     if (normalized) {
       unique.add(normalized);
     }

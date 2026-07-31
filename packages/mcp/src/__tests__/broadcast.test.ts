@@ -208,3 +208,43 @@ describe("broadcastTaskChange with Telegram", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("broadcastTaskChange internal auth", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("forwards internal broadcast auth headers", async () => {
+    // `/tasks/:id/broadcast` is guarded by internalBroadcastAuth. Without these
+    // headers the API answers 401, the WS event never goes out, and the agent's
+    // wake channel never sees the change.
+    vi.doMock("@aif/shared", async () => {
+      const actual = await vi.importActual<typeof import("@aif/shared")>("@aif/shared");
+      return {
+        ...actual,
+        getEnv: () => ({
+          API_BASE_URL: "http://localhost:3009",
+          INTERNAL_BROADCAST_TOKEN: "internal-token",
+          TELEGRAM_BOT_TOKEN: undefined,
+          TELEGRAM_USER_ID: undefined,
+        }),
+        sendTelegramNotification: async () => {},
+      };
+    });
+
+    const { broadcastTaskChange: broadcast } = await import("../utils/broadcast.js");
+
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", mockFetch);
+
+    await broadcast("task-abc", "task:moved");
+
+    const options = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(options.headers).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer internal-token",
+      "X-Internal-Broadcast-Token": "internal-token",
+    });
+  });
+});

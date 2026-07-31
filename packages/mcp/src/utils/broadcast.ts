@@ -1,4 +1,4 @@
-import { getEnv, logger, sendTelegramNotification } from "@aif/shared";
+import { getEnv, internalBroadcastHeaders, logger, sendTelegramNotification } from "@aif/shared";
 
 const log = logger("mcp:broadcast");
 
@@ -23,7 +23,10 @@ export async function broadcastTaskChange(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // `/tasks/:id/broadcast` is guarded by internalBroadcastAuth — without
+      // these headers every MCP-driven change is rejected with 401, so the
+      // board never live-updates and the agent's wake channel never fires.
+      headers: internalBroadcastHeaders(getEnv().INTERNAL_BROADCAST_TOKEN),
       body: JSON.stringify({ type }),
     });
 

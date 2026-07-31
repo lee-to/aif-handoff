@@ -1,4 +1,4 @@
-import { logger, getEnv, sendTelegramNotification } from "@aif/shared";
+import { logger, getEnv, internalBroadcastHeaders, sendTelegramNotification } from "@aif/shared";
 
 const log = logger("agent-notifier");
 
@@ -13,20 +13,6 @@ export interface TaskNotificationInfo {
 type ProjectBroadcastType = "project:auto_queue_mode_changed" | "project:auto_queue_advanced";
 type RuntimeLimitBroadcastType = "project:runtime_limit_updated";
 
-function internalBroadcastHeaders(): Record<string, string> {
-  const token = getEnv().INTERNAL_BROADCAST_TOKEN?.trim() ?? "";
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-    headers["X-Internal-Broadcast-Token"] = token;
-  } else if ((process.env.NODE_ENV ?? "").trim().toLowerCase() === "development") {
-    headers["X-Real-IP"] = "127.0.0.1";
-  }
-  return headers;
-}
-
 /** Best-effort project-scoped WS broadcast via the API. */
 export async function notifyProjectBroadcast(
   projectId: string,
@@ -38,7 +24,7 @@ export async function notifyProjectBroadcast(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: internalBroadcastHeaders(),
+      headers: internalBroadcastHeaders(getEnv().INTERNAL_BROADCAST_TOKEN),
       body: JSON.stringify({ type, taskId: info.taskId }),
     });
     if (res.ok) {
@@ -65,7 +51,7 @@ export async function notifyProjectRuntimeLimitBroadcast(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: internalBroadcastHeaders(),
+      headers: internalBroadcastHeaders(getEnv().INTERNAL_BROADCAST_TOKEN),
       body: JSON.stringify({
         type,
         taskId: info.taskId ?? null,
@@ -105,7 +91,7 @@ export async function notifyTaskBroadcast(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: internalBroadcastHeaders(),
+      headers: internalBroadcastHeaders(getEnv().INTERNAL_BROADCAST_TOKEN),
       body: JSON.stringify({ type }),
     });
 

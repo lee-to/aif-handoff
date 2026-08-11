@@ -17,8 +17,12 @@ export interface PollSchedulerOptions {
    * cycle settles only after every stage it started has finished, and an
    * implementer stage legitimately runs for hours; awaiting it here would hold
    * the re-entrancy guard for that whole time and silently drop every interval
-   * tick in between. A callback that opts out must own its own concurrency
-   * control (`pollAndProcess` gates on free stage slots and a cycle ceiling).
+   * tick in between. Ticks are then dispatch-only: the callback is fired and the
+   * returned promise is dropped, so no per-tick wrapper stays attached to a
+   * multi-hour promise. A callback that opts out therefore owns both its own
+   * concurrency control (`pollAndProcess` gates on free stage slots and a cycle
+   * ceiling) and its own error handling — the scheduler cannot observe a
+   * rejection it no longer holds.
    */
   awaitCallback?: boolean;
 }
@@ -40,12 +44,7 @@ export function startPollScheduler(
   const awaitCallback = options.awaitCallback ?? true;
   let isRunning = false;
 
-  async function runTick(): Promise<void> {
-    if (!awaitCallback) {
-      await callback();
-      return;
-    }
-
+  async function runGuardedTick(): Promise<void> {
     if (isRunning) return;
     isRunning = true;
     try {
@@ -56,7 +55,12 @@ export function startPollScheduler(
   }
 
   const handle = setInterval(() => {
-    void runTick();
+    if (!awaitCallback) {
+      void callback();
+      return;
+    }
+
+    void runGuardedTick();
   }, normalizedIntervalMs);
 
   return {

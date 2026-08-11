@@ -1027,6 +1027,43 @@ describe("data layer", () => {
 
       expect(listCoordinatorActionableProjectIds(10)).toEqual(["proj-2", "proj-1"]);
     });
+
+    it("spends the limit on projects the caller can use when excluding ids", () => {
+      const db = testDb.current;
+      const projectIds = ["proj-2", "proj-3", "proj-4"];
+      projectIds.forEach((projectId, index) => {
+        db.insert(projects)
+          .values({ id: projectId, name: projectId, rootPath: `/tmp/${projectId}` })
+          .run();
+        db.insert(tasks)
+          .values({
+            id: `${projectId}-task`,
+            projectId,
+            title: "Waiting",
+            status: "planning",
+            createdAt: `2026-01-0${index + 1}T00:00:00.000Z`,
+          })
+          .run();
+      });
+      db.insert(tasks)
+        .values({
+          id: "proj-1-task",
+          projectId: "proj-1",
+          title: "Waiting",
+          status: "review",
+          createdAt: "2026-01-09T00:00:00.000Z",
+        })
+        .run();
+
+      // Without SQL-level exclusion the excluded projects would consume the
+      // whole window and hide the only usable project behind them.
+      expect(
+        listCoordinatorActionableProjectIds(1, { excludeProjectIds: projectIds }),
+      ).toEqual(["proj-1"]);
+      expect(listCoordinatorActionableProjectIds(1, { excludeProjectIds: [] })).toEqual([
+        "proj-2",
+      ]);
+    });
   });
 
   // ── Task claiming ──────────────────────────────────────

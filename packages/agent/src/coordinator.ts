@@ -186,16 +186,20 @@ class StageSemaphore {
   }
 
   /**
-   * True when any stage of `projectId` is currently held. Keys are
-   * `${projectId}:${stageLabel}`, so an overlapping poll cycle can use this to
-   * leave that project alone and preserve project-local stage ordering.
+   * Distinct project ids that currently hold at least one stage. Keys are
+   * `${projectId}:${stageLabel}`, so an overlapping poll cycle passes these to
+   * the project query to leave busy projects alone — that preserves
+   * project-local stage ordering without spending lane slots on them.
    */
-  hasActiveProject(projectId: string): boolean {
-    const prefix = `${projectId}:`;
+  activeProjectIds(): string[] {
+    const projectIds = new Set<string>();
     for (const [key, count] of this.counts) {
-      if (count > 0 && key.startsWith(prefix)) return true;
+      if (count <= 0) continue;
+      const separatorIndex = key.lastIndexOf(":");
+      if (separatorIndex <= 0) continue;
+      projectIds.add(key.slice(0, separatorIndex));
     }
-    return false;
+    return [...projectIds];
   }
 
   trackedKeyCount(): number {
@@ -1014,8 +1018,24 @@ let activePollCycles = 0;
  */
 const MAX_CONCURRENT_POLL_CYCLES = 8;
 
+/**
+ * Single read site for the overlapping-cycle rollout flag. `env` is the cached
+ * snapshot from `getEnv()`, so this is a property read on an already validated
+ * object rather than a re-parse.
+ *
+ * Off by default: overlapping cycles and the non-awaiting interval dispatch in
+ * `index.ts` change coordinator behaviour on the polling hot path, so both move
+ * together and only when an operator opts in. With the flag off the coordinator
+ * keeps its original single-flight loop — one cycle at a time, triggers during
+ * an active cycle coalesced into one follow-up cycle.
+ */
+export function isOverlappingPollCyclesEnabled(): boolean {
+  return env.AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED;
+}
+
 function canStartOverlappingPollCycle(): boolean {
   return (
+    isOverlappingPollCyclesEnabled() &&
     activePollCycles < MAX_CONCURRENT_POLL_CYCLES &&
     stageSemaphore.totalActive() < env.COORDINATOR_MAX_CONCURRENT_TASKS
   );
@@ -1081,12 +1101,13 @@ async function runPollCycle(
   // An overlapping cycle runs while an earlier cycle still drains its stages.
   // Skipping projects that already hold a stage keeps project-local stage order
   // intact — a planner and an implementer of the same project must never share
-  // one working tree. Scan a wider lane window so busy projects do not hide the
-  // idle ones behind them.
-  const laneWindow = options.overlapping ? maxProjectLanes * 3 : maxProjectLanes;
-  const projectIds = listCoordinatorActionableProjectIds(laneWindow)
-    .filter((projectId) => !options.overlapping || !stageSemaphore.hasActiveProject(projectId))
-    .slice(0, maxProjectLanes);
+  // one working tree. The skip happens inside the query: filtering a fixed
+  // window afterwards would let busy projects consume every row and hide an
+  // idle project behind them, so a free global slot would stay unused until a
+  // long stage finished. The snapshot is exact — reading it and running the
+  // query are synchronous, with no await in between for a stage to settle.
+  const excludeProjectIds = options.overlapping ? stageSemaphore.activeProjectIds() : [];
+  const projectIds = listCoordinatorActionableProjectIds(maxProjectLanes, { excludeProjectIds });
   if (projectIds.length === 0) {
     log.debug({ overlapping: options.overlapping }, "No actionable project lanes");
     return;
@@ -1283,6 +1304,9 @@ async function runPollCycle(
 }
 
 export function pollAndProcess(): Promise<void> {
+  // With the rollout flag off, `canStartOverlappingPollCycle()` is always false
+  // and at most one cycle is ever in flight, so this is the original
+  // single-flight guard: one coalesced follow-up cycle on the active promise.
   if (activePollCycles > 0 && !canStartOverlappingPollCycle()) {
     followUpPollRequested = true;
     log.debug(

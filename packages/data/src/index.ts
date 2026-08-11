@@ -1212,12 +1212,25 @@ export function createTask(input: {
     displayNameSnapshot: "System",
   };
 
+  // Resolve project config once — used both for planPath auto-computation and
+  // for the task_defaults fallback (explicit task arg → project task_defaults →
+  // schema default via undefined). Sourced from `.ai-factory/config.yaml`.
+  const project = findProjectById(input.projectId);
+  const projectRoot = project?.rootPath ?? process.cwd();
+  const cfg = getProjectConfig(projectRoot);
+  const td = cfg.task_defaults;
+
+  // Resolve task flags: explicit input → project task_defaults → undefined (schema default).
+  const resolvedPlannerMode = input.plannerMode ?? td.plannerMode;
+  const resolvedAutoMode = input.autoMode ?? td.autoMode;
+  const resolvedSkipReview = input.skipReview ?? td.skipReview;
+  const resolvedUseSubagents = input.useSubagents ?? td.useSubagents;
+  const resolvedPlanTests = input.planTests ?? td.planTests;
+  const resolvedMaxReviewIterations = input.maxReviewIterations ?? td.maxReviewIterations;
+
   // Auto-compute planPath for full mode when no explicit path is provided
   let resolvedPlanPath = input.planPath;
-  if (input.plannerMode === "full") {
-    const project = findProjectById(input.projectId);
-    const projectRoot = project?.rootPath ?? process.cwd();
-    const cfg = getProjectConfig(projectRoot);
+  if (resolvedPlannerMode === "full") {
     const defaultPlanPath = cfg.paths.plan;
 
     if (resolvedPlanPath === undefined || resolvedPlanPath === defaultPlanPath) {
@@ -1277,20 +1290,20 @@ export function createTask(input: {
       description: input.description,
       attachments: JSON.stringify(input.attachments ?? []),
       priority: input.priority,
-      autoMode: input.autoMode,
+      autoMode: resolvedAutoMode,
       executionOwner,
       ownershipRevision: 0,
       isFix: input.isFix,
-      plannerMode: input.plannerMode,
+      plannerMode: resolvedPlannerMode,
       planPath: resolvedPlanPath,
       planDocs: input.planDocs,
-      planTests: input.planTests,
-      skipReview: input.skipReview,
-      useSubagents: input.useSubagents,
+      planTests: resolvedPlanTests,
+      skipReview: resolvedSkipReview,
+      useSubagents: resolvedUseSubagents,
       runPlanImprove: input.runPlanImprove,
       runPostVerify: input.runPostVerify,
       autoQa: input.autoQa,
-      maxReviewIterations: input.maxReviewIterations,
+      maxReviewIterations: resolvedMaxReviewIterations,
       paused: input.paused,
       runtimeProfileId: input.runtimeProfileId ?? null,
       modelOverride: input.modelOverride ?? null,

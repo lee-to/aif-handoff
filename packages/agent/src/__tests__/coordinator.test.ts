@@ -113,6 +113,7 @@ const {
   getCoordinatorRuntimeCounters,
   resetCoordinatorRuntimeCountersForTests,
   getStageSemaphore,
+  getActivePollCycleCount,
 } = await import("../coordinator.js");
 const { runPlanner } = await import("../subagents/planner.js");
 const { runImprover } = await import("../subagents/improver.js");
@@ -153,6 +154,19 @@ describe("coordinator", () => {
     expect(semaphore.totalActive()).toBe(0);
     expect(semaphore.trackedKeyCount()).toBe(0);
   });
+
+  /**
+   * Overlapping poll cycles are an opt-in rollout, so a test that exercises
+   * them has to turn the flag on. Returns the restore function.
+   */
+  function enableOverlappingPollCycles(): () => void {
+    const coordinatorEnv = getEnv();
+    const previous = coordinatorEnv.AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED;
+    Object.assign(coordinatorEnv, { AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: true });
+    return () => {
+      Object.assign(coordinatorEnv, { AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: previous });
+    };
+  }
 
   function insertRuntimeProfile(input: {
     id: string;
@@ -1986,64 +2000,342 @@ describe("coordinator", () => {
     expect(runReviewer).toHaveBeenCalledWith("ready-review-task", "/tmp/review");
   });
 
-  it("should execute one coalesced follow-up cycle after an overlapping poll request", async () => {
+  it("should run an overlapping poll cycle for a project with no active stage", async () => {
     const db = testDb.current;
-    db.insert(projects)
-      .values({
-        id: "active-cycle-project",
-        name: "Active cycle",
-        rootPath: "/tmp/active-cycle",
-        parallelEnabled: true,
-      })
-      .run();
-    db.insert(tasks)
-      .values({
-        id: "active-cycle-planning-task",
-        projectId: "active-cycle-project",
-        title: "Slow planning",
-        status: "planning",
-      })
-      .run();
-
+    const restoreOverlap = enableOverlappingPollCycles();
     let resolvePlanner: (() => void) | undefined;
-    vi.mocked(runPlanner).mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolvePlanner = resolve;
-        }),
-    );
 
-    const firstPoll = pollAndProcess();
-    await vi.waitFor(() => expect(resolvePlanner).toBeTypeOf("function"));
+    try {
+      db.insert(projects)
+        .values({
+          id: "active-cycle-project",
+          name: "Active cycle",
+          rootPath: "/tmp/active-cycle",
+          parallelEnabled: true,
+        })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "active-cycle-planning-task",
+          projectId: "active-cycle-project",
+          title: "Slow planning",
+          status: "planning",
+        })
+        .run();
 
-    db.insert(projects)
-      .values({
-        id: "follow-up-project",
-        name: "Follow-up",
-        rootPath: "/tmp/follow-up",
-      })
-      .run();
-    db.insert(tasks)
-      .values({
-        id: "follow-up-review-task",
-        projectId: "follow-up-project",
-        title: "Follow-up review",
-        status: "review",
-      })
-      .run();
+      vi.mocked(runPlanner).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolvePlanner = resolve;
+          }),
+      );
 
-    const secondPoll = pollAndProcess();
-    expect(secondPoll).toBe(firstPoll);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const reviewerStartedBeforePlannerFinished = vi
-      .mocked(runReviewer)
-      .mock.calls.some(([taskId]) => taskId === "follow-up-review-task");
+      const firstPoll = pollAndProcess();
+      await vi.waitFor(() => expect(resolvePlanner).toBeTypeOf("function"));
 
-    resolvePlanner?.();
-    await Promise.all([firstPoll, secondPoll]);
+      // Arrives after the first cycle already selected its lanes. It must not
+      // wait for the slow planner — that stage can legitimately run for hours.
+      db.insert(projects)
+        .values({
+          id: "follow-up-project",
+          name: "Follow-up",
+          rootPath: "/tmp/follow-up",
+        })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "follow-up-review-task",
+          projectId: "follow-up-project",
+          title: "Follow-up review",
+          status: "review",
+        })
+        .run();
 
-    expect(reviewerStartedBeforePlannerFinished).toBe(false);
-    expect(runReviewer).toHaveBeenCalledWith("follow-up-review-task", "/tmp/follow-up");
+      const secondPoll = pollAndProcess();
+      expect(secondPoll).not.toBe(firstPoll);
+      await secondPoll;
+
+      expect(runReviewer).toHaveBeenCalledWith("follow-up-review-task", "/tmp/follow-up");
+      expect(getActivePollCycleCount()).toBe(1);
+
+      resolvePlanner?.();
+      await firstPoll;
+      expect(getActivePollCycleCount()).toBe(0);
+    } finally {
+      resolvePlanner?.();
+      restoreOverlap();
+    }
+  });
+
+  it("should keep the single-flight poll loop while the rollout flag is off", async () => {
+    const db = testDb.current;
+    let resolvePlanner: (() => void) | undefined;
+
+    try {
+      db.insert(projects)
+        .values({
+          id: "single-flight-project",
+          name: "Single flight",
+          rootPath: "/tmp/single-flight",
+        })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "single-flight-planning-task",
+          projectId: "single-flight-project",
+          title: "Slow planning",
+          status: "planning",
+        })
+        .run();
+
+      vi.mocked(runPlanner).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolvePlanner = resolve;
+          }),
+      );
+
+      const firstPoll = pollAndProcess();
+      await vi.waitFor(() => expect(resolvePlanner).toBeTypeOf("function"));
+
+      db.insert(projects)
+        .values({ id: "waiting-project", name: "Waiting", rootPath: "/tmp/waiting" })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "waiting-review-task",
+          projectId: "waiting-project",
+          title: "Waiting review",
+          status: "review",
+        })
+        .run();
+
+      // Default rollout: one cycle at a time, the trigger collapses into a
+      // single follow-up cycle on the active promise.
+      const secondPoll = pollAndProcess();
+      expect(secondPoll).toBe(firstPoll);
+      expect(getActivePollCycleCount()).toBe(1);
+      expect(runReviewer).not.toHaveBeenCalledWith("waiting-review-task", "/tmp/waiting");
+
+      resolvePlanner?.();
+      await firstPoll;
+
+      expect(runReviewer).toHaveBeenCalledWith("waiting-review-task", "/tmp/waiting");
+      expect(getActivePollCycleCount()).toBe(0);
+    } finally {
+      resolvePlanner?.();
+    }
+  });
+
+  it("should coalesce a follow-up cycle when the global ceiling is saturated", async () => {
+    const db = testDb.current;
+    const coordinatorEnv = getEnv();
+    const previousLimit = coordinatorEnv.COORDINATOR_MAX_CONCURRENT_TASKS;
+    Object.assign(coordinatorEnv, { COORDINATOR_MAX_CONCURRENT_TASKS: 1 });
+    const restoreOverlap = enableOverlappingPollCycles();
+    let resolvePlanner: (() => void) | undefined;
+
+    try {
+      db.insert(projects)
+        .values({ id: "saturated-project", name: "Saturated", rootPath: "/tmp/saturated" })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "saturated-planning-task",
+          projectId: "saturated-project",
+          title: "Slow planning",
+          status: "planning",
+        })
+        .run();
+
+      vi.mocked(runPlanner).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolvePlanner = resolve;
+          }),
+      );
+
+      const firstPoll = pollAndProcess();
+      await vi.waitFor(() => expect(resolvePlanner).toBeTypeOf("function"));
+
+      // The single global slot is taken, so no overlapping cycle may start —
+      // the trigger collapses into one follow-up cycle on the active promise.
+      db.insert(projects)
+        .values({ id: "starved-project", name: "Starved", rootPath: "/tmp/starved" })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "starved-review-task",
+          projectId: "starved-project",
+          title: "Starved review",
+          status: "review",
+        })
+        .run();
+
+      const secondPoll = pollAndProcess();
+      expect(secondPoll).toBe(firstPoll);
+      expect(getActivePollCycleCount()).toBe(1);
+
+      resolvePlanner?.();
+      await firstPoll;
+
+      // The coalesced follow-up cycle drains the waiting task.
+      expect(runReviewer).toHaveBeenCalledWith("starved-review-task", "/tmp/starved");
+    } finally {
+      resolvePlanner?.();
+      restoreOverlap();
+      Object.assign(coordinatorEnv, { COORDINATOR_MAX_CONCURRENT_TASKS: previousLimit });
+    }
+  });
+
+  it("should keep project-local stage order by skipping busy projects in an overlapping cycle", async () => {
+    const db = testDb.current;
+    const restoreOverlap = enableOverlappingPollCycles();
+    let resolvePlanner: (() => void) | undefined;
+
+    try {
+      db.insert(projects)
+        .values({
+          id: "busy-project",
+          name: "Busy",
+          rootPath: "/tmp/busy",
+          parallelEnabled: true,
+        })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "busy-planning-task",
+          projectId: "busy-project",
+          title: "Slow planning",
+          status: "planning",
+        })
+        .run();
+
+      vi.mocked(runPlanner).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolvePlanner = resolve;
+          }),
+      );
+
+      const firstPoll = pollAndProcess();
+      await vi.waitFor(() => expect(resolvePlanner).toBeTypeOf("function"));
+
+      // Same project as the running planner: starting its reviewer now would put
+      // two stages of one project in the same working tree at once.
+      db.insert(tasks)
+        .values({
+          id: "busy-review-task",
+          projectId: "busy-project",
+          title: "Same-project review",
+          status: "review",
+        })
+        .run();
+
+      await pollAndProcess();
+      const reviewerStartedBeforePlannerFinished = vi
+        .mocked(runReviewer)
+        .mock.calls.some(([taskId]) => taskId === "busy-review-task");
+
+      resolvePlanner?.();
+      await firstPoll;
+
+      expect(reviewerStartedBeforePlannerFinished).toBe(false);
+      expect(runReviewer).toHaveBeenCalledWith("busy-review-task", "/tmp/busy");
+    } finally {
+      resolvePlanner?.();
+      restoreOverlap();
+    }
+  });
+
+  it("should reach an idle project behind more busy projects than there are lanes", async () => {
+    const db = testDb.current;
+    const coordinatorEnv = getEnv();
+    const previousLimits = {
+      COORDINATOR_MAX_CONCURRENT_TASKS: coordinatorEnv.COORDINATOR_MAX_CONCURRENT_TASKS,
+      COORDINATOR_MAX_CONCURRENT_PROJECTS: coordinatorEnv.COORDINATOR_MAX_CONCURRENT_PROJECTS,
+    };
+    // One lane per cycle, four global slots — a supported combination. Three
+    // busy projects rank ahead of the idle one, so a fixed lane window sized
+    // off the lane limit alone would never return the idle project and the
+    // fourth global slot would stay unused until a long stage finished.
+    Object.assign(coordinatorEnv, {
+      COORDINATOR_MAX_CONCURRENT_TASKS: 4,
+      COORDINATOR_MAX_CONCURRENT_PROJECTS: 1,
+    });
+    const restoreOverlap = enableOverlappingPollCycles();
+    const resolvePlanners: Array<() => void> = [];
+
+    try {
+      // Each busy project keeps a second queued task, so it stays in the
+      // actionable set while its slow planner runs — that is what fills a fixed
+      // lane window with projects the cycle cannot use.
+      const busyProjectIds = ["busy-lane-1", "busy-lane-2", "busy-lane-3"];
+      busyProjectIds.forEach((projectId, index) => {
+        db.insert(projects)
+          .values({ id: projectId, name: projectId, rootPath: `/tmp/${projectId}` })
+          .run();
+        db.insert(tasks)
+          .values({
+            id: `${projectId}-planning-task`,
+            projectId,
+            title: "Slow planning",
+            status: "planning",
+            createdAt: `2026-07-2${index + 1}T00:00:00.000Z`,
+          })
+          .run();
+        db.insert(tasks)
+          .values({
+            id: `${projectId}-review-task`,
+            projectId,
+            title: "Queued review",
+            status: "review",
+            createdAt: `2026-07-2${index + 1}T01:00:00.000Z`,
+          })
+          .run();
+      });
+      db.insert(projects)
+        .values({ id: "idle-lane", name: "Idle", rootPath: "/tmp/idle-lane" })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "idle-lane-review-task",
+          projectId: "idle-lane",
+          title: "Idle review",
+          status: "review",
+          createdAt: "2026-07-28T00:00:00.000Z",
+        })
+        .run();
+
+      busyProjectIds.forEach(() => {
+        vi.mocked(runPlanner).mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolvePlanners.push(resolve);
+            }),
+        );
+      });
+
+      // One cycle per lane: each picks the oldest project that holds no stage.
+      const busyPolls: Array<Promise<void>> = [];
+      for (let index = 0; index < busyProjectIds.length; index += 1) {
+        busyPolls.push(pollAndProcess());
+        await vi.waitFor(() => expect(resolvePlanners).toHaveLength(index + 1));
+      }
+      expect(getStageSemaphore().totalActive()).toBe(3);
+
+      // A free global slot remains, and the only project that can use it sits
+      // behind all three busy ones.
+      await pollAndProcess();
+      expect(runReviewer).toHaveBeenCalledWith("idle-lane-review-task", "/tmp/idle-lane");
+
+      resolvePlanners.forEach((resolve) => resolve());
+      await Promise.all(busyPolls);
+    } finally {
+      resolvePlanners.forEach((resolve) => resolve());
+      restoreOverlap();
+      Object.assign(coordinatorEnv, previousLimits);
+    }
   });
 
   it("should skip a candidate paused while waiting for a global permit", async () => {
@@ -2427,14 +2719,20 @@ describe("coordinator", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(pollSettled).toBe(false);
 
-      const overlappingPoll = pollAndProcess();
-      expect(overlappingPoll).toBe(pollPromise);
+      // Default rollout: the trigger coalesces onto the active cycle, and the
+      // project keeps draining its stage before the later candidate runs.
+      const followUpPoll = pollAndProcess();
+      expect(followUpPoll).toBe(pollPromise);
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(runReviewer).not.toHaveBeenCalledWith("lane-drain-review", "/tmp/test");
 
       releasePlanner?.();
-      await Promise.all([pollPromise, overlappingPoll]);
+      await Promise.all([pollPromise, followUpPoll]);
 
+      // Both recovered planning tasks reach `review` first and fill the
+      // per-project stage limit, so the later review candidate is drained by
+      // the following cycle.
+      await pollAndProcess();
       await pollAndProcess();
 
       expect(runReviewer).toHaveBeenCalledWith("lane-drain-review", "/tmp/test");

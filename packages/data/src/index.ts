@@ -14,6 +14,7 @@ import {
   max,
   min,
   ne,
+  notInArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -2138,19 +2139,35 @@ export function findCoordinatorTaskCandidatesForProject(
     .all();
 }
 
-export function listCoordinatorActionableProjectIds(limit: number): string[] {
+/**
+ * Actionable project ids, oldest waiting task first.
+ *
+ * `excludeProjectIds` filters in SQL rather than in the caller, so `limit` is
+ * always spent on projects the caller can actually use. An overlapping poll
+ * cycle must skip projects that already hold a stage; filtering those out after
+ * the query would let busy projects consume the whole window and hide an idle
+ * project behind them, leaving a free global slot unused until a long stage
+ * finishes.
+ */
+export function listCoordinatorActionableProjectIds(
+  limit: number,
+  options: { excludeProjectIds?: readonly string[] } = {},
+): string[] {
   const nowIso = new Date().toISOString();
+  const excludeProjectIds = options.excludeProjectIds ?? [];
+  const conditions = [
+    eq(tasks.executionOwner, "ai"),
+    coordinatorAnyStageFilter(),
+    unlockedCoordinatorTaskFilter(nowIso),
+  ];
+  if (excludeProjectIds.length > 0) {
+    conditions.push(notInArray(tasks.projectId, [...excludeProjectIds]));
+  }
 
   return getDb()
     .select({ projectId: tasks.projectId })
     .from(tasks)
-    .where(
-      and(
-        eq(tasks.executionOwner, "ai"),
-        coordinatorAnyStageFilter(),
-        unlockedCoordinatorTaskFilter(nowIso),
-      ),
-    )
+    .where(and(...conditions))
     .groupBy(tasks.projectId)
     .orderBy(min(tasks.createdAt), asc(tasks.projectId))
     .limit(limit)

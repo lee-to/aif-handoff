@@ -66,4 +66,27 @@ describe("pollScheduler", () => {
 
     scheduler.stop();
   });
+
+  it("dispatches every tick without awaiting the callback when awaitCallback is false", async () => {
+    // The coordinator's poll cycle promise settles only after every stage it
+    // started has finished (hours for an implementer). The re-entrancy guard
+    // must not swallow ticks for that whole time — otherwise WebSocket wake
+    // events become the coordinator's only trigger. The tick drops the promise
+    // instead of awaiting it, so nothing accumulates against a pending cycle.
+    const callback = vi.fn(() => new Promise<void>(() => {}));
+    const scheduler = startPollScheduler(callback, 10_000, { awaitCallback: false });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(callback).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(callback).toHaveBeenCalledTimes(4);
+
+    scheduler.stop();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(callback).toHaveBeenCalledTimes(4);
+  });
 });

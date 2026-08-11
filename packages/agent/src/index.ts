@@ -2,7 +2,11 @@ import { createRequire } from "node:module";
 import { createDbUsageSink, listProjects } from "@aif/data";
 import { getEnv, logger } from "@aif/shared";
 import { bootstrapRuntimeRegistry } from "@aif/runtime";
-import { pollAndProcess, setRuntimeRegistry } from "./coordinator.js";
+import {
+  isOverlappingPollCyclesEnabled,
+  pollAndProcess,
+  setRuntimeRegistry,
+} from "./coordinator.js";
 import { flushAllActivityQueues } from "./hooks.js";
 import { notifyProjectRuntimeLimitBroadcast } from "./notifier.js";
 import { connectWakeChannel, closeWakeChannel, waitForApiReady } from "./wakeChannel.js";
@@ -41,13 +45,31 @@ const env = getEnv();
 // Ensure DB is ready
 listProjects();
 
-const pollScheduler = startPollScheduler(async () => {
-  try {
-    await pollAndProcess();
-  } catch (err) {
-    log.error({ err }, "Unexpected error in poll cycle");
-  }
-}, env.POLL_INTERVAL_MS);
+// `pollAndProcess()` settles only once every stage the cycle started has
+// finished, and an implementer stage legitimately runs for hours. Letting the
+// scheduler await that promise would hold its re-entrancy guard for the whole
+// run and silently drop every tick in between, leaving WebSocket wake events as
+// the coordinator's only trigger — a task that lands while a stage is running
+// would then wait for an external event instead of the next tick. Bounded
+// overlap is enforced inside pollAndProcess() (free stage slots +
+// MAX_CONCURRENT_POLL_CYCLES), so the tick only has to dispatch.
+//
+// Dispatch and overlapping cycles move together behind one rollout flag: with
+// it off the scheduler awaits the callback again, which is the correct guard
+// for a single-flight coordinator. The callback below swallows its own errors,
+// which is what a dispatch-only tick requires.
+const overlappingPollCyclesEnabled = isOverlappingPollCyclesEnabled();
+const pollScheduler = startPollScheduler(
+  async () => {
+    try {
+      await pollAndProcess();
+    } catch (err) {
+      log.error({ err }, "Unexpected error in poll cycle");
+    }
+  },
+  env.POLL_INTERVAL_MS,
+  { awaitCallback: !overlappingPollCyclesEnabled },
+);
 
 // Pre-load runtime registry so project init includes all adapters
 bootstrapRuntimeRegistry({
@@ -72,6 +94,7 @@ log.info(
   {
     configuredIntervalMs: env.POLL_INTERVAL_MS,
     intervalMs: pollScheduler.intervalMs,
+    overlappingPollCyclesEnabled,
   },
   "Agent coordinator starting",
 );

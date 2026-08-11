@@ -273,6 +273,7 @@ const envSchema = z.object({
       return value;
     }, z.boolean())
     .default(false),
+  AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: booleanEnvSchema.default(false),
   AIF_GITHUB_ISSUE_PR_ENABLED: booleanEnvSchema.default(false),
   AIF_RUNTIME_SESSION_FORK_ENABLED: z
     .preprocess((value) => {

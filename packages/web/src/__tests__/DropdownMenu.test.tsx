@@ -42,6 +42,26 @@ describe("DropdownMenu", () => {
     expect(screen.getByTestId("state").textContent).toBe("open");
   });
 
+  it("keeps an as-child trigger measurable for portal positioning", () => {
+    function AsChildHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <DropdownMenu open={open} onOpenChange={setOpen}>
+          <DropdownMenuTrigger asChild>
+            <button type="button">Open child menu</button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>Content</DropdownMenuContent>
+        </DropdownMenu>
+      );
+    }
+
+    render(<AsChildHarness />);
+    const wrapper = screen.getByRole("button", { name: "Open child menu" }).parentElement;
+
+    expect(wrapper?.className).toContain("inline-flex");
+    expect(wrapper?.className).not.toContain("contents");
+  });
+
   it("shows content when open", () => {
     render(<DropdownHarness defaultOpen />);
     expect(screen.getByTestId("item-edit")).toBeTruthy();

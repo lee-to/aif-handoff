@@ -124,6 +124,13 @@ export function register(server: McpServer, context: ToolContext): void {
         tags: args.tags,
         plannerMode: args.plannerMode,
         autoMode: args.autoMode,
+        executionOwner: "ai",
+        assigneeIds: [],
+        actor: {
+          kind: "agent",
+          id: "mcp",
+          displayNameSnapshot: "MCP",
+        },
         isFix: args.isFix,
         planPath: args.planPath,
         planDocs: args.planDocs,
@@ -138,10 +145,7 @@ export function register(server: McpServer, context: ToolContext): void {
       });
 
       if (!row) {
-        log.error(
-          { projectId: args.projectId, title: args.title },
-          "Task creation returned undefined",
-        );
+        log.error({ projectId: args.projectId }, "Task creation returned undefined");
         throw new McpError(ErrorCode.InternalError, "Failed to create task");
       }
 
@@ -162,7 +166,6 @@ export function register(server: McpServer, context: ToolContext): void {
         {
           taskId: full.id,
           projectId: args.projectId,
-          title: args.title,
           runtimeProfileId: args.runtimeProfileId ?? null,
           modelOverride: args.modelOverride ?? null,
         },

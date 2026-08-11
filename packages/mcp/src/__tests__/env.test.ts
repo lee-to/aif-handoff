@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const sharedEnvState = { participantsModeEnabled: false };
+
 // Mock getEnv before importing
 vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
@@ -9,6 +11,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
       API_BASE_URL: "http://test:3009",
       DATABASE_URL: ":memory:",
       PORT: 3009,
+      PARTICIPANTS_MODE_ENABLED: sharedEnvState.participantsModeEnabled,
     }),
   };
 });
@@ -23,6 +26,8 @@ describe("loadMcpEnv", () => {
     delete process.env.MCP_RATE_LIMIT_WRITE_RPM;
     delete process.env.MCP_RATE_LIMIT_READ_BURST;
     delete process.env.MCP_RATE_LIMIT_WRITE_BURST;
+    delete process.env.MCP_AUTH_TOKEN;
+    sharedEnvState.participantsModeEnabled = false;
   });
 
   it("returns default rate limit values", () => {
@@ -46,6 +51,7 @@ describe("loadMcpEnv", () => {
   it("trims and parses a valid MCP_PORT override", () => {
     process.env.MCP_TRANSPORT = "http";
     process.env.MCP_PORT = " 3200 ";
+    process.env.MCP_AUTH_TOKEN = "dedicated-mcp-token";
 
     const env = loadMcpEnv();
     expect(env.transport).toBe("http");
@@ -86,4 +92,36 @@ describe("loadMcpEnv", () => {
       );
     },
   );
+
+  it("keeps stdio explicitly trusted when Participants Mode is enabled", () => {
+    sharedEnvState.participantsModeEnabled = true;
+    process.env.MCP_TRANSPORT = "stdio";
+
+    const env = loadMcpEnv();
+    expect(env.participantsModeEnabled).toBe(true);
+    expect(env.authToken).toBeNull();
+  });
+
+  it("requires a dedicated token for HTTP when Participants Mode is enabled", () => {
+    sharedEnvState.participantsModeEnabled = true;
+    process.env.MCP_TRANSPORT = "http";
+
+    expect(() => loadMcpEnv()).toThrow("MCP_AUTH_TOKEN is required");
+  });
+
+  it("requires a dedicated token for HTTP when Participants Mode is disabled", () => {
+    process.env.MCP_TRANSPORT = "http";
+
+    expect(() => loadMcpEnv()).toThrow("MCP_AUTH_TOKEN is required");
+  });
+
+  it("loads the dedicated HTTP token without exposing it through logs or derived fields", () => {
+    sharedEnvState.participantsModeEnabled = true;
+    process.env.MCP_TRANSPORT = "http";
+    process.env.MCP_AUTH_TOKEN = "dedicated-mcp-token";
+
+    const env = loadMcpEnv();
+    expect(env.authToken).toBe("dedicated-mcp-token");
+    expect(env.participantsModeEnabled).toBe(true);
+  });
 });

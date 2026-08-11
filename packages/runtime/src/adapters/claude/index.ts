@@ -32,6 +32,7 @@ import {
 } from "./sessions.js";
 import { buildClaudeQueryOptions, parseExecutionOptions } from "./options.js";
 import { runClaudeRuntime, type ClaudeRuntimeRunLogger } from "./run.js";
+import { assertClaudeExecutableCompatible } from "./version.js";
 import { runClaudeCli, probeClaudeCli, type ClaudeCliLogger } from "./cli.js";
 
 export type ClaudeRuntimeAdapterLogger = ClaudeRuntimeRunLogger & ClaudeCliLogger;
@@ -342,6 +343,15 @@ async function listClaudeModels(
     },
     "[runtime:claude] Starting Claude model discovery",
   );
+  // Enforce the same minimum-version guard as the run path: model discovery
+  // spawns the Agent SDK too, so an incompatible Claude Code binary would
+  // fail here and silently fall back to the built-in model list otherwise.
+  await assertClaudeExecutableCompatible(execution.pathToClaudeCodeExecutable, logger, {
+    runtimeId: input.runtimeId,
+    providerId: input.providerId ?? "anthropic",
+    profileId: input.profileId ?? null,
+    usageContext: "model-discovery",
+  });
   let session: ReturnType<typeof query> | null = null;
   const discoveryStartedAt = Date.now();
   const timeoutMs = resolveModelDiscoveryTimeoutMs(input);
@@ -513,8 +523,14 @@ export function createClaudeRuntimeAdapter(
     if (transport === RuntimeTransport.CLI) {
       return runClaudeCli(input, logger, { pathToClaudeCodeExecutable: executablePath });
     }
-    // SDK and API both go through the Agent SDK runtime
-    return runClaudeRuntime(input, logger, { pathToClaudeCodeExecutable: sdkExecutablePath });
+    // SDK and API both go through the Agent SDK runtime. The version guard
+    // (inside runClaudeRuntime) inspects the exact binary `query()` launches:
+    // `sdkExecutablePath` when one survived normalization, otherwise the SDK's
+    // bundled binary read from its manifest. No PATH fallback — probing a
+    // different `claude` than the SDK starts would give a false signal.
+    return runClaudeRuntime(input, logger, {
+      pathToClaudeCodeExecutable: sdkExecutablePath,
+    });
   }
 
   async function forkByTransport(input: RuntimeSessionForkInput): Promise<RuntimeRunResult> {

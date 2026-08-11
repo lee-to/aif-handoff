@@ -33,6 +33,20 @@ describe("handleAutoReviewGate", () => {
     expect(evaluateReviewCommentsForAutoMode).not.toHaveBeenCalled();
   });
 
+  it("returns null for a human-owned task without consuming the review runtime", async () => {
+    mockFindTaskById.mockReturnValue({
+      id: "task-1",
+      autoMode: true,
+      executionOwner: "human",
+      reviewComments: "Needs review",
+    });
+
+    const result = await handleAutoReviewGate(baseInput);
+
+    expect(result).toBeNull();
+    expect(evaluateReviewCommentsForAutoMode).not.toHaveBeenCalled();
+  });
+
   it("returns accepted outcome and creates success summary when review passes", async () => {
     mockFindTaskById.mockReturnValue({
       id: "task-1",

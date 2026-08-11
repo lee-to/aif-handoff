@@ -1,8 +1,15 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { jsonValidator } from "../middleware/zodValidator.js";
 import { internalBroadcastAuth } from "../middleware/internalBroadcastAuth.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { logger, parseAttachments, getProjectConfig, defaultsForMode, getEnv } from "@aif/shared";
+import {
+  logger,
+  parseAttachments,
+  getProjectConfig,
+  defaultsForMode,
+  getEnv,
+  type TaskActionContext,
+} from "@aif/shared";
 import {
   createTaskSchema,
   updateTaskSchema,
@@ -10,6 +17,7 @@ import {
   createTaskCommentSchema,
   reorderTaskSchema,
   broadcastTaskSchema,
+  handoffTaskSchema,
 } from "../schemas.js";
 import { broadcast } from "../ws.js";
 import { handleTaskEvent } from "../services/taskEvents.js";
@@ -40,15 +48,120 @@ import {
   getAppDefaultRuntimeProfileId,
   resolveEffectiveRuntimeProfile,
   resolveEffectiveRuntimeProfilesForTasks,
+  claimTask,
+  releaseTaskClaim,
   updateTaskPositionOnly,
   tryStartQaRun,
+  findParticipantById,
+  getTaskOwnership,
+  handoffTaskExecution,
+  listTaskExecutorHistory,
+  findGitHubIssueByTaskId,
   type TaskRow,
+  type TaskOwnershipFilters,
 } from "@aif/data";
 import { validateProjectScopedRuntimeProfileSelections } from "../services/runtimeProfileScope.js";
+import { getParticipantAuth, type ParticipantApiEnv } from "../middleware/participantAuth.js";
 
 const log = logger("tasks-route");
+const QA_LOCK_DURATION_MS = Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
 
-export const tasksRouter = new Hono();
+export const tasksRouter = new Hono<ParticipantApiEnv>();
+
+const LEGACY_ACTION_CONTEXT: TaskActionContext = {
+  participantsModeEnabled: false,
+  actor: {
+    kind: "anonymous",
+    id: null,
+    displayNameSnapshot: null,
+  },
+  participantRole: null,
+  participantActive: true,
+};
+
+function requestActionContext(c: Context<ParticipantApiEnv>): TaskActionContext {
+  if (!getEnv().PARTICIPANTS_MODE_ENABLED) return LEGACY_ACTION_CONTEXT;
+  const auth = getParticipantAuth(c);
+  const participant = auth?.session?.participant;
+  if (!participant) {
+    return {
+      participantsModeEnabled: true,
+      actor: {
+        kind: "anonymous",
+        id: null,
+        displayNameSnapshot: null,
+      },
+      participantRole: null,
+      participantActive: false,
+    };
+  }
+  return {
+    participantsModeEnabled: true,
+    actor: {
+      kind: "participant",
+      id: participant.id,
+      displayNameSnapshot: participant.displayName,
+    },
+    participantRole: participant.role,
+    participantActive: participant.active,
+  };
+}
+
+function canMutateTask(c: Context<ParticipantApiEnv>, taskId: string): boolean {
+  const context = requestActionContext(c);
+  if (!context.participantsModeEnabled || context.participantRole === "admin") return true;
+
+  const actorId = context.actor.id;
+  const assigned = Boolean(
+    actorId &&
+    getTaskOwnership(taskId)?.assignees.some(
+      (assignee) => assignee.participantId === actorId && assignee.active,
+    ),
+  );
+  const details = { taskId, actorId, method: c.req.method, path: c.req.path };
+  if (assigned) {
+    log.debug(details, "Authorized assigned participant task mutation");
+  } else {
+    log.warn(details, "Rejected unauthorized task mutation");
+  }
+  return assigned;
+}
+
+function parseTaskOwnershipFilters(
+  c: Context<ParticipantApiEnv>,
+  context: TaskActionContext,
+): { ok: true; filters: TaskOwnershipFilters } | { ok: false; error: string } {
+  const owner = c.req.query("owner") ?? c.req.query("executionOwner");
+  if (owner !== undefined && owner !== "ai" && owner !== "human") {
+    return { ok: false, error: "owner must be ai or human" };
+  }
+  const assignee = c.req.query("assigneeId");
+  const unassignedRaw = c.req.query("unassigned");
+  if (unassignedRaw !== undefined && unassignedRaw !== "true" && unassignedRaw !== "false") {
+    return { ok: false, error: "unassigned must be true or false" };
+  }
+  const unassigned = unassignedRaw === "true";
+  if (unassigned && assignee) {
+    return { ok: false, error: "assigneeId and unassigned=true cannot be combined" };
+  }
+  const assigneeId =
+    assignee === "me"
+      ? context.actor.kind === "participant"
+        ? (context.actor.id ?? undefined)
+        : undefined
+      : assignee;
+  if (assignee === "me" && !assigneeId) {
+    return { ok: false, error: "assigneeId=me requires an authenticated participant" };
+  }
+  return {
+    ok: true,
+    filters: {
+      executionOwner: owner,
+      assigneeId,
+      unassigned,
+    },
+  };
+}
 
 /**
  * Fire-and-forget QA dispatch shared by the manual `run-qa` endpoint and the
@@ -59,7 +172,12 @@ export const tasksRouter = new Hono();
  * still can — without this outer guard a started run could hang the UI in
  * "running" forever (no terminal event, possible unhandled rejection).
  */
-function dispatchQaRun(projectId: string, taskId: string, executionRoot: string): void {
+function dispatchQaRun(
+  projectId: string,
+  taskId: string,
+  executionRoot: string,
+  lockId: string,
+): void {
   void (async () => {
     try {
       const { runQaQuery } = await import("../services/qaRunner.js");
@@ -95,6 +213,8 @@ function dispatchQaRun(projectId: string, taskId: string, executionRoot: string)
         type: "task:qa_failed",
         payload: { taskId, projectId, status: "failed", error: message },
       });
+    } finally {
+      releaseTaskClaim(taskId, lockId);
     }
   })();
 }
@@ -114,16 +234,31 @@ function startQaRun(
   projectId: string,
   taskId: string,
   executionRoot: string,
-): { started: boolean } {
+):
+  | { started: true }
+  | { started: false; code: "ai_handoff_required" | "task_locked" | "already_running" } {
+  const task = findTaskById(taskId);
+  if (task?.executionOwner !== "ai") {
+    return { started: false, code: "ai_handoff_required" };
+  }
+  const lockId = `qa:${crypto.randomUUID()}`;
+  if (!claimTask(taskId, lockId, QA_LOCK_DURATION_MS)) {
+    const current = findTaskById(taskId);
+    return {
+      started: false,
+      code: current?.executionOwner === "human" ? "ai_handoff_required" : "task_locked",
+    };
+  }
   if (!tryStartQaRun(taskId)) {
-    return { started: false };
+    releaseTaskClaim(taskId, lockId);
+    return { started: false, code: "already_running" };
   }
   const runningTask = findTaskById(taskId);
   if (runningTask) {
     broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(runningTask) });
   }
   broadcast({ type: "task:qa_started", payload: { taskId, projectId, status: "started" } });
-  dispatchQaRun(projectId, taskId, executionRoot);
+  dispatchQaRun(projectId, taskId, executionRoot, lockId);
   return { started: true };
 }
 
@@ -136,11 +271,13 @@ function toTaskRouteResponse(
     mode: "task",
     systemDefaultRuntimeProfileId,
   }),
+  actionContext: TaskActionContext = LEGACY_ACTION_CONTEXT,
 ) {
-  const response = toTaskResponse(task);
+  const response = toTaskResponse(task, actionContext);
 
   return {
     ...response,
+    github: findGitHubIssueByTaskId(task.id) ?? null,
     effectiveRuntime: {
       source: effectiveRuntime.source,
       profileId: effectiveRuntime.profile?.id ?? null,
@@ -178,11 +315,16 @@ tasksRouter.post(
 //     TODO(remove-bare-task-list): drop this branch once #141 lands.
 tasksRouter.get("/", (c) => {
   const projectId = c.req.query("projectId") || undefined;
+  const actionContext = requestActionContext(c);
+  const ownershipFilters = parseTaskOwnershipFilters(c, actionContext);
+  if (!ownershipFilters.ok) {
+    return c.json({ error: ownershipFilters.error, code: "invalid_task_filter" }, 400);
+  }
 
   // Legacy bare path: no projectId → return full Task[] across all projects.
   // Kept alive for merge-safety until dashboard consumers migrate to /overview.
   if (!projectId) {
-    const allTasks = listTasks();
+    const allTasks = listTasks(undefined, ownershipFilters.filters);
     const systemDefaultRuntimeProfileId = getAppDefaultRuntimeProfileId("task");
     const effectiveRuntimeByTaskId = resolveEffectiveRuntimeProfilesForTasks(allTasks, {
       mode: "task",
@@ -195,6 +337,7 @@ tasksRouter.get("/", (c) => {
           task,
           systemDefaultRuntimeProfileId,
           effectiveRuntimeByTaskId.get(task.id),
+          actionContext,
         ),
       ),
     );
@@ -208,7 +351,7 @@ tasksRouter.get("/", (c) => {
     return c.json({ error: "Invalid projectId format" }, 400);
   }
 
-  const taskList = listTaskListItems(projectId);
+  const taskList = listTaskListItems(projectId, ownershipFilters.filters, actionContext);
   log.debug({ count: taskList.length, projectId, responseType: "TaskListItem" }, "Listed tasks");
   return c.json(taskList);
 });
@@ -216,6 +359,38 @@ tasksRouter.get("/", (c) => {
 // POST /tasks — create
 tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
   const body = c.req.valid("json");
+  const actionContext = requestActionContext(c);
+  const actor = actionContext.actor;
+  if (
+    actionContext.participantsModeEnabled &&
+    actionContext.participantRole === "member" &&
+    body.executionOwner === "human" &&
+    (body.assigneeIds.length > 1 ||
+      (body.assigneeIds.length === 1 && body.assigneeIds[0] !== actor.id))
+  ) {
+    return c.json(
+      {
+        error: "Members may create human tasks only unassigned or assigned to themselves",
+        code: "forbidden",
+      },
+      403,
+    );
+  }
+  if (body.executionOwner === "ai" && body.assigneeIds.length > 0) {
+    return c.json(
+      { error: "AI-owned tasks cannot have participant assignees", code: "invalid_ownership" },
+      409,
+    );
+  }
+  for (const participantId of body.assigneeIds) {
+    const participant = findParticipantById(participantId);
+    if (!participant?.active) {
+      return c.json(
+        { error: "One or more assignees are inactive or missing", code: "inactive_assignee" },
+        409,
+      );
+    }
+  }
   const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
     projectId: body.projectId,
     selections: { runtimeProfileId: body.runtimeProfileId },
@@ -272,6 +447,9 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     attachments: [],
     priority: body.priority,
     autoMode: body.autoMode,
+    executionOwner: body.executionOwner,
+    assigneeIds: body.assigneeIds,
+    actor,
     isFix: body.isFix,
     plannerMode: body.plannerMode,
     planPath: body.planPath ?? defaultPlanPath,
@@ -291,7 +469,9 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     tags: body.tags,
     scheduledAt: body.scheduledAt ?? null,
   });
-  if (!created) return c.json({ error: "Failed to create task" }, 500);
+  if (!created) {
+    return c.json({ error: "Failed to create task ownership", code: "invalid_ownership" }, 409);
+  }
 
   // Persist attachments to project files and update the task with path-based metadata
   if (body.attachments.length > 0) {
@@ -316,10 +496,152 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     "Task created",
   );
 
-  broadcast({ type: "task:created", payload: toTaskBroadcastPayload(final) });
+  broadcast({
+    type: "task:created",
+    payload: toTaskBroadcastPayload(final, actor),
+  });
   // Wake coordinator when a new task is created (may need immediate processing)
-  broadcast({ type: "agent:wake", payload: { id: final.id } });
-  return c.json(toTaskRouteResponse(final), 201);
+  if (final.executionOwner === "ai") {
+    broadcast({ type: "agent:wake", payload: { id: final.id } });
+  }
+  return c.json(toTaskRouteResponse(final, undefined, undefined, actionContext), 201);
+});
+
+// POST /tasks/:id/handoff — atomically change execution owner and assignments
+tasksRouter.post("/:id/handoff", jsonValidator(handoffTaskSchema), (c) => {
+  const taskId = c.req.param("id");
+  const body = c.req.valid("json");
+  const task = findTaskById(taskId);
+  if (!task) {
+    return c.json({ error: "Task not found", code: "task_not_found" }, 404);
+  }
+
+  const actionContext = requestActionContext(c);
+  const actorId = actionContext.actor.id;
+  if (actionContext.participantsModeEnabled && actionContext.participantRole !== "admin") {
+    const currentOwnership = getTaskOwnership(taskId);
+    const assigned =
+      actorId !== null &&
+      Boolean(
+        currentOwnership?.assignees.some(
+          (assignee) => assignee.participantId === actorId && assignee.active,
+        ),
+      );
+    const selfAssign =
+      task.executionOwner === "human" &&
+      (currentOwnership?.assignees.length ?? 0) === 0 &&
+      body.executionOwner === "human" &&
+      body.assigneeIds.length === 1 &&
+      body.assigneeIds[0] === actorId;
+    const assignedHumanToAi =
+      task.executionOwner === "human" &&
+      assigned &&
+      body.executionOwner === "ai" &&
+      body.assigneeIds.length === 0;
+    if (!selfAssign && !assignedHumanToAi) {
+      log.warn(
+        {
+          taskId,
+          actorId,
+          currentOwner: task.executionOwner,
+          requestedOwner: body.executionOwner,
+        },
+        "Rejected unauthorized task handoff",
+      );
+      return c.json(
+        { error: "Participant is not allowed to hand off this task", code: "forbidden" },
+        403,
+      );
+    }
+  }
+
+  const result = handoffTaskExecution({
+    taskId,
+    executionOwner: body.executionOwner,
+    assigneeIds: body.assigneeIds,
+    expectedOwnershipRevision: body.expectedOwnershipRevision,
+    expectedExecutionOwner: body.expectedExecutionOwner,
+    expectedStatus: body.expectedStatus,
+    actor: actionContext.actor,
+    reason: body.reason,
+    resumeAction: body.resumeAction,
+  });
+  if (!result.ok) {
+    const code = {
+      not_found: "task_not_found",
+      locked: "task_locked",
+      revision_conflict: "ownership_revision_conflict",
+      inactive_assignee: "inactive_assignee",
+      invalid_transition: "invalid_ownership_transition",
+    }[result.code] as
+      | "task_not_found"
+      | "task_locked"
+      | "ownership_revision_conflict"
+      | "inactive_assignee"
+      | "invalid_ownership_transition";
+    const status = result.code === "not_found" ? 404 : 409;
+    log.warn(
+      {
+        taskId,
+        code,
+        actorId,
+        requestedOwner: body.executionOwner,
+      },
+      "Task handoff rejected",
+    );
+    return c.json(
+      {
+        error: "Task ownership handoff could not be applied",
+        code,
+        ...(result.ownership ? { ownership: result.ownership } : {}),
+      },
+      status,
+    );
+  }
+
+  const updated = findTaskById(taskId);
+  if (!updated) {
+    return c.json({ error: "Task not found after handoff", code: "task_not_found" }, 404);
+  }
+  const ownershipPayload = {
+    taskId,
+    projectId: updated.projectId,
+    ownership: result.ownership,
+    actor: actionContext.actor,
+    responsibleParticipants: result.ownership.assignees,
+  };
+  broadcast({ type: "task:handoff", payload: ownershipPayload });
+  broadcast({ type: "task:assignment_updated", payload: ownershipPayload });
+  if (
+    result.ownership.executionOwner === "ai" &&
+    updated.status !== "done" &&
+    updated.status !== "verified"
+  ) {
+    broadcast({ type: "agent:wake", payload: { id: taskId } });
+  }
+  log.info(
+    {
+      taskId,
+      actorId,
+      executionOwner: result.ownership.executionOwner,
+      ownershipRevision: result.ownership.ownershipRevision,
+      assigneeCount: result.ownership.assignees.length,
+    },
+    "Task handoff completed",
+  );
+  return c.json({
+    task: toTaskRouteResponse(updated, undefined, undefined, actionContext),
+    ownership: result.ownership,
+    history: result.history,
+  });
+});
+
+tasksRouter.get("/:id/executor-history", (c) => {
+  const taskId = c.req.param("id");
+  if (!findTaskById(taskId)) {
+    return c.json({ error: "Task not found", code: "task_not_found" }, 404);
+  }
+  return c.json(listTaskExecutorHistory(taskId));
 });
 
 // GET /tasks/:id — full detail
@@ -332,7 +654,7 @@ tasksRouter.get("/:id", (c) => {
   }
 
   log.debug({ taskId: id }, "Task fetched");
-  return c.json(toTaskRouteResponse(task));
+  return c.json(toTaskRouteResponse(task, undefined, undefined, requestActionContext(c)));
 });
 
 // GET /tasks/:id/attachments/:filename — download a task attachment
@@ -414,6 +736,7 @@ tasksRouter.get("/:id/comments/:commentId/attachments/:filename", async (c) => {
 tasksRouter.post("/:id/comments", jsonValidator(createTaskCommentSchema), async (c) => {
   const { id } = c.req.param();
   const body = c.req.valid("json");
+  const actionContext = requestActionContext(c);
   const task = findTaskById(id);
   if (!task) {
     return c.json({ error: "Task not found" }, 404);
@@ -422,12 +745,14 @@ tasksRouter.post("/:id/comments", jsonValidator(createTaskCommentSchema), async 
   // Create comment first to get its DB-assigned ID
   const created = createComment({
     taskId: id,
+    participantId: actionContext.actor.kind === "participant" ? actionContext.actor.id : null,
     message: body.message,
     attachments: [],
   });
   if (!created) return c.json({ error: "Failed to create comment" }, 500);
 
   // Persist attachments to project files using the real comment ID, then update
+  let finalComment = created;
   if (body.attachments.length > 0) {
     const project = findProjectById(task.projectId);
     if (project) {
@@ -437,11 +762,31 @@ tasksRouter.post("/:id/comments", jsonValidator(createTaskCommentSchema), async 
         commentId: created.id,
       });
       const updated = updateComment(created.id, { attachments: persisted });
-      return c.json(toCommentResponse(updated ?? created), 201);
+      finalComment = updated ?? created;
     }
   }
 
-  return c.json(toCommentResponse(created), 201);
+  const response = toCommentResponse(finalComment);
+  broadcast({
+    type: "task:comment_created",
+    payload: {
+      taskId: id,
+      projectId: task.projectId,
+      comment: response,
+      actor: actionContext.actor,
+      responsibleParticipants: response.participant ? [response.participant] : [],
+    },
+  });
+  log.info(
+    {
+      taskId: id,
+      commentId: response.id,
+      participantId: response.participantId,
+      attachmentCount: response.attachments.length,
+    },
+    "Task comment created",
+  );
+  return c.json(response, 201);
 });
 
 // PUT /tasks/:id — update fields
@@ -451,6 +796,9 @@ tasksRouter.put("/:id", jsonValidator(updateTaskSchema), async (c) => {
   const existing = findTaskById(id);
   if (!existing) {
     return c.json({ error: "Task not found" }, 404);
+  }
+  if (!canMutateTask(c, id)) {
+    return c.json({ error: "Task assignment or admin role required", code: "forbidden" }, 403);
   }
 
   const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
@@ -526,12 +874,19 @@ tasksRouter.put("/:id", jsonValidator(updateTaskSchema), async (c) => {
   log.debug({ taskId: id, fields: Object.keys(body) }, "Task updated");
 
   broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(updated) });
-  return c.json(toTaskRouteResponse(updated));
+  return c.json(toTaskRouteResponse(updated, undefined, undefined, requestActionContext(c)));
 });
 
 // POST /tasks/:id/sync-plan — sync DB plan with physical plan file
 tasksRouter.post("/:id/sync-plan", (c) => {
   const { id } = c.req.param();
+  const existing = findTaskById(id);
+  if (!existing) {
+    return c.json({ error: "Task or project not found" }, 404);
+  }
+  if (!canMutateTask(c, id)) {
+    return c.json({ error: "Task assignment or admin role required", code: "forbidden" }, 403);
+  }
   const result = syncTaskPlanFromFile(id);
   if (!result) {
     return c.json({ error: "Task or project not found" }, 404);
@@ -545,7 +900,7 @@ tasksRouter.post("/:id/sync-plan", (c) => {
   log.debug({ taskId: id }, "Task plan synced from physical file");
 
   broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(updated) });
-  return c.json(toTaskRouteResponse(updated));
+  return c.json(toTaskRouteResponse(updated, undefined, undefined, requestActionContext(c)));
 });
 
 // DELETE /tasks/:id
@@ -567,6 +922,7 @@ tasksRouter.delete("/:id", (c) => {
 tasksRouter.post("/:id/events", jsonValidator(taskEventSchema), async (c) => {
   const { id } = c.req.param();
   const { event, deletePlanFile, commitOnApprove } = c.req.valid("json");
+  const actionContext = requestActionContext(c);
   const existing = findTaskById(id);
   if (!existing) {
     return c.json({ error: "Task not found" }, 404);
@@ -576,9 +932,19 @@ tasksRouter.post("/:id/events", jsonValidator(taskEventSchema), async (c) => {
       taskId: id,
       event,
       deletePlanFile,
+      participantsModeEnabled: actionContext.participantsModeEnabled,
+      actor: actionContext.actor,
+      participantRole: actionContext.participantRole,
+      participantActive: actionContext.participantActive,
     });
     if (!handled.ok) {
-      return c.json({ error: handled.error }, handled.status as ContentfulStatusCode);
+      return c.json(
+        {
+          error: handled.error,
+          ...(handled.code ? { code: handled.code } : {}),
+        },
+        handled.status as ContentfulStatusCode,
+      );
     }
 
     log.debug(
@@ -649,7 +1015,7 @@ tasksRouter.post("/:id/events", jsonValidator(taskEventSchema), async (c) => {
       }
     }
 
-    return c.json(toTaskRouteResponse(handled.task));
+    return c.json(toTaskRouteResponse(handled.task, undefined, undefined, actionContext));
   } catch (error) {
     log.error({ taskId: id, event, error }, "Task event handling failed");
     return c.json({ error: "Internal server error" }, 500);
@@ -659,13 +1025,16 @@ tasksRouter.post("/:id/events", jsonValidator(taskEventSchema), async (c) => {
 // POST /tasks/:id/run-qa — manually trigger the aif-qa pipeline (fire-and-forget)
 tasksRouter.post("/:id/run-qa", (c) => {
   const { id } = c.req.param();
-  if (!getEnv().AIF_QA_PIPELINE_ENABLED) {
-    log.warn({ taskId: id }, "QA cannot run — AIF_QA_PIPELINE_ENABLED is disabled");
-    return c.json({ error: "QA pipeline is disabled", code: "feature_disabled" }, 403);
-  }
   const task = findTaskById(id);
   if (!task) {
     return c.json({ error: "Task not found" }, 404);
+  }
+  if (!canMutateTask(c, id)) {
+    return c.json({ error: "Task assignment or admin role required", code: "forbidden" }, 403);
+  }
+  if (!getEnv().AIF_QA_PIPELINE_ENABLED) {
+    log.warn({ taskId: id }, "QA cannot run — AIF_QA_PIPELINE_ENABLED is disabled");
+    return c.json({ error: "QA pipeline is disabled", code: "feature_disabled" }, 403);
   }
   const project = findProjectById(task.projectId);
   if (!project) {
@@ -677,10 +1046,30 @@ tasksRouter.post("/:id/run-qa", (c) => {
   log.info({ taskId: id, branchName: task.branchName }, "run-qa requested for task");
   // Atomic claim of the running slot — a second concurrent POST loses the
   // compare-and-set and gets 409 instead of starting a duplicate runtime run.
-  const { started } = startQaRun(task.projectId, id, executionRoot);
+  const startResult = startQaRun(task.projectId, id, executionRoot);
+  const { started } = startResult;
   if (!started) {
+    if (startResult.code === "ai_handoff_required") {
+      log.warn({ taskId: id }, "QA rejected for human-owned task");
+      return c.json(
+        {
+          error: "The task must be handed to AI before QA can run",
+          code: "ai_handoff_required",
+        },
+        409,
+      );
+    }
     log.warn({ taskId: id }, "QA already running for task, skipping");
-    return c.json({ error: "QA already running" }, 409);
+    return c.json(
+      {
+        error:
+          startResult.code === "task_locked"
+            ? "Task is locked by another runtime operation"
+            : "QA already running",
+        code: startResult.code,
+      },
+      409,
+    );
   }
 
   return c.json({ status: "accepted" }, 202);
@@ -694,6 +1083,9 @@ tasksRouter.patch("/:id/position", jsonValidator(reorderTaskSchema), async (c) =
   if (!existing) {
     return c.json({ error: "Task not found" }, 404);
   }
+  if (!canMutateTask(c, id)) {
+    return c.json({ error: "Task assignment or admin role required", code: "forbidden" }, 403);
+  }
 
   updateTaskPositionOnly(id, position);
   const updated = findTaskById(id);
@@ -701,5 +1093,5 @@ tasksRouter.patch("/:id/position", jsonValidator(reorderTaskSchema), async (c) =
   log.debug({ taskId: id, position }, "Task reordered");
 
   broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(updated) });
-  return c.json(toTaskRouteResponse(updated));
+  return c.json(toTaskRouteResponse(updated, undefined, undefined, requestActionContext(c)));
 });

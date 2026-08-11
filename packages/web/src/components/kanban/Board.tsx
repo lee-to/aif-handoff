@@ -15,6 +15,7 @@ import { readStorage, writeStorage } from "@/lib/storage";
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { FilterBar, type QuickFilter } from "./FilterBar";
 import { TaskListTable } from "./TaskListTable";
+import { useAuth } from "@/hooks/useAuth";
 
 type ViewMode = "kanban" | "list";
 type ListSort = "updated_desc" | "updated_asc" | "priority_desc" | "priority_asc" | "status";
@@ -59,9 +60,12 @@ function compareTerminalTasks(a: TaskListItem, b: TaskListItem): number {
 
 export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: BoardProps) {
   const { data: tasks, isLoading } = useTasks(projectId);
+  const { session } = useAuth();
+  const currentParticipantId = session?.participant?.id ?? null;
   const isCompact = density === "compact";
   const [activeFilters, setActiveFilters] = useState<QuickFilter[]>([]);
   const [activeRoadmapAliases, setActiveRoadmapAliases] = useState<string[]>([]);
+  const [activeAssigneeIds, setActiveAssigneeIds] = useState<string[]>([]);
   const [listQuery, setListQuery] = useState(() => {
     return readStorage(STORAGE_KEYS.LIST_QUERY) ?? "";
   });
@@ -89,6 +93,9 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
       if (filter === "roadmap" && !next.includes("roadmap")) {
         setActiveRoadmapAliases([]);
       }
+      if (filter === "human_owned" && !next.includes("human_owned")) {
+        setActiveAssigneeIds([]);
+      }
       return next;
     });
   };
@@ -98,6 +105,37 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
       prev.includes(alias) ? prev.filter((a) => a !== alias) : [...prev, alias],
     );
   };
+
+  const toggleAssignee = (participantId: string) => {
+    setActiveAssigneeIds((prev) => {
+      const next = prev.includes(participantId)
+        ? prev.filter((id) => id !== participantId)
+        : [...prev, participantId];
+      console.debug("[FIX:participant-assignee-filter] Assignee filter toggled", {
+        participantId,
+        active: next.includes(participantId),
+      });
+      return next;
+    });
+  };
+
+  const assignees = useMemo(() => {
+    const byId = new Map<string, { participantId: string; displayName: string }>();
+    for (const task of tasks ?? []) {
+      if (task.executionOwner !== "human") continue;
+      for (const assignee of task.assignees) {
+        byId.set(assignee.participantId, {
+          participantId: assignee.participantId,
+          displayName: assignee.displayName,
+        });
+      }
+    }
+    return [...byId.values()].sort(
+      (a, b) =>
+        a.displayName.localeCompare(b.displayName) ||
+        a.participantId.localeCompare(b.participantId),
+    );
+  }, [tasks]);
 
   const roadmapAliases = useMemo(() => {
     const all = tasks ?? [];
@@ -114,7 +152,25 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
     const all = tasks ?? [];
 
     return all.filter((task) => {
-      if (activeFilters.includes("mine") && task.autoMode) return false;
+      if (
+        activeFilters.includes("mine") &&
+        (!currentParticipantId ||
+          !task.assignees.some((assignee) => assignee.participantId === currentParticipantId))
+      )
+        return false;
+      if (activeFilters.includes("human_owned") && task.executionOwner !== "human") return false;
+      if (
+        activeFilters.includes("human_owned") &&
+        activeAssigneeIds.length > 0 &&
+        !task.assignees.some((assignee) => activeAssigneeIds.includes(assignee.participantId))
+      )
+        return false;
+      if (activeFilters.includes("ai_owned") && task.executionOwner !== "ai") return false;
+      if (
+        activeFilters.includes("unassigned") &&
+        (task.executionOwner !== "human" || task.assignees.length > 0)
+      )
+        return false;
       if (activeFilters.includes("blocked") && task.status !== "blocked_external") return false;
       if (activeFilters.includes("recent")) {
         const updatedTs = new Date(task.updatedAt).getTime();
@@ -132,7 +188,7 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
       }
       return true;
     });
-  }, [activeFilters, activeRoadmapAliases, tasks]);
+  }, [activeAssigneeIds, activeFilters, activeRoadmapAliases, currentParticipantId, tasks]);
 
   const tasksByStatus = useMemo(() => {
     const grouped: Record<TaskStatus, TaskListItem[]> = {
@@ -234,11 +290,15 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
         onClearFilters={() => {
           setActiveFilters([]);
           setActiveRoadmapAliases([]);
+          setActiveAssigneeIds([]);
         }}
         isCompact={isCompact}
         roadmapAliases={roadmapAliases}
         activeRoadmapAliases={activeRoadmapAliases}
         onToggleRoadmapAlias={toggleRoadmapAlias}
+        assignees={assignees}
+        activeAssigneeIds={activeAssigneeIds}
+        onToggleAssignee={toggleAssignee}
       />
 
       {filteredTasks.length === 0 && (
@@ -254,7 +314,11 @@ export function Board({ projectId, onTaskClick, density, viewMode = "kanban" }: 
               size="sm"
               variant="outline"
               className="mt-3"
-              onClick={() => setActiveFilters([])}
+              onClick={() => {
+                setActiveFilters([]);
+                setActiveRoadmapAliases([]);
+                setActiveAssigneeIds([]);
+              }}
             >
               Show all tasks
             </Button>

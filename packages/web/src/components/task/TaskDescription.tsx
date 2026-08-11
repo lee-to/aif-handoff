@@ -7,10 +7,19 @@ import { InlineEditor } from "@/components/ui/inline-editor";
 interface TaskDescriptionProps {
   description: string;
   onSave: (description: string) => void;
+  readOnly?: boolean;
 }
 
-export function TaskDescription({ description, onSave }: TaskDescriptionProps) {
+export function TaskDescription({ description, onSave, readOnly = false }: TaskDescriptionProps) {
   const markdownClassName = "text-sm text-foreground/85";
+
+  if (readOnly) {
+    return description ? (
+      <Markdown content={description} className={markdownClassName} />
+    ) : (
+      <span className="text-sm text-muted-foreground italic">No description</span>
+    );
+  }
 
   return (
     <InlineEditor

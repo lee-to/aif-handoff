@@ -20,6 +20,7 @@ const PROJECT_SCOPE_APPEND =
 export interface RunCommitQueryResult {
   ok: boolean;
   error?: string;
+  code?: "ai_handoff_required";
 }
 
 export interface RunCommitQueryInput {
@@ -55,6 +56,17 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
   }
 
   const task = taskId ? findTaskById(taskId) : null;
+  if (task?.executionOwner === "human") {
+    log.warn(
+      { projectId, taskId, executionOwner: task.executionOwner },
+      "Commit runtime rejected for human-owned task",
+    );
+    return {
+      ok: false,
+      code: "ai_handoff_required",
+      error: "The task must be handed to AI before commit generation can run",
+    };
+  }
   const executionRoot = task?.worktreePath ?? project.rootPath;
   if (task?.branchName && !task.isFix) {
     // task.branchName is a source-of-truth contract: commit MUST land on the
@@ -103,6 +115,14 @@ export async function runCommitQuery(input: RunCommitQueryInput): Promise<RunCom
   );
 
   try {
+    const executionBoundaryTask = taskId ? findTaskById(taskId) : null;
+    if (executionBoundaryTask?.executionOwner === "human") {
+      return {
+        ok: false,
+        code: "ai_handoff_required",
+        error: "The task must be handed to AI before commit generation can run",
+      };
+    }
     const { result } = await runApiRuntimeOneShot({
       projectId,
       projectRoot: executionRoot,

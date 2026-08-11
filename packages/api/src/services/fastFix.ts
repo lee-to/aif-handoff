@@ -3,6 +3,15 @@ import { parseAttachments } from "@aif/shared";
 import { UsageSource } from "@aif/runtime";
 import { resolveApiLightModel, runApiRuntimeOneShot } from "./runtime.js";
 
+export class AiHandoffRequiredError extends Error {
+  readonly code = "ai_handoff_required" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AiHandoffRequiredError";
+  }
+}
+
 interface FastFixComment {
   author: string;
   message: string;
@@ -56,6 +65,9 @@ export async function runFastFixQuery(input: RunFastFixQueryInput): Promise<stri
   const task = findTaskById(input.taskId);
   if (!task) {
     throw new Error(`Task ${input.taskId} not found for fast fix runtime resolution`);
+  }
+  if (task.executionOwner === "human") {
+    throw new AiHandoffRequiredError("The task must be handed to AI before fast fix can run");
   }
 
   const includeFileUpdateStep = input.shouldTryFileUpdate ?? true;
@@ -123,6 +135,10 @@ ${
 }`;
 
   const modelOverride = await resolveApiLightModel(task.projectId, input.taskId);
+  const executionBoundaryTask = findTaskById(input.taskId);
+  if (!executionBoundaryTask || executionBoundaryTask.executionOwner === "human") {
+    throw new AiHandoffRequiredError("The task must be handed to AI before fast fix can run");
+  }
   const { result } = await runApiRuntimeOneShot({
     projectId: task.projectId,
     projectRoot: input.projectRoot,

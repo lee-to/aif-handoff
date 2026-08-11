@@ -89,6 +89,31 @@ describe("fastFix service", () => {
     expect(incrementTaskTokenUsage).not.toHaveBeenCalled();
   });
 
+  it("rejects fast fix for a human-owned task", async () => {
+    findTaskById.mockReturnValue({
+      id: "task-1",
+      projectId: "project-1",
+      executionOwner: "human",
+    });
+    await expect(
+      runFastFixQuery({
+        taskId: "task-1",
+        taskTitle: "Task",
+        taskDescription: "Desc",
+        latestComment: {
+          author: "human",
+          message: "Please update",
+          attachments: "[]",
+          createdAt: "2026-03-28T00:00:00.000Z",
+        },
+        projectRoot: process.cwd(),
+        planPath: ".ai-factory/PLAN.md",
+        previousPlan: "## Old plan",
+      }),
+    ).rejects.toMatchObject({ code: "ai_handoff_required" });
+    expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
+  });
+
   it("uses fallback prompt mode when file update is disabled", async () => {
     mockRunApiRuntimeOneShot.mockResolvedValue(runtimeResult("## Full updated plan"));
 

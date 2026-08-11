@@ -33,6 +33,8 @@ Need something custom? Add your own runtime adapter module and load it at startu
 - **Layer-aware execution** — implementer computes dependency layers and enforces parallel worker dispatch where possible
 - **Self-healing pipeline** — heartbeat + stale-stage watchdog auto-recovers stuck agent stages
 - **Human-in-the-loop** — approve plans, request changes, or let auto-mode handle everything
+- **Participants Mode** — optional local accounts, role-aware collaboration, and explicit Human/AI task ownership
+- **GitHub Issue-to-PR mode** — opt-in issue import, isolated implementation, and one human-merged PR per task
 - **MCP sync** — bidirectional task sync between Handoff and AIF tools via Model Context Protocol
 
 ## Quick Start
@@ -151,6 +153,28 @@ The agent coordinator reacts to task events via WebSocket in near real-time and 
   Copy the URL and open it in your browser. **Important:** the terminal wraps long URLs across lines — remove any line breaks and spaces before pasting, otherwise OAuth will fail with `invalid code_challenge`. Then restart to apply. Credentials are stored in a persistent `claude-auth` Docker volume.
 
 For Codex/OpenAI-compatible profiles, configure `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` (or set profile-level `apiKeyEnvVar` / `baseUrl`). For local Codex runs without API keys, prefer `transport: "app-server"` or `transport: "cli"` and authenticate via `codex login`. See [Providers](docs/providers.md).
+
+#### Participants Mode
+
+Local participant authentication is opt-in and disabled by default. To enable it, set
+`PARTICIPANTS_MODE_ENABLED=true`, configure the exact browser origin in
+`PARTICIPANT_ALLOWED_ORIGINS`, bootstrap the first administrator interactively, and
+then start the stack. Existing installations
+remain anonymous and AI-owned while the flag is off.
+
+```bash
+npm run participants:bootstrap
+```
+
+The command prompts for the username, display name, and a hidden password with
+confirmation. Protected stdin and mode-`0600` password-file flags remain available for automation.
+After sign-in, every participant can change their own password from the identity menu.
+
+Human/AI ownership is independent from `autoMode`: ownership selects who is responsible
+for execution, while auto mode controls AI approval gates. See
+[Getting Started](docs/getting-started.md#participants-mode) and
+[Configuration](docs/configuration.md#participants-mode) for native/Docker bootstrap,
+session security, roles, and recovery.
 
 #### Codex OAuth in Docker (without `OPENAI_API_KEY`)
 
@@ -356,6 +380,7 @@ AGENT_BYPASS_PERMISSIONS=true
 | [API Reference](docs/api.md)               | REST endpoints, WebSocket events              |
 | [Configuration](docs/configuration.md)     | Environment variables, logging, auth          |
 | [Providers](docs/providers.md)             | Runtime profiles, adapters, capability matrix |
+| [MCP Sync](docs/mcp-sync.md)               | MCP tools, transports, and authentication     |
 
 ![ui-light](https://github.com/lee-to/aif-handoff/blob/main/art/ui-light.png)
 ![ui-dark](https://github.com/lee-to/aif-handoff/blob/main/art/ui-dark.png)

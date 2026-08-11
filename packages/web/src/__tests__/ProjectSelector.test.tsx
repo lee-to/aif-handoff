@@ -8,7 +8,11 @@ const mutateUpdateProject = vi.fn();
 const mutateDeleteProject = vi.fn();
 const mutateSetAutoQueue = vi.fn();
 const mutateUpdateOrganization = vi.fn();
+const mutateConnectGitHub = vi.fn();
+const mutateDisconnectGitHub = vi.fn();
+const mutateSyncGitHub = vi.fn();
 const mockToast = vi.fn();
+let mockGitHubIssuePrEnabled = true;
 let mockProjects = [
   {
     id: "p-1",
@@ -53,11 +57,19 @@ vi.mock("@/hooks/useProjects", () => ({
     mutate: mutateUpdateOrganization,
     isPending: false,
   }),
+  useProjectGitHub: () => ({ data: { connection: null, issues: [] }, isLoading: false }),
+  useConnectProjectGitHub: () => ({ mutate: mutateConnectGitHub, isPending: false }),
+  useDisconnectProjectGitHub: () => ({ mutate: mutateDisconnectGitHub, isPending: false }),
+  useSyncProjectGitHub: () => ({ mutate: mutateSyncGitHub, isPending: false }),
 }));
 
 vi.mock("@/components/ui/toast", () => ({
   useToast: () => ({ toast: mockToast }),
   ToastProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+vi.mock("@/hooks/useSettings", () => ({
+  useSettings: () => ({ data: { githubIssuePrEnabled: mockGitHubIssuePrEnabled } }),
 }));
 
 const { ProjectSelector } = await import("@/components/project/ProjectSelector");
@@ -70,7 +82,11 @@ describe("ProjectSelector", () => {
     mutateDeleteProject.mockReset();
     mutateSetAutoQueue.mockReset();
     mutateUpdateOrganization.mockReset();
+    mutateConnectGitHub.mockReset();
+    mutateDisconnectGitHub.mockReset();
+    mutateSyncGitHub.mockReset();
     mockToast.mockReset();
+    mockGitHubIssuePrEnabled = true;
     mockProjects = [
       {
         id: "p-1",
@@ -180,6 +196,25 @@ describe("ProjectSelector", () => {
     fireEvent.keyDown(search, { key: "Enter" });
 
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "p-1" }));
+  });
+
+  it("hides project configuration actions from members", () => {
+    mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+    render(
+      <ProjectSelector
+        selectedId="p-1"
+        onSelect={() => {}}
+        onDeselect={() => {}}
+        canManage={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+
+    expect(screen.queryByText("New project")).toBeNull();
+    expect(screen.queryByTitle("Edit")).toBeNull();
+    expect(screen.queryByTitle("Delete")).toBeNull();
+    expect(screen.queryByTitle("Pin")).toBeNull();
   });
 
   it("uses collision-free section keys for groups named after built-in sections", () => {
@@ -520,6 +555,17 @@ describe("ProjectSelector", () => {
       "error",
       8000,
     );
+  });
+
+  it("hides GitHub project controls while the rollout flag is disabled", () => {
+    mockGitHubIssuePrEnabled = false;
+    mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+    fireEvent.click(screen.getByTitle("Edit"));
+
+    expect(screen.queryByText("GitHub Issue-to-PR")).toBeNull();
   });
 
   describe("auto-queue toggle", () => {

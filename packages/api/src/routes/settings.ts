@@ -93,6 +93,7 @@ export async function buildSettingsOverview() {
       usageLimitsEnabled: env.AIF_USAGE_LIMITS_ENABLED,
       warmupEnabled: env.AIF_WARMUP_ENABLED,
       qaPipelineEnabled: env.AIF_QA_PIPELINE_ENABLED,
+      githubIssuePrEnabled: env.AIF_GITHUB_ISSUE_PR_ENABLED,
       runtimeReadiness: {
         availableRuntimeCount: registry.listRuntimes().length,
         runtimeProfileCount: runtimeProfiles.length,
@@ -116,6 +117,7 @@ export async function buildSettingsOverview() {
       usageLimitsEnabled: env.AIF_USAGE_LIMITS_ENABLED,
       warmupEnabled: env.AIF_WARMUP_ENABLED,
       qaPipelineEnabled: env.AIF_QA_PIPELINE_ENABLED,
+      githubIssuePrEnabled: env.AIF_GITHUB_ISSUE_PR_ENABLED,
       runtimeReadiness: {
         availableRuntimeCount: 0,
         runtimeProfileCount: allProfiles.length,

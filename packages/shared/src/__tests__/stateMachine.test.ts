@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Task } from "../types.js";
-import { applyHumanTaskEvent } from "../stateMachine.js";
+import { applyHumanTaskEvent, resolveTaskAction, resolveTaskPermissions } from "../stateMachine.js";
 
 function makeTask(status: Task["status"]): Task {
   return {
@@ -9,6 +9,9 @@ function makeTask(status: Task["status"]): Task {
     title: "Task",
     description: "",
     autoMode: true,
+    executionOwner: "ai",
+    ownershipRevision: 0,
+    assignees: [],
     isFix: false,
     plannerMode: "full",
     planPath: ".ai-factory/PLAN.md",
@@ -220,5 +223,167 @@ describe("task state machine", () => {
     if (!result.ok) {
       expect(result.error).toBe("Unknown task event");
     }
+  });
+
+  it.each([
+    ["backlog", "start_human_work", "planning"],
+    ["planning", "mark_plan_ready", "plan_ready"],
+    ["improve", "mark_plan_ready", "plan_ready"],
+    ["plan_ready", "start_implementation", "implementing"],
+    ["review", "request_review_changes", "implementing"],
+    ["verify", "fail_verification", "implementing"],
+    ["done", "approve_done", "verified"],
+    ["done", "request_changes", "implementing"],
+  ] as const)("resolves assigned human action %s -> %s -> %s", (status, event, expectedStatus) => {
+    const task = {
+      ...makeTask(status),
+      executionOwner: "human" as const,
+      assignees: [
+        {
+          participantId: "member-1",
+          displayName: "Member",
+          role: "member" as const,
+          active: true,
+        },
+      ],
+    };
+    const result = resolveTaskAction(task, event, {
+      participantsModeEnabled: true,
+      actor: {
+        kind: "participant",
+        id: "member-1",
+        displayNameSnapshot: "Member",
+      },
+      participantRole: "member",
+      participantActive: true,
+    });
+    expect(result).toMatchObject({ ok: true, patch: { status: expectedStatus } });
+  });
+
+  it.each([
+    [{ skipReview: false, runPostVerify: false }, "review"],
+    [{ skipReview: true, runPostVerify: false }, "done"],
+    [{ skipReview: false, runPostVerify: true }, "verify"],
+  ] as const)("routes submitted implementation using review/verify policy", (flags, status) => {
+    const result = resolveTaskAction(
+      {
+        ...makeTask("implementing"),
+        ...flags,
+        executionOwner: "human",
+        assignees: [],
+      },
+      "submit_implementation",
+      {
+        participantsModeEnabled: true,
+        actor: { kind: "participant", id: "admin-1", displayNameSnapshot: "Admin" },
+        participantRole: "admin",
+      },
+    );
+    expect(result).toMatchObject({ ok: true, patch: { status } });
+  });
+
+  it.each([
+    [{ skipReview: false, runPostVerify: false }, "review"],
+    [{ skipReview: true, runPostVerify: false }, "done"],
+    [{ skipReview: false, runPostVerify: true }, "done"],
+  ] as const)("routes passed verification using review/verify policy", (flags, status) => {
+    const result = resolveTaskAction(
+      {
+        ...makeTask("verify"),
+        ...flags,
+        executionOwner: "human",
+        assignees: [],
+      },
+      "pass_verification",
+      {
+        participantsModeEnabled: true,
+        actor: { kind: "participant", id: "admin-1", displayNameSnapshot: "Admin" },
+        participantRole: "admin",
+      },
+    );
+    expect(result).toMatchObject({ ok: true, patch: { status } });
+  });
+
+  it("requires member assignment but lets an admin act on any human task", () => {
+    const task = {
+      ...makeTask("planning"),
+      executionOwner: "human" as const,
+      assignees: [],
+    };
+    expect(
+      resolveTaskAction(task, "mark_plan_ready", {
+        participantsModeEnabled: true,
+        actor: { kind: "participant", id: "member-1", displayNameSnapshot: "Member" },
+        participantRole: "member",
+      }),
+    ).toMatchObject({ ok: false, code: "assignment_required" });
+    expect(
+      resolveTaskAction(task, "mark_plan_ready", {
+        participantsModeEnabled: true,
+        actor: { kind: "participant", id: "admin-1", displayNameSnapshot: "Admin" },
+        participantRole: "admin",
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("keeps AI-only actions behind an AI handoff for human-owned tasks", () => {
+    const result = resolveTaskAction(
+      {
+        ...makeTask("backlog"),
+        executionOwner: "human",
+        assignees: [],
+      },
+      "start_ai",
+      {
+        participantsModeEnabled: true,
+        actor: { kind: "participant", id: "admin-1", displayNameSnapshot: "Admin" },
+        participantRole: "admin",
+      },
+    );
+    expect(result).toMatchObject({ ok: false, code: "ai_handoff_required" });
+  });
+
+  it("derives role-aware permissions without duplicating transition rules", () => {
+    const task = {
+      ...makeTask("backlog"),
+      executionOwner: "human" as const,
+      assignees: [],
+    };
+    const memberPermissions = resolveTaskPermissions(task, {
+      participantsModeEnabled: true,
+      actor: { kind: "participant", id: "member-1", displayNameSnapshot: "Member" },
+      participantRole: "member",
+    });
+    expect(memberPermissions).toMatchObject({
+      canAssign: false,
+      canHandoff: false,
+      canSelfAssign: true,
+      canAct: false,
+      canComment: true,
+      permittedActions: [],
+    });
+
+    const adminPermissions = resolveTaskPermissions(task, {
+      participantsModeEnabled: true,
+      actor: { kind: "participant", id: "admin-1", displayNameSnapshot: "Admin" },
+      participantRole: "admin",
+    });
+    expect(adminPermissions.canAssign).toBe(true);
+    expect(adminPermissions.canHandoff).toBe(true);
+    expect(adminPermissions.permittedActions).toContain("start_human_work");
+  });
+
+  it("preserves disabled-mode anonymous compatibility", () => {
+    const task = {
+      ...makeTask("backlog"),
+      executionOwner: "human" as const,
+      assignees: [],
+    };
+    expect(
+      resolveTaskAction(task, "start_ai", {
+        participantsModeEnabled: false,
+        actor: { kind: "anonymous", id: null, displayNameSnapshot: null },
+      }),
+    ).toMatchObject({ ok: true, patch: { status: "planning" } });
   });
 });

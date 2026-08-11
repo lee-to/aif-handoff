@@ -1,6 +1,12 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, primaryKey } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
-import type { AutoQueueCommitStatus, TaskStatus } from "./types.js";
+import type {
+  AuditActorKind,
+  AutoQueueCommitStatus,
+  ExecutionOwner,
+  ParticipantRole,
+  TaskStatus,
+} from "./types.js";
 
 export const projects = sqliteTable("projects", {
   id: text("id")
@@ -52,6 +58,48 @@ export const appSettings = sqliteTable("app_settings", {
 export type AppSettingsRow = typeof appSettings.$inferSelect;
 export type NewAppSettingsRow = typeof appSettings.$inferInsert;
 
+export const participants = sqliteTable("participants", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  username: text("username").notNull(),
+  normalizedUsername: text("normalized_username").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  role: text("role").$type<ParticipantRole>().notNull().default("member"),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  deactivatedAt: text("deactivated_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type ParticipantRow = typeof participants.$inferSelect;
+export type NewParticipantRow = typeof participants.$inferInsert;
+
+export const participantSessions = sqliteTable("participant_sessions", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  participantId: text("participant_id")
+    .notNull()
+    .references(() => participants.id, { onDelete: "cascade" }),
+  tokenDigest: text("token_digest").notNull().unique(),
+  csrfTokenDigest: text("csrf_token_digest").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  lastSeenAt: text("last_seen_at"),
+  revokedAt: text("revoked_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type ParticipantSessionRow = typeof participantSessions.$inferSelect;
+export type NewParticipantSessionRow = typeof participantSessions.$inferInsert;
+
 export const tasks = sqliteTable("tasks", {
   id: text("id")
     .primaryKey()
@@ -61,6 +109,8 @@ export const tasks = sqliteTable("tasks", {
   description: text("description").notNull().default(""),
   attachments: text("attachments").notNull().default("[]"),
   autoMode: integer("auto_mode", { mode: "boolean" }).notNull().default(true),
+  executionOwner: text("execution_owner").$type<ExecutionOwner>().notNull().default("ai"),
+  ownershipRevision: integer("ownership_revision").notNull().default(0),
   isFix: integer("is_fix", { mode: "boolean" }).notNull().default(false),
   plannerMode: text("planner_mode").notNull().default("fast"),
   planPath: text("plan_path").notNull().default(".ai-factory/PLAN.md"),
@@ -140,6 +190,9 @@ export const taskComments = sqliteTable("task_comments", {
     .$defaultFn(() => crypto.randomUUID()),
   taskId: text("task_id").notNull(),
   author: text("author").$type<"human" | "agent">().notNull().default("human"),
+  participantId: text("participant_id").references(() => participants.id, {
+    onDelete: "set null",
+  }),
   message: text("message").notNull(),
   attachments: text("attachments").notNull().default("[]"),
   createdAt: text("created_at")
@@ -149,6 +202,138 @@ export const taskComments = sqliteTable("task_comments", {
 
 export type TaskCommentRow = typeof taskComments.$inferSelect;
 export type NewTaskCommentRow = typeof taskComments.$inferInsert;
+
+export const taskAssignments = sqliteTable(
+  "task_assignments",
+  {
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    participantId: text("participant_id")
+      .notNull()
+      .references(() => participants.id, { onDelete: "cascade" }),
+    assignedByKind: text("assigned_by_kind").$type<AuditActorKind>().notNull(),
+    assignedById: text("assigned_by_id"),
+    assignedByDisplayNameSnapshot: text("assigned_by_display_name_snapshot"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  },
+  (table) => [primaryKey({ columns: [table.taskId, table.participantId] })],
+);
+
+export type TaskAssignmentRow = typeof taskAssignments.$inferSelect;
+export type NewTaskAssignmentRow = typeof taskAssignments.$inferInsert;
+
+export const taskExecutorHistory = sqliteTable("task_executor_history", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  taskId: text("task_id").notNull(),
+  taskTitleSnapshot: text("task_title_snapshot").notNull(),
+  ownershipRevision: integer("ownership_revision").notNull(),
+  executionOwner: text("execution_owner").$type<ExecutionOwner>().notNull(),
+  assigneesSnapshotJson: text("assignees_snapshot_json").notNull().default("[]"),
+  statusSnapshot: text("status_snapshot").$type<TaskStatus>().notNull(),
+  actorKind: text("actor_kind").$type<AuditActorKind>().notNull(),
+  actorId: text("actor_id"),
+  actorDisplayNameSnapshot: text("actor_display_name_snapshot"),
+  reason: text("reason"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type TaskExecutorHistoryRow = typeof taskExecutorHistory.$inferSelect;
+export type NewTaskExecutorHistoryRow = typeof taskExecutorHistory.$inferInsert;
+
+export const auditEvents = sqliteTable("audit_events", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id"),
+  taskId: text("task_id"),
+  taskTitleSnapshot: text("task_title_snapshot"),
+  participantId: text("participant_id"),
+  participantDisplayNameSnapshot: text("participant_display_name_snapshot"),
+  executionOwnerSnapshot: text("execution_owner_snapshot").$type<ExecutionOwner | null>(),
+  assigneesSnapshotJson: text("assignees_snapshot_json"),
+  statusSnapshot: text("status_snapshot").$type<TaskStatus | null>(),
+  actorKind: text("actor_kind").$type<AuditActorKind>().notNull(),
+  actorId: text("actor_id"),
+  actorDisplayNameSnapshot: text("actor_display_name_snapshot"),
+  reason: text("reason"),
+  metadataJson: text("metadata_json"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type AuditEventRow = typeof auditEvents.$inferSelect;
+export type NewAuditEventRow = typeof auditEvents.$inferInsert;
+
+export const githubRepositories = sqliteTable("github_repositories", {
+  projectId: text("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  owner: text("owner").notNull(),
+  name: text("name").notNull(),
+  htmlUrl: text("html_url").notNull(),
+  defaultBranch: text("default_branch").notNull(),
+  tokenEnvVar: text("token_env_var").notNull().default("GITHUB_TOKEN"),
+  eligibilityJson: text("eligibility_json").notNull().default("{}"),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  lastSyncedAt: text("last_synced_at"),
+  syncError: text("sync_error"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type GitHubRepositoryRow = typeof githubRepositories.$inferSelect;
+export type NewGitHubRepositoryRow = typeof githubRepositories.$inferInsert;
+
+export const githubIssues = sqliteTable(
+  "github_issues",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    issueNumber: integer("issue_number").notNull(),
+    taskId: text("task_id")
+      .unique()
+      .references(() => tasks.id, { onDelete: "set null" }),
+    nodeId: text("node_id").notNull(),
+    htmlUrl: text("html_url").notNull(),
+    state: text("state").$type<"open" | "closed">().notNull(),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    sourceUpdatedAt: text("source_updated_at").notNull(),
+    lastSyncedAt: text("last_synced_at").notNull(),
+    syncError: text("sync_error"),
+    prNumber: integer("pr_number"),
+    prUrl: text("pr_url"),
+    prState: text("pr_state").$type<"open" | "closed" | "merged" | null>(),
+    prChecksStatus: text("pr_checks_status").$type<"pending" | "success" | "failure" | null>(),
+    reviewState: text("review_state").$type<"pending" | "approved" | "changes_requested" | null>(),
+    lastReviewId: integer("last_review_id"),
+    reviewFingerprint: text("review_fingerprint"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  },
+  (table) => [primaryKey({ columns: [table.projectId, table.issueNumber] })],
+);
+
+export type GitHubIssueRow = typeof githubIssues.$inferSelect;
+export type NewGitHubIssueRow = typeof githubIssues.$inferInsert;
 
 export const runtimeProfiles = sqliteTable("runtime_profiles", {
   id: text("id")

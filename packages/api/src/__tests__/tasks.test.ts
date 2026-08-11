@@ -891,11 +891,11 @@ describe("tasks API", () => {
       expect(await res.json()).toEqual({ success: true });
       expect(vi.mocked(mockBroadcast)).toHaveBeenCalledWith({
         type: "task:updated",
-        payload: {
+        payload: expect.objectContaining({
           id: "broadcast-valid-token",
           title: "Broadcast me",
           status: "backlog",
-        },
+        }),
       });
     });
 

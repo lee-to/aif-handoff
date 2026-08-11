@@ -9,7 +9,16 @@ import {
 } from "react";
 import { useOutsideClick } from "@/hooks/useOutsideClick";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, Plus, ChevronDown, Pencil, Trash2, Plug, Pin } from "lucide-react";
+import {
+  FolderOpen,
+  Plus,
+  ChevronDown,
+  Pencil,
+  Trash2,
+  Plug,
+  Pin,
+  GitPullRequest,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -32,8 +41,13 @@ import {
   useSetAutoQueueMode,
   useProjectTaskOverviews,
   useUpdateProjectOrganization,
+  useProjectGitHub,
+  useConnectProjectGitHub,
+  useDisconnectProjectGitHub,
+  useSyncProjectGitHub,
 } from "@/hooks/useProjects";
 import { useToast } from "@/components/ui/toast";
+import { useSettings } from "@/hooks/useSettings";
 import { api } from "@/lib/api";
 import type { Project } from "@aif/shared/browser";
 import { PROJECT_SORT_OPTIONS, sortProjects, type ProjectSort } from "@/lib/projectSorting";
@@ -42,18 +56,24 @@ interface Props {
   selectedId: string | null;
   onSelect: (project: Project) => void;
   onDeselect: () => void;
+  canManage?: boolean;
 }
 
 type DialogMode = "create" | "edit";
 
-export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
+export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = true }: Props) {
   const { data: projects } = useProjects();
   const createProject = useCreateProject();
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
   const setAutoQueue = useSetAutoQueueMode();
   const updateOrganization = useUpdateProjectOrganization();
+  const connectGitHub = useConnectProjectGitHub();
+  const disconnectGitHub = useDisconnectProjectGitHub();
+  const syncGitHub = useSyncProjectGitHub();
   const { toast } = useToast();
+  const { data: settings } = useSettings();
+  const githubIssuePrEnabled = settings?.githubIssuePrEnabled ?? false;
 
   const showMutationError = (error: unknown, fallback: string) => {
     toast(error instanceof Error ? error.message : fallback, "error", 8000);
@@ -74,6 +94,11 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
   const [reviewSidecarMaxBudgetUsd, setReviewSidecarMaxBudgetUsd] = useState("");
   const [parallelEnabled, setParallelEnabled] = useState(false);
   const [autoQueueMode, setAutoQueueModeState] = useState(false);
+  const [githubRepository, setGitHubRepository] = useState("");
+  const [githubTokenEnvVar, setGitHubTokenEnvVar] = useState("GITHUB_TOKEN");
+  const [githubLabels, setGitHubLabels] = useState("");
+  const [githubAssignee, setGitHubAssignee] = useState("");
+  const [githubMilestone, setGitHubMilestone] = useState("");
   const selectorRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -149,6 +174,10 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
   }
   const projectOptionId = (projectId: string) => `${listboxId}-option-${projectId}`;
   const isEditDialogOpen = dialogOpen && dialogMode === "edit" && !!editingId;
+  const { data: githubData, isLoading: isGitHubLoading } = useProjectGitHub(
+    editingId,
+    isEditDialogOpen && githubIssuePrEnabled,
+  );
   const { data: mcpData, isLoading: isMcpLoading } = useQuery({
     queryKey: ["project-mcp", editingId],
     queryFn: () => api.getProjectMcp(editingId!),
@@ -156,8 +185,23 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
     staleTime: 30_000,
   });
   const mcpServers = mcpData?.mcpServers ? Object.keys(mcpData.mcpServers) : [];
+  const githubConnection = githubData?.connection ?? null;
+
+  useEffect(() => {
+    if (!isEditDialogOpen || !githubData) return;
+    const connection = githubData.connection;
+    const timeout = window.setTimeout(() => {
+      setGitHubRepository(connection ? `${connection.owner}/${connection.name}` : "");
+      setGitHubTokenEnvVar(connection?.tokenEnvVar ?? "GITHUB_TOKEN");
+      setGitHubLabels(connection?.eligibility.labels.join(", ") ?? "");
+      setGitHubAssignee(connection?.eligibility.assignee ?? "");
+      setGitHubMilestone(connection?.eligibility.milestone ?? "");
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [githubData, isEditDialogOpen]);
 
   const openCreate = () => {
+    if (!canManage) return;
     setDialogMode("create");
     setEditingId(null);
     setName("");
@@ -169,6 +213,11 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
     setReviewSidecarMaxBudgetUsd("");
     setParallelEnabled(false);
     setAutoQueueModeState(false);
+    setGitHubRepository("");
+    setGitHubTokenEnvVar("GITHUB_TOKEN");
+    setGitHubLabels("");
+    setGitHubAssignee("");
+    setGitHubMilestone("");
     setDropdownOpen(false);
     setProjectQuery("");
     setActiveProjectId(null);
@@ -177,6 +226,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
 
   const openEdit = (p: Project, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!canManage) return;
     setDialogMode("edit");
     setEditingId(p.id);
     setName(p.name);
@@ -194,6 +244,11 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
     );
     setParallelEnabled(p.parallelEnabled ?? false);
     setAutoQueueModeState(p.autoQueueMode ?? false);
+    setGitHubRepository("");
+    setGitHubTokenEnvVar("GITHUB_TOKEN");
+    setGitHubLabels("");
+    setGitHubAssignee("");
+    setGitHubMilestone("");
     setDropdownOpen(false);
     setProjectQuery("");
     setActiveProjectId(null);
@@ -202,6 +257,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
 
   const handleDelete = (p: Project, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!canManage) return;
     if (!confirm(`Delete project "${p.name}"?`)) return;
     deleteProject.mutate(p.id, {
       onSuccess: () => {
@@ -210,8 +266,55 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
     });
   };
 
+  const handleConnectGitHub = () => {
+    if (!editingId || !githubRepository.trim() || !githubTokenEnvVar.trim()) return;
+    connectGitHub.mutate(
+      {
+        id: editingId,
+        input: {
+          repository: githubRepository.trim(),
+          tokenEnvVar: githubTokenEnvVar.trim(),
+          enabled: true,
+          eligibility: {
+            labels: githubLabels
+              .split(",")
+              .map((label) => label.trim())
+              .filter(Boolean),
+            assignee: githubAssignee.trim() || null,
+            milestone: githubMilestone.trim() || null,
+          },
+        },
+      },
+      {
+        onSuccess: () => toast("GitHub repository connected", "success"),
+        onError: (error) => showMutationError(error, "Failed to connect GitHub repository"),
+      },
+    );
+  };
+
+  const handleSyncGitHub = () => {
+    if (!editingId) return;
+    syncGitHub.mutate(editingId, {
+      onSuccess: (result) =>
+        toast(
+          `GitHub sync complete: ${result.imported} imported, ${result.updated} updated`,
+          "success",
+        ),
+      onError: (error) => showMutationError(error, "Failed to synchronize GitHub repository"),
+    });
+  };
+
+  const handleDisconnectGitHub = () => {
+    if (!editingId) return;
+    disconnectGitHub.mutate(editingId, {
+      onSuccess: () => toast("GitHub repository disconnected", "success"),
+      onError: (error) => showMutationError(error, "Failed to disconnect GitHub repository"),
+    });
+  };
+
   const handlePin = (project: Project, event: React.MouseEvent) => {
     event.stopPropagation();
+    if (!canManage) return;
     updateOrganization.mutate(
       { id: project.id, input: { pinned: project.pinnedAt == null } },
       {
@@ -498,38 +601,42 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
                               {project.rootPath}
                             </div>
                           </ListButton>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className={`h-6 w-6 border-0 hover:!opacity-100 ${
-                              project.pinnedAt
-                                ? "opacity-70"
-                                : "opacity-0 group-hover:opacity-70 group-focus-within:opacity-70"
-                            }`}
-                            onClick={(event) => handlePin(project, event)}
-                            title={project.pinnedAt ? "Unpin" : "Pin"}
-                            aria-pressed={project.pinnedAt != null}
-                          >
-                            <Pin className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 border-0 opacity-0 group-hover:opacity-70 group-focus-within:opacity-70 hover:!opacity-100"
-                            onClick={(event) => openEdit(project, event)}
-                            title="Edit"
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 border-0 text-destructive opacity-0 group-hover:opacity-70 group-focus-within:opacity-70 hover:!opacity-100"
-                            onClick={(event) => handleDelete(project, event)}
-                            title="Delete"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
+                          {canManage && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className={`h-6 w-6 border-0 hover:!opacity-100 ${
+                                  project.pinnedAt
+                                    ? "opacity-70"
+                                    : "opacity-0 group-hover:opacity-70 group-focus-within:opacity-70"
+                                }`}
+                                onClick={(event) => handlePin(project, event)}
+                                title={project.pinnedAt ? "Unpin" : "Pin"}
+                                aria-pressed={project.pinnedAt != null}
+                              >
+                                <Pin className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 border-0 opacity-0 group-hover:opacity-70 group-focus-within:opacity-70 hover:!opacity-100"
+                                onClick={(event) => openEdit(project, event)}
+                                title="Edit"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 border-0 text-destructive opacity-0 group-hover:opacity-70 group-focus-within:opacity-70 hover:!opacity-100"
+                                onClick={(event) => handleDelete(project, event)}
+                                title="Delete"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       );
                     })}
@@ -544,12 +651,14 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
               </div>
             </ScrollableContainer>
 
-            <div className="mt-1 border-t border-border pt-1">
-              <ListButton onClick={openCreate} className="gap-2 px-3 py-2">
-                <Plus className="h-3 w-3" />
-                New project
-              </ListButton>
-            </div>
+            {canManage && (
+              <div className="mt-1 border-t border-border pt-1">
+                <ListButton onClick={openCreate} className="gap-2 px-3 py-2">
+                  <Plus className="h-3 w-3" />
+                  New project
+                </ListButton>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -583,6 +692,109 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect }: Props) {
                 PROJECTS_MOUNT; host paths under PROJECTS_DIR use the same mount.
               </p>
             </div>
+            {dialogMode === "edit" && githubIssuePrEnabled && (
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <label className="flex items-center gap-1.5 text-sm font-medium">
+                    <GitPullRequest className="h-3.5 w-3.5" />
+                    GitHub Issue-to-PR
+                  </label>
+                  {githubConnection && (
+                    <Badge variant="outline" size="sm">
+                      {githubConnection.tokenConfigured ? "Connected" : "Token missing"}
+                    </Badge>
+                  )}
+                </div>
+                <div className="space-y-2 border border-border bg-card/50 p-3">
+                  {isGitHubLoading ? (
+                    <p className="text-xs text-muted-foreground">Loading GitHub settings...</p>
+                  ) : (
+                    <>
+                      <Input
+                        placeholder="owner/repository"
+                        aria-label="GitHub repository"
+                        value={githubRepository}
+                        onChange={(event) => setGitHubRepository(event.target.value)}
+                      />
+                      <Input
+                        placeholder="GITHUB_TOKEN"
+                        aria-label="GitHub token environment variable"
+                        className="font-mono text-sm"
+                        value={githubTokenEnvVar}
+                        onChange={(event) => setGitHubTokenEnvVar(event.target.value)}
+                      />
+                      <Input
+                        placeholder="Required labels, comma-separated"
+                        aria-label="GitHub issue labels"
+                        value={githubLabels}
+                        onChange={(event) => setGitHubLabels(event.target.value)}
+                      />
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Input
+                          placeholder="Assignee (optional)"
+                          aria-label="GitHub issue assignee"
+                          value={githubAssignee}
+                          onChange={(event) => setGitHubAssignee(event.target.value)}
+                        />
+                        <Input
+                          placeholder="Milestone (optional)"
+                          aria-label="GitHub issue milestone"
+                          value={githubMilestone}
+                          onChange={(event) => setGitHubMilestone(event.target.value)}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        The server reads the token from this environment variable; the token is
+                        never stored in the database.
+                      </p>
+                      {githubConnection?.syncError && (
+                        <p className="text-xs text-destructive">{githubConnection.syncError}</p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleConnectGitHub}
+                          disabled={
+                            connectGitHub.isPending ||
+                            !githubRepository.trim() ||
+                            !githubTokenEnvVar.trim()
+                          }
+                        >
+                          {connectGitHub.isPending
+                            ? "Connecting..."
+                            : githubConnection
+                              ? "Update connection"
+                              : "Connect"}
+                        </Button>
+                        {githubConnection && (
+                          <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={handleSyncGitHub}
+                              disabled={syncGitHub.isPending}
+                            >
+                              {syncGitHub.isPending ? "Syncing..." : "Sync now"}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={handleDisconnectGitHub}
+                              disabled={disconnectGitHub.isPending}
+                            >
+                              Disconnect
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
             {dialogMode === "edit" && (
               <div>
                 <label className="text-sm font-medium">Group</label>

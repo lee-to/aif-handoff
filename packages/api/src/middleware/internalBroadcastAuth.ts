@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
 import { getEnv, logger } from "@aif/shared";
 
@@ -11,15 +12,19 @@ function extractBearerToken(value: string | null | undefined): string | null {
   return token.length > 0 ? token : null;
 }
 
-function isLoopbackAddress(value: string | null | undefined): boolean {
-  if (!value) return false;
-  const first = value.split(",")[0]?.trim().toLowerCase() ?? "";
-  return first === "127.0.0.1" || first === "::1" || first === "localhost";
+function tokensMatch(candidate: string | null, configured: string): boolean {
+  if (!candidate) return false;
+  const candidateBuffer = Buffer.from(candidate, "utf8");
+  const configuredBuffer = Buffer.from(configured, "utf8");
+  return (
+    candidateBuffer.length === configuredBuffer.length &&
+    timingSafeEqual(candidateBuffer, configuredBuffer)
+  );
 }
 
 function resolveBroadcastAuthDecision(c: Context): {
   trusted: boolean;
-  mode: "token" | "test_bypass" | "development_loopback" | "rejected";
+  mode: "token" | "test_bypass" | "rejected";
   tokenConfigured: boolean;
 } {
   const configuredToken = getEnv().INTERNAL_BROADCAST_TOKEN?.trim() ?? "";
@@ -28,7 +33,7 @@ function resolveBroadcastAuthDecision(c: Context): {
 
   if (configuredToken) {
     return {
-      trusted: headerToken === configuredToken,
+      trusted: tokensMatch(headerToken, configuredToken),
       mode: "token",
       tokenConfigured: true,
     };
@@ -39,16 +44,6 @@ function resolveBroadcastAuthDecision(c: Context): {
     return {
       trusted: true,
       mode: "test_bypass",
-      tokenConfigured: false,
-    };
-  }
-
-  if (nodeEnv === "development") {
-    return {
-      trusted:
-        isLoopbackAddress(c.req.header("x-forwarded-for")) ||
-        isLoopbackAddress(c.req.header("x-real-ip")),
-      mode: "development_loopback",
       tokenConfigured: false,
     };
   }
@@ -69,13 +64,12 @@ export async function internalBroadcastAuth(c: Context, next: () => Promise<void
         tokenConfigured: decision.tokenConfigured,
         nodeEnv: process.env.NODE_ENV ?? null,
         path: c.req.path,
-        forwardedFor: c.req.header("x-forwarded-for") ?? null,
-        realIp: c.req.header("x-real-ip") ?? null,
       },
       "Rejected unauthorized internal broadcast request",
     );
     return c.json({ error: "Unauthorized broadcast caller" }, 401);
   }
 
+  log.debug({ authMode: decision.mode, path: c.req.path }, "Authorized internal broadcast request");
   await next();
 }

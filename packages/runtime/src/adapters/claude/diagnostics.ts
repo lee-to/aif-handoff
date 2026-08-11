@@ -57,7 +57,7 @@ function explainFailure(err: unknown, stderrTail: string): string {
   }
 
   if (baseMessage.toLowerCase().includes("exited with code 1")) {
-    return `${baseMessage}. No stderr/stdout details from SDK; likely auth or usage-limit issue`;
+    return `${baseMessage}. No stderr/stdout captured from the SDK. Likely causes: auth or usage-limit, or Claude Code rejected a settings value — e.g. a build older than 2.1.191 rejects the empty attribution strings used to suppress Co-Authored-By trailers. The adapter pre-checks the Claude Code version (>= 2.1.191) before each run, reading the exact binary \`query()\` launches (an explicit override or the one bundled with @anthropic-ai/claude-agent-sdk). If this still fires, upgrade @anthropic-ai/claude-agent-sdk (SDK transport) or run \`npm i -g @anthropic-ai/claude-code@latest\` (CLI/explicit-binary transport).`;
   }
 
   return baseMessage;

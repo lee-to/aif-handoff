@@ -25,6 +25,10 @@ export interface McpEnv {
    * `/mcp` endpoint. Only relevant when `transport` is `http`.
    */
   httpMultiSession: boolean;
+  /** Whether Participants Mode is enabled in the shared application. */
+  participantsModeEnabled: boolean;
+  /** Dedicated bearer token for HTTP MCP. Never used for participant sessions. */
+  authToken: string | null;
 }
 
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -86,13 +90,22 @@ export function loadMcpEnv(): McpEnv {
     rateLimitReadBurst: parseInt(process.env.MCP_RATE_LIMIT_READ_BURST || "10", 10),
     rateLimitWriteBurst: parseInt(process.env.MCP_RATE_LIMIT_WRITE_BURST || "5", 10),
     httpMultiSession: parseBooleanFlag(process.env.AIF_MCP_HTTP_MULTI_SESSION_ENABLED),
+    participantsModeEnabled: Boolean(sharedEnv.PARTICIPANTS_MODE_ENABLED),
+    authToken: process.env.MCP_AUTH_TOKEN?.trim() || null,
   };
+
+  if (env.transport === "http" && !env.authToken) {
+    log.error({ transport: env.transport }, "MCP HTTP authentication token is required");
+    throw new Error("MCP_AUTH_TOKEN is required when MCP_TRANSPORT=http.");
+  }
 
   log.info(
     {
       transport: env.transport,
       httpPort: env.httpPort,
       httpMultiSession: env.httpMultiSession,
+      participantsModeEnabled: env.participantsModeEnabled,
+      httpAuthRequired: env.transport === "http",
     },
     "MCP environment loaded",
   );

@@ -6,6 +6,7 @@ import { TaskTagsList } from "@/components/ui/task-tags-list";
 import { timeAgo } from "@/lib/utils";
 import { getRuntimeLimitDisplay } from "@/lib/runtimeLimits";
 import { useUsageLimitsEnabled } from "@/hooks/useSettings";
+import { TaskOwnershipSummary } from "@/components/task/TaskOwnership";
 
 const PRIORITY_LABELS: Record<number, { label: string; className: string }> = {
   0: { label: "None", className: "hidden" },
@@ -126,6 +127,14 @@ export function TaskCard({
         className={isCompact ? "mt-0.5 pl-1.5" : "mt-1.5 pl-2"}
       />
 
+      <div className={isCompact ? "mt-1 pl-1.5" : "mt-2 pl-2"}>
+        <TaskOwnershipSummary
+          executionOwner={task.executionOwner}
+          assignees={task.assignees}
+          compact={isCompact}
+        />
+      </div>
+
       {task.scheduledAt && task.status === "backlog" && (
         <div className="mt-2 ml-2 flex items-center gap-1.5 border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-3xs text-sky-700 dark:text-sky-300">
           <Clock className="h-3 w-3 shrink-0" />
@@ -230,7 +239,7 @@ export function TaskCard({
           isCompact ? "mt-1.5 pl-1.5 pt-1 text-4xs" : "mt-2 pl-2 pt-2 text-3xs"
         }`}
       >
-        #{shortTaskId(task.id)} · {timeAgo(task.updatedAt)} · {task.autoMode ? "AI" : "MANUAL"}
+        #{shortTaskId(task.id)} · {timeAgo(task.updatedAt)} · auto {task.autoMode ? "on" : "off"}
         {task.paused && (
           <Badge
             size={isCompact ? "xs" : "sm"}

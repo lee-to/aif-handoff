@@ -1,5 +1,5 @@
 import type { ServerType } from "@hono/node-server";
-import type { Hono } from "hono";
+import type { Env, Hono } from "hono";
 import {
   defineWebSocketHelper,
   WSContext,
@@ -76,7 +76,7 @@ function rejectUpgrade(socket: Duplex, status: number): void {
   );
 }
 
-export function createLegacyWebSocketBridge(app: Hono): LegacyWebSocketBridge {
+export function createLegacyWebSocketBridge<E extends Env>(app: Hono<E>): LegacyWebSocketBridge {
   const webSocketServer = new WebSocketServer({ noServer: true });
   const pendingWebSockets = new Map<IncomingMessage, PendingWebSocket>();
 

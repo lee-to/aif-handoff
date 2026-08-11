@@ -5,7 +5,9 @@ import {
   evaluateRuntimeLimitGate,
   findCoordinatorTaskCandidatesForProject,
   listCoordinatorActionableProjectIds,
+  findTaskById,
   findProjectById,
+  handoffTaskExecution,
   hasActiveLockedTaskForProject,
   claimCoordinatorTaskIfEligible,
   releaseTaskClaim,
@@ -21,6 +23,7 @@ import {
   claimBacklogTaskForAdvance,
   persistTaskRuntimeLimitSnapshot,
   resolveEffectiveRuntimeProfile,
+  setTaskFields,
   type CoordinatorStage,
   type ProjectRow,
   type TaskFieldsPatch,
@@ -58,6 +61,7 @@ import { classifyStageError } from "./stageErrorHandler.js";
 import { setActiveStageAbortController } from "./stageAbort.js";
 import { setCoordinatorId } from "./subagentQuery.js";
 import { ensureAutoQueueTaskCommit } from "./autoQueueCommit.js";
+import { publishGitHubTask, synchronizeGitHubProjects } from "./githubWorkflow.js";
 import {
   getRandomBackoffMinutes,
   releaseDueBlockedTasks,
@@ -289,7 +293,11 @@ function updateTaskStatus(
   extra: Omit<TaskFieldsPatch, "status" | "lastHeartbeatAt" | "updatedAt"> = {},
   info: TaskNotificationInfo = {},
 ): void {
-  updateTaskStatusRow(taskId, status, extra);
+  updateTaskStatusRow(taskId, status, extra, {
+    kind: "agent",
+    id: "coordinator",
+    displayNameSnapshot: "Coordinator",
+  });
   const broadcastType =
     info.fromStatus && info.fromStatus === status ? "task:updated" : "task:moved";
   void notifyTaskBroadcast(taskId, broadcastType, { ...info, toStatus: status });
@@ -528,6 +536,13 @@ function blockCandidateIfRuntimeLimited(task: TaskRow, stage: StatusTransition):
 
 /** Returns true on success, false on failure. */
 async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<boolean> {
+  if (task.executionOwner !== "ai") {
+    log.warn(
+      { taskId: task.id, stage: stage.label, executionOwner: task.executionOwner },
+      "Skipped runtime execution because task is not AI-owned",
+    );
+    return false;
+  }
   const project = findProjectById(task.projectId);
 
   if (!project) {
@@ -577,9 +592,26 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
 
   try {
     const executionRoot = task.worktreePath ?? project.rootPath;
+    const executionBoundaryTask = findTaskById(task.id);
+    if (!executionBoundaryTask || executionBoundaryTask.executionOwner !== "ai") {
+      log.warn(
+        {
+          taskId: task.id,
+          stage: stage.label,
+          executionOwner: executionBoundaryTask?.executionOwner ?? null,
+        },
+        "Aborted runtime execution at ownership boundary",
+      );
+      return false;
+    }
     await runStageWithTimeout(stage.runner, task.id, executionRoot, stage.label);
 
     flushActivityQueue(task.id);
+
+    if (stage.label === "implementer") {
+      await publishGitHubTask(task.id, project.rootPath);
+      flushActivityQueue(task.id);
+    }
 
     if (stage.label === "implementer" && task.skipReview) {
       clearTaskActiveRuntimeSelection(task.id);
@@ -606,34 +638,56 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
         taskId: task.id,
         projectRoot: task.worktreePath ?? project.rootPath,
       });
+      await publishGitHubTask(task.id, project.rootPath);
+      flushActivityQueue(task.id);
 
       if (outcome?.status === "manual_review_required") {
-        await ensureCommitBeforeTerminalStatus(task, project.rootPath);
         clearTaskActiveRuntimeSelection(task.id);
         clearTaskRuntimeLimitSnapshot(task.id);
-        updateTaskStatus(
-          task.id,
-          "done",
-          {
-            blockedReason: null,
-            blockedFromStatus: null,
-            retryAfter: null,
-            retryCount: 0,
-            reworkRequested: false,
-            reviewIterationCount: outcome.currentIteration,
-            manualReviewRequired: true,
-            autoReviewState: outcome.autoReviewState,
+        const currentTask = findTaskById(task.id);
+        if (!currentTask) return false;
+        const handoff = handoffTaskExecution({
+          taskId: task.id,
+          executionOwner: "human",
+          expectedOwnershipRevision: currentTask.ownershipRevision,
+          expectedExecutionOwner: "ai",
+          expectedStatus: currentTask.status,
+          actor: {
+            kind: "system",
+            id: "auto-review-gate",
+            displayNameSnapshot: "Auto Review Gate",
           },
-          {
-            title: taskTitle,
-            fromStatus: stage.inProgress,
-          },
-        );
+          reason: outcome.handoffReason,
+          allowLockedBy: COORDINATOR_ID,
+        });
+        if (!handoff.ok) {
+          log.error(
+            { taskId: task.id, code: handoff.code, handoffReason: outcome.handoffReason },
+            "Auto review manual handoff failed",
+          );
+          return false;
+        }
+        setTaskFields(task.id, {
+          blockedReason: null,
+          blockedFromStatus: null,
+          retryAfter: null,
+          retryCount: 0,
+          reworkRequested: false,
+          reviewIterationCount: outcome.currentIteration,
+          manualReviewRequired: true,
+          autoReviewState: outcome.autoReviewState,
+        });
+        void notifyTaskBroadcast(task.id, "task:updated", {
+          title: taskTitle,
+          fromStatus: stage.inProgress,
+          toStatus: stage.inProgress,
+        });
         log.info(
           {
             taskId: task.id,
             from: stage.inProgress,
-            to: "done",
+            to: stage.inProgress,
+            executionOwner: "human",
             reviewIteration: outcome.currentIteration,
             handoffReason: outcome.handoffReason,
           },
@@ -657,6 +711,11 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
             reviewIterationCount: outcome.currentIteration,
             manualReviewRequired: false,
             autoReviewState: outcome.autoReviewState,
+            autoQueueCommitStatus: "pending",
+            autoQueueCommitBaseSha: findTaskById(task.id)?.commitSha ?? null,
+            commitSha: null,
+            autoQueueCommitError: null,
+            autoQueueCommitCompletedAt: null,
           },
           { title: taskTitle, fromStatus: stage.inProgress },
         );
@@ -1061,6 +1120,7 @@ async function runPollCycle(
   releaseDueBlockedTasks();
   recoverStaleInProgressTasks();
   processDueScheduledTasks();
+  await synchronizeGitHubProjects();
   processAutoQueueAdvance();
 
   const maxProjectLanes = env.COORDINATOR_MAX_CONCURRENT_PROJECTS;

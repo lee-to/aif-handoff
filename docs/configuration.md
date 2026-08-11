@@ -61,6 +61,7 @@ Node packages (`@aif/api`, `@aif/agent`, `@aif/data`, `@aif/shared`) auto-load e
 | `AIF_TASK_WORKTREES_ENABLED`                           | boolean | `false`                        | Off-by-default rollout flag for per-task git worktrees. When `false`, branch-isolated projects (`git.create_branches=true`) stay serial and the API rejects parallel auto-queue for those projects. When `true`, full-mode planning for parallel branch-isolated projects provisions an isolated sibling git worktree and stores it on `tasks.worktree_path`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED`             | boolean | `false`                        | Off-by-default rollout flag for awaited auto-queue completion commits. When `false`, terminal transitions, scheduled-task firing, and project concurrency retain their legacy behavior. When `true`, auto-queue claims persist a Git baseline, terminal publication waits for a verified local commit, dirty scheduled tasks are deferred, failures block queue advancement, and Git-backed auto-queue projects sharing one worktree run serially                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED`            | boolean | `false`                        | Off-by-default rollout flag for overlapping coordinator poll cycles. When `false`, cron ticks and WebSocket wakes share one single-flight loop and the interval tick awaits the cycle. When `true`, a trigger received during an active cycle starts an overlapping cycle while global stage slots are free (up to 8 in flight, idle projects only), and the interval tick dispatches the cycle without awaiting it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `AIF_GITHUB_ISSUE_PR_ENABLED`                          | boolean | `false`                        | Master switch for GitHub issue-to-PR automation. When `false`, GitHub routes return `403 feature_disabled`, the UI controls stay hidden, and the agent performs no GitHub sync, issue-specific worktree provisioning, push, PR publication, or GitHub-driven task transitions. Set to `true` to opt in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `AIF_RUNTIME_SESSION_FORK_ENABLED`                     | boolean | `false`                        | Off-by-default rollout flag for runtime session forks. When `false`, adapters keep `supportsSessionFork=false` in descriptor/effective capabilities even if the transport implementation exists. When `true`, fork-capable transports expose `supportsSessionFork=true` so warmup callers can opt into `forkSession()`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `AIF_STAGE_RUNTIME_PIN_ENABLED`                        | boolean | `false`                        | Off-by-default rollout flag for stage-scoped task runtime-selection pins. When `false`, every subagent execution resolves the effective runtime profile normally and skips task pin lookup/persistence. When `true`, the agent stores the runtime/profile/model/options chosen at the start of a task status and reuses them for same-status retries until the task advances or a human transition clears the pin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED`           | boolean | `false`                        | Off-by-default rollout flag for provider-advertised model reasoning effort metadata. When `false`, model discovery hides effort metadata and runtime execution keeps the stable per-runtime allowlists. When `true`, execution validates a configured effort against cached metadata for the selected model and falls back to the stable allowlist when metadata is unavailable. Unsupported or stale values are ignored with a structured warning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -77,11 +78,44 @@ Node packages (`@aif/api`, `@aif/agent`, `@aif/data`, `@aif/shared`) auto-load e
 | `AIF_ENABLE_CODEX_LOGIN_PROXY`                         | boolean | `false`                        | Enable the in-container Codex OAuth login broker and the api-side `/auth/codex/*` proxy. Dev-only. In production prefer `OPENAI_API_KEY`. See [Providers](providers.md#codex-oauth-login-in-docker-broker)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `AIF_CODEX_LOGIN_BROKER_PORT`                          | number  | `3010`                         | Port the Codex login broker binds inside the agent container (not mapped to the host by the dev compose)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `AGENT_INTERNAL_URL`                                   | string  | `http://agent:3010`            | Base URL the api uses to reach the agent-side Codex login broker over the docker network                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED`              | boolean | `false`                        | Off-by-default rollout flag for project names in Telegram task-status messages. When `false`, notifications keep the lookup-free legacy two-line format. When `true`, configured Telegram senders resolve and prepend the task project name                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `TELEGRAM_BOT_API_URL`                                 | string  | `https://api.telegram.org`     | Optional Telegram Bot API base URL or proxy endpoint                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `TELEGRAM_BOT_TOKEN`                                   | string  | _(optional)_                   | Telegram bot token for task status notifications (see [Telegram Notifications](#telegram-notifications))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `TELEGRAM_USER_ID`                                     | string  | _(optional)_                   | Telegram user ID to receive notifications                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 Environment validation is handled by Zod in `packages/shared/src/env.ts`. The application will fail to start with a descriptive error if required variables are invalid.
+
+## GitHub Issue-to-PR Mode
+
+Set `AIF_GITHUB_ISSUE_PR_ENABLED=true` to enable this off-by-default integration.
+When disabled, saved linkage remains in the database for a later rollout but no GitHub routes,
+network calls, pushes, PR publication, or GitHub-specific worktree behavior run.
+
+Configure a repository from **Edit Project → GitHub Issue-to-PR**. The connection stores
+`owner/name`, eligibility filters, and an environment-variable name; it never stores the
+token. `GITHUB_TOKEN` is the default variable and is inherited by Docker services through
+the existing `.env` file. Custom names must use the uppercase `GITHUB_*` prefix so this
+integration cannot forward unrelated application secrets to GitHub.
+
+Use a fine-grained token limited to the connected repository with these permissions:
+
+- Metadata: read
+- Issues: read and write
+- Pull requests: read and write
+- Contents: read and write
+- Commit statuses: read
+- Checks: read
+
+The API token creates/updates PRs and review comments. Git push uses the repository's
+normal Git credentials, so native installs must also configure the `origin` remote for
+non-interactive push; Docker deployments should provide a usable HTTPS credential helper
+or SSH key. `INTERNAL_BROADCAST_TOKEN` authorizes the agent's internal sync/publication
+requests when Participants Mode is enabled.
+
+Eligibility is an AND filter: every configured label must be present, and the optional
+assignee and milestone must match. With no filters, all open issues are eligible. Sync is
+idempotent by project plus issue number and updates the existing task instead of importing
+duplicates.
 
 ## Frontend Request Timeouts
 
@@ -97,6 +131,65 @@ The web UI (`@aif/web`) uses named timeout constants for HTTP requests to the AP
 `COMMENT_TIMEOUT_MS` (30s) is defined locally in `useTaskDetailActions.ts` for comment creation and non-AI task events.
 
 If a request exceeds its timeout, the browser aborts the fetch and the user sees a "Request timed out" error. The backend process may continue running independently.
+
+## Participants Mode
+
+Participants Mode adds local accounts, RBAC, credentialed CORS, session-bound CSRF,
+authenticated WebSockets, and explicit task ownership. It is off by default, so an
+upgrade preserves anonymous API/UI behavior and treats existing tasks as AI-owned.
+
+| Variable                                 | Default                   | Rules                                                                              |
+| ---------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------- |
+| `PARTICIPANTS_MODE_ENABLED`              | `false`                   | Enables the complete participant/auth/ownership policy                             |
+| `PARTICIPANT_ALLOWED_ORIGINS`            | `http://localhost:5180`   | Comma-separated exact origins; paths, wildcards, and trailing slashes are rejected |
+| `PARTICIPANT_SESSION_TTL_SECONDS`        | `604800` (7 days)         | Integer from 300 seconds through 365 days                                          |
+| `PARTICIPANT_SESSION_COOKIE_NAME`        | `aif_participant_session` | Letters, digits, `_`, and `-` only                                                 |
+| `PARTICIPANT_SESSION_COOKIE_SECURE`      | `false`                   | Force `Secure`; production and direct HTTPS requests enable it automatically       |
+| `PARTICIPANT_LOGIN_RATE_LIMIT_WINDOW_MS` | `60000`                   | Login-attempt window, minimum 1000 ms                                              |
+| `PARTICIPANT_LOGIN_RATE_LIMIT_MAX`       | `10`                      | Attempts per client/window, from 1 through 1000                                    |
+| `MCP_AUTH_TOKEN`                         | _(required for HTTP MCP)_ | Required whenever `MCP_TRANSPORT=http`, independently of Participants Mode         |
+
+Browser sessions use an opaque `HttpOnly`, `SameSite=Strict` cookie. Only a SHA-256 token
+digest is persisted; the CSRF value is derived per session and returned by
+`GET /auth/session`. Every unsafe browser request must send both the cookie and the
+matching `X-CSRF-Token` header from an exact allowed `Origin`. REST and WebSocket
+requests reject missing, expired, inactive, or wrong-origin sessions. The allowed
+browser origin may differ from the API host (for example, `app.example.com` calling
+`api.example.com`); validate public API hostnames separately in the reverse proxy.
+
+Passwords are stored as versioned salted scrypt hashes. Login uses a dummy hash for
+unknown users, returns the same `invalid_credentials` response, and is rate-limited.
+Logs may contain participant/session IDs, counts, actions, and structured error codes,
+but never passwords, hashes, raw cookies, bearer tokens, CSRF tokens, comment bodies,
+handoff reasons, or provider credentials. Use `LOG_LEVEL=info` or stricter in production;
+`debug` remains redacted but is intentionally verbose.
+
+Role policy:
+
+- `admin`: manage participants, assign/handoff any eligible task, and use configuration controls.
+- `member`: comment on any workspace task; self-assign an unassigned Human task; act on assigned Human tasks;
+  hand an assigned Human task back to AI. Members cannot act on AI-owned tasks.
+- Every active participant can change their own password after confirming the current
+  password. The current session stays active and all other sessions are revoked.
+- The final active admin cannot be demoted or deactivated. Deactivation and password
+  reset revoke that participant's active sessions immediately.
+
+`executionOwner` and `autoMode` are independent. Human-owned tasks are excluded from
+all agent/scheduler/auto-queue/watchdog/runtime-budget selection. Ownership does not
+create filesystem isolation: do not edit a shared project/worktree until any prior AI
+run and lease have ended. The handoff endpoint rejects a live lock and uses
+`expectedOwnershipRevision` as an optimistic-concurrency guard.
+
+The first admin is created with `npm run participants:bootstrap`; see
+[Getting Started](getting-started.md#participants-mode). Once accounts exist, recovery
+uses an authenticated admin password reset. If all admin credentials are lost, restore
+the SQLite database from backup—the bootstrap command deliberately refuses to bypass an
+initialized participant store.
+
+Both Angie configurations forward `Cookie`, `Origin`, `Host`, `X-Forwarded-For`, and
+`X-Forwarded-Proto` on REST and WebSocket proxy paths. Keep those headers intact in any
+replacement proxy; production browser origins should use the public HTTPS origin and
+`PARTICIPANT_SESSION_COOKIE_SECURE=true`.
 
 ## Authentication
 
@@ -533,15 +626,25 @@ Best-effort Telegram messages on task status changes. Add to `.env`:
 TELEGRAM_BOT_API_URL=https://api.telegram.org
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
 TELEGRAM_USER_ID=987654321
+AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED=false
 ```
 
-| Variable               | Type   | Default                    | Description                                                        |
-| ---------------------- | ------ | -------------------------- | ------------------------------------------------------------------ |
-| `TELEGRAM_BOT_API_URL` | string | `https://api.telegram.org` | Telegram Bot API base URL or custom proxy endpoint                 |
-| `TELEGRAM_BOT_TOKEN`   | string | _(optional)_               | Bot token from [@BotFather](https://t.me/BotFather)                |
-| `TELEGRAM_USER_ID`     | string | _(optional)_               | Your Telegram user ID (the bot sends direct messages to this user) |
+| Variable                                  | Type    | Default                    | Description                                                        |
+| ----------------------------------------- | ------- | -------------------------- | ------------------------------------------------------------------ |
+| `TELEGRAM_BOT_API_URL`                    | string  | `https://api.telegram.org` | Telegram Bot API base URL or custom proxy endpoint                 |
+| `TELEGRAM_BOT_TOKEN`                      | string  | _(optional)_               | Bot token from [@BotFather](https://t.me/BotFather)                |
+| `TELEGRAM_USER_ID`                        | string  | _(optional)_               | Your Telegram user ID (the bot sends direct messages to this user) |
+| `AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED` | boolean | `false`                    | Prepend the task project name when enabled                         |
 
-When both variables are set, every `task:moved` event sends a short message with the task title and status transition. If delivery fails (network error, invalid token, etc.), nothing breaks — failures are logged at `debug` level and silently ignored.
+When the token and user ID are set, every `task:moved` event sends the legacy two-line task-title and status-transition message. Set `AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED=true` to prepend the project name:
+
+```text
+📁 My Project
+📋 Fix login redirect
+review → done
+```
+
+When enabled, the project name is resolved only after Telegram configuration is confirmed and is escaped for Telegram MarkdownV2. Callers that already know the project can provide it directly. If the project lookup fails or no project is found, the notification keeps the legacy two-line format. Delivery and project lookup are both best-effort: failures are logged at `debug` level and never block task processing.
 
 To get your user ID, message [@userinfobot](https://t.me/userinfobot) or any similar bot on Telegram.
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-AIF Handoff uses a Modular Monolith architecture implemented via Turborepo workspaces. Each package (`shared`, `data`, `api`, `web`, `agent`) is an independent module with its own build, tests, and dependencies — but they deploy and run together as a single system.
+AIF Handoff uses a Modular Monolith architecture implemented via Turborepo workspaces. Each package (`shared`, `runtime`, `data`, `api`, `web`, `agent`, `mcp`) is an independent module with its own build, tests, and dependencies — but they deploy and run together as a single system.
 
 This architecture was chosen because the project has clear domain boundaries (data layer, API, UI, agent orchestration) that benefit from strong module separation, while the small team and single-system deployment make microservices unnecessary overhead.
 
@@ -40,18 +40,26 @@ packages/
 │       ├── workflowSpec.ts  # Runtime-independent workflow contract
 │       ├── promptPolicy.ts  # Agent-definition fallback policy
 │       ├── adapters/
-│       │   └── claude/      # Claude adapter (run, sessions, hooks, error mapping)
+│       │   ├── claude/      # Claude adapter
+│       │   ├── codex/       # Codex SDK/CLI/API/App Server adapter
+│       │   ├── opencode/    # OpenCode adapter
+│       │   └── openrouter/  # OpenRouter adapter
 │       └── index.ts         # Public runtime API
 │
 ├── data/                # @aif/data — centralized data-access module
 │   └── src/
-│       └── index.ts         # Repository-style DB operations
+│       ├── participants.ts  # Participant lifecycle and admin invariants
+│       ├── authSessions.ts  # Password/session/CSRF persistence
+│       ├── taskOwnership.ts # Atomic handoff, assignment, executor history
+│       ├── taskTransitions.ts # Actor-aware atomic task transitions
+│       ├── audit.ts         # Immutable audit writes
+│       └── index.ts         # Public repository API
 │
 ├── api/                 # @aif/api — HTTP + WebSocket server module
 │   └── src/
 │       ├── index.ts         # Server bootstrap (Hono + node-server)
-│       ├── routes/          # Route handlers (tasks.ts, projects.ts)
-│       ├── middleware/      # Hono middleware (logger.ts)
+│       ├── routes/          # Tasks/projects plus auth/participants routes
+│       ├── middleware/      # Session, CSRF, CORS, RBAC, logging
 │       ├── schemas.ts       # Request validation schemas (zod)
 │       └── ws.ts            # WebSocket event handler
 │
@@ -59,23 +67,32 @@ packages/
 │   └── src/
 │       ├── App.tsx          # Root component
 │       ├── components/
+│       │   ├── auth/        # Login UI
+│       │   ├── participants/ # Participant menu and administration
 │       │   ├── kanban/      # Board, Column, TaskCard, AddTaskForm
-│       │   ├── task/        # TaskDetail, TaskPlan, TaskLog, AgentTimeline
+│       │   ├── task/        # Detail, ownership/handoff, executor timeline
 │       │   ├── layout/      # Header, CommandPalette
 │       │   ├── project/     # ProjectSelector
 │       │   └── ui/          # Reusable primitives (button, dialog, badge, etc.)
 │       ├── hooks/           # React hooks (useTasks, useWebSocket, useTheme, etc.)
 │       └── lib/             # Utilities (api.ts, notifications.ts, utils.ts)
 │
-└── agent/               # @aif/agent — Agent orchestration module
+├── agent/               # @aif/agent — Agent orchestration module
+│   └── src/
+│       ├── index.ts         # Agent bootstrap
+│       ├── coordinator.ts   # Polling loop (node-cron, 30s interval)
+│       ├── subagentQuery.ts # Runtime-aware execution bridge
+│       ├── hooks.ts         # Agent lifecycle hooks
+│       ├── notifier.ts      # Notification dispatch
+│       ├── claudeDiagnostics.ts  # Agent SDK health checks
+│       └── subagents/       # Subagent launchers (planner, implementer, reviewer)
+│
+└── mcp/                 # @aif/mcp — MCP sync and ownership-aware read contracts
     └── src/
-        ├── index.ts         # Agent bootstrap
-        ├── coordinator.ts   # Polling loop (node-cron, 30s interval)
-        ├── subagentQuery.ts # Runtime-aware execution bridge
-        ├── hooks.ts         # Agent lifecycle hooks
-        ├── notifier.ts      # Notification dispatch
-        ├── claudeDiagnostics.ts  # Agent SDK health checks
-        └── subagents/       # Subagent launchers (planner, implementer, reviewer)
+        ├── tools/           # Task read/write tools
+        ├── utils/           # Broadcast and compact response helpers
+        ├── env.ts           # Transport + bearer auth config
+        └── server.ts        # stdio/HTTP MCP server
 ```
 
 ## Dependency Rules
@@ -89,6 +106,7 @@ api ──→ data
 api ──→ runtime
 agent ──→ data
 agent ──→ runtime
+mcp ──→ data
 ```
 
 ### Allowed

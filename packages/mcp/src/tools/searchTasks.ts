@@ -9,6 +9,9 @@ const log = logger("mcp:tool:search-tasks");
 const searchTasksInputSchema: Record<string, z.ZodTypeAny> = {
   query: z.string().min(1).max(200).describe("Search query string (max 200 chars)"),
   projectId: z.string().uuid().optional().describe("Optional project ID to scope the search"),
+  executionOwner: z.enum(["ai", "human"]).optional().describe("Filter by execution owner"),
+  assigneeId: z.string().uuid().optional().describe("Filter by participant assignee ID"),
+  unassigned: z.boolean().optional().describe("Filter tasks without participant assignees"),
   limit: z
     .number()
     .int()
@@ -20,10 +23,13 @@ const searchTasksInputSchema: Record<string, z.ZodTypeAny> = {
 };
 
 type SearchTasksArgs = {
+  assigneeId?: string;
+  executionOwner?: "ai" | "human";
   limit?: number;
   offset?: number;
   projectId?: string;
   query: string;
+  unassigned?: boolean;
 };
 
 export function register(server: McpServer, context: ToolContext): void {
@@ -40,7 +46,12 @@ export function register(server: McpServer, context: ToolContext): void {
         }
 
         log.debug(
-          { query: args.query.substring(0, 50), projectId: args.projectId },
+          {
+            projectId: args.projectId,
+            executionOwner: args.executionOwner,
+            assigneeId: args.assigneeId,
+            unassigned: args.unassigned,
+          },
           "handoff_search_tasks called",
         );
 
@@ -49,22 +60,22 @@ export function register(server: McpServer, context: ToolContext): void {
           projectId: args.projectId,
           limit: args.limit,
           offset: args.offset,
+          executionOwner: args.executionOwner,
+          assigneeId: args.assigneeId,
+          unassigned: args.unassigned,
         });
 
-        const items = result.items.map(toTaskSummary);
+        const items = result.items.map((row) => toTaskSummary(row));
 
         if (items.length === 0) {
-          log.warn(
-            { query: args.query.substring(0, 50), projectId: args.projectId },
-            "Search returned 0 results",
-          );
+          log.warn({ projectId: args.projectId }, "Search returned 0 results");
         }
 
         log.info(
           {
             resultCount: items.length,
             total: result.total,
-            query: args.query.substring(0, 50),
+            projectId: args.projectId,
           },
           "handoff_search_tasks completed",
         );

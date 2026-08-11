@@ -4,6 +4,7 @@ import {
   findProjectById,
   findTaskById,
   getLatestReworkComment,
+  listTaskExecutorHistory,
   persistTaskPlanForTask,
   setTaskFields,
   type TaskRow,
@@ -217,6 +218,18 @@ export async function runImplementer(taskId: string, projectRoot: string): Promi
   const blockingFindingsSnapshot = task.reworkRequested
     ? formatAutoReviewStateForPrompt(task.autoReviewState)
     : "No persisted blocking findings snapshot.";
+  const latestOwnershipEntry = listTaskExecutorHistory(taskId).at(-1);
+  const handoffResponsibility = latestOwnershipEntry
+    ? [
+        `ownershipRevision=${latestOwnershipEntry.ownershipRevision}`,
+        `executionOwner=${latestOwnershipEntry.executionOwner}`,
+        `initiatedBy=${latestOwnershipEntry.actor.displayNameSnapshot ?? latestOwnershipEntry.actor.kind}`,
+        `responsibleParticipants=${
+          latestOwnershipEntry.assignees.map((assignee) => assignee.displayName).join(", ") ||
+          "none"
+        }`,
+      ].join("; ")
+    : "No executor handoff history.";
 
   if (selectedPlan && parsedTaskCount > 0 && pendingTaskCount === 0 && !task.reworkRequested) {
     const nowIso = new Date().toISOString();
@@ -316,7 +329,9 @@ Do not perform Handoff MCP sync yourself.
 
 ${scopeConstraint}
 
-${bodyReworkHeader}Title: ${task.title}
+${bodyReworkHeader}Latest executor responsibility: ${handoffResponsibility}
+
+Title: ${task.title}
 Description: ${task.description}
 Task attachments:
 ${formatAttachmentsForPrompt(task.attachments)}

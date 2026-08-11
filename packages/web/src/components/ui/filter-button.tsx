@@ -35,6 +35,7 @@ export function FilterButton({
   return (
     <button
       type="button"
+      aria-pressed={active}
       className={cn(
         filterButtonVariants({ size }),
         active

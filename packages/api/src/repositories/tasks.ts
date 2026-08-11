@@ -17,13 +17,27 @@ import {
   type CommentRow,
   updateTask,
 } from "@aif/data";
-import type { TaskStatus } from "@aif/shared";
+import type { AuditActor, ExecutionOwner, TaskAssigneeSummary, TaskStatus } from "@aif/shared";
 
-export function toTaskBroadcastPayload(task: { id: string; title: string; status: TaskStatus }) {
+export function toTaskBroadcastPayload(
+  task: {
+    id: string;
+    title: string;
+    status: TaskStatus;
+    executionOwner?: ExecutionOwner;
+    ownershipRevision?: number;
+    assignees?: TaskAssigneeSummary[];
+  },
+  actor?: AuditActor,
+) {
   return {
     id: task.id,
     title: task.title,
     status: task.status,
+    ...(task.executionOwner === undefined ? {} : { executionOwner: task.executionOwner }),
+    ...(task.ownershipRevision === undefined ? {} : { ownershipRevision: task.ownershipRevision }),
+    ...(task.assignees === undefined ? {} : { assignees: task.assignees }),
+    ...(actor === undefined ? {} : { actor }),
   };
 }
 
@@ -116,12 +130,14 @@ export {
 
 export function createComment(input: {
   taskId: string;
+  participantId?: string | null;
   message: string;
   attachments?: unknown[];
 }): CommentRow | undefined {
   return createTaskComment({
     taskId: input.taskId,
     author: "human",
+    participantId: input.participantId,
     message: input.message,
     attachments: input.attachments,
   });

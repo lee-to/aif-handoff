@@ -1,8 +1,10 @@
+import { findProjectByTaskId } from "@aif/data";
 import { getEnv, logger, sendTelegramNotification } from "@aif/shared";
 
 const log = logger("mcp:broadcast");
 
 export interface BroadcastOptions {
+  projectName?: string;
   title?: string;
   fromStatus?: string;
   toStatus?: string;
@@ -21,9 +23,13 @@ export async function broadcastTaskChange(
   const url = `${baseUrl}/tasks/${taskId}/broadcast`;
 
   try {
+    const internalToken = getEnv().INTERNAL_BROADCAST_TOKEN?.trim();
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(internalToken ? { "X-Internal-Broadcast-Token": internalToken } : {}),
+      },
       body: JSON.stringify({ type }),
     });
 
@@ -40,6 +46,8 @@ export async function broadcastTaskChange(
   if (type === "task:moved" && (!options.fromStatus || options.fromStatus !== options.toStatus)) {
     void sendTelegramNotification({
       taskId,
+      projectName: options.projectName,
+      resolveProjectName: () => findProjectByTaskId(taskId)?.name,
       title: options.title,
       fromStatus: options.fromStatus,
       toStatus: options.toStatus,

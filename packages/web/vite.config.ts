@@ -80,6 +80,8 @@ export default defineConfig(async () => {
         "/chat": apiTarget,
         "/runtime-profiles": apiTarget,
         "/settings": apiTarget,
+        "/auth": apiTarget,
+        "/participants": apiTarget,
         "/health": apiTarget,
         "/ws": {
           target: `ws://localhost:${API_PORT}`,

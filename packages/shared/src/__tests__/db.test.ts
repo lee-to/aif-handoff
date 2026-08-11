@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { chatSessions } from "../schema.js";
 import { closeDb, createTestDb, getDb } from "../db.js";
 
-const CURRENT_SCHEMA_VERSION = 26;
+const CURRENT_SCHEMA_VERSION = 28;
 
 function removeSqliteArtifacts(dbPath: string): void {
   for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
@@ -23,6 +23,30 @@ describe("db", () => {
   it("createTestDb returns a working database with indexes", () => {
     const db = createTestDb();
     expect(db).toBeDefined();
+  });
+
+  it("creates restart-safe GitHub linkage tables", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-github-${Date.now()}-${Math.random()}.sqlite`);
+
+    try {
+      getDb(dbPath);
+      closeDb();
+      const sqlite = new Database(dbPath, { readonly: true });
+      const tables = sqlite
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('github_repositories', 'github_issues') ORDER BY name",
+        )
+        .all() as Array<{ name: string }>;
+      const userVersion = sqlite.pragma("user_version", { simple: true }) as number;
+      sqlite.close();
+
+      expect(tables.map((row) => row.name)).toEqual(["github_issues", "github_repositories"]);
+      expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
   });
 
   it("creates Codex index tables for fresh databases", () => {
@@ -164,6 +188,265 @@ describe("db", () => {
       );
       expect(task).toEqual({ title: "Existing task", commit_sha: null });
       expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
+  });
+
+  it("migrates v26 tasks to AI ownership and backfills immutable executor history", () => {
+    closeDb();
+    const dbPath = join(
+      tmpdir(),
+      `aif-shared-participants-migration-${Date.now()}-${Math.random()}.sqlite`,
+    );
+    const sqlite = new Database(dbPath);
+    sqlite.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'backlog',
+        position REAL NOT NULL DEFAULT 1000,
+        retry_after TEXT,
+        locked_by TEXT,
+        locked_until TEXT,
+        scheduled_at TEXT,
+        runtime_profile_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE task_comments (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        author TEXT NOT NULL DEFAULT 'human',
+        message TEXT NOT NULL,
+        attachments TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO tasks (
+        id,
+        project_id,
+        title,
+        status,
+        created_at,
+        updated_at
+      ) VALUES (
+        'task-existing',
+        'project-1',
+        'Existing task',
+        'planning',
+        '2026-07-01T12:00:00.000Z',
+        '2026-07-01T12:00:00.000Z'
+      );
+    `);
+    sqlite.pragma("user_version = 26");
+    sqlite.close();
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const migrated = new Database(dbPath, { readonly: true });
+      const task = migrated
+        .prepare(
+          `
+            SELECT execution_owner, ownership_revision
+            FROM tasks
+            WHERE id = 'task-existing'
+          `,
+        )
+        .get() as { execution_owner: string; ownership_revision: number };
+      const history = migrated
+        .prepare(
+          `
+            SELECT
+              task_id,
+              task_title_snapshot,
+              ownership_revision,
+              execution_owner,
+              assignees_snapshot_json,
+              status_snapshot,
+              actor_kind,
+              reason,
+              created_at
+            FROM task_executor_history
+            WHERE task_id = 'task-existing'
+          `,
+        )
+        .get() as Record<string, unknown>;
+      const commentColumns = migrated.pragma("table_info(task_comments)") as Array<{
+        name: string;
+      }>;
+      const userVersion = migrated.pragma("user_version", { simple: true }) as number;
+      migrated.close();
+
+      expect(task).toEqual({ execution_owner: "ai", ownership_revision: 0 });
+      expect(history).toEqual({
+        task_id: "task-existing",
+        task_title_snapshot: "Existing task",
+        ownership_revision: 0,
+        execution_owner: "ai",
+        assignees_snapshot_json: "[]",
+        status_snapshot: "planning",
+        actor_kind: "system",
+        reason: "migration_v27_initial_owner",
+        created_at: "2026-07-01T12:00:00.000Z",
+      });
+      expect(commentColumns.map((column) => column.name)).toContain("participant_id");
+      expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
+  });
+
+  it("creates constrained participant tables, ownership indexes, and append-only ledgers", () => {
+    closeDb();
+    const dbPath = join(
+      tmpdir(),
+      `aif-shared-participants-fresh-${Date.now()}-${Math.random()}.sqlite`,
+    );
+
+    try {
+      getDb(dbPath);
+      closeDb();
+
+      const sqlite = new Database(dbPath);
+      const tableNames = sqlite
+        .prepare(
+          `
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN (
+                'participants',
+                'participant_sessions',
+                'task_assignments',
+                'task_executor_history',
+                'audit_events'
+              )
+          `,
+        )
+        .all() as Array<{ name: string }>;
+      const indexNames = sqlite
+        .prepare(
+          `
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND name IN (
+                'idx_participants_normalized_username',
+                'idx_participant_sessions_token_digest',
+                'idx_task_assignments_participant',
+                'idx_task_executor_history_revision',
+                'idx_audit_events_task'
+              )
+          `,
+        )
+        .all() as Array<{ name: string }>;
+      const triggerNames = sqlite
+        .prepare(
+          `
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'trigger'
+              AND name IN (
+                'trg_task_executor_history_prevent_update',
+                'trg_task_executor_history_prevent_delete',
+                'trg_audit_events_prevent_update',
+                'trg_audit_events_prevent_delete'
+              )
+          `,
+        )
+        .all() as Array<{ name: string }>;
+
+      sqlite
+        .prepare(
+          `
+            INSERT INTO participants (
+              id,
+              username,
+              normalized_username,
+              display_name,
+              password_hash,
+              role
+            ) VALUES (?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run("participant-1", "Alice", "alice", "Alice", "scrypt:test", "admin");
+      expect(() =>
+        sqlite
+          .prepare(
+            `
+              INSERT INTO participants (
+                id,
+                username,
+                normalized_username,
+                display_name,
+                password_hash,
+                role
+              ) VALUES (?, ?, ?, ?, ?, ?)
+            `,
+          )
+          .run("participant-2", "ALICE", "alice", "Other Alice", "scrypt:test", "member"),
+      ).toThrow();
+
+      sqlite
+        .prepare(
+          `
+            INSERT INTO task_executor_history (
+              id,
+              task_id,
+              task_title_snapshot,
+              ownership_revision,
+              execution_owner,
+              assignees_snapshot_json,
+              status_snapshot,
+              actor_kind
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run("history-1", "task-1", "Task", 0, "ai", "[]", "backlog", "system");
+      sqlite
+        .prepare(
+          `
+            INSERT INTO audit_events (
+              id,
+              action,
+              entity_type,
+              entity_id,
+              actor_kind
+            ) VALUES (?, ?, ?, ?, ?)
+          `,
+        )
+        .run("audit-1", "task.created", "task", "task-1", "system");
+
+      expect(() =>
+        sqlite
+          .prepare("UPDATE task_executor_history SET reason = 'changed' WHERE id = 'history-1'")
+          .run(),
+      ).toThrow(/append-only/);
+      expect(() =>
+        sqlite.prepare("DELETE FROM task_executor_history WHERE id = 'history-1'").run(),
+      ).toThrow(/append-only/);
+      expect(() =>
+        sqlite.prepare("UPDATE audit_events SET action = 'changed' WHERE id = 'audit-1'").run(),
+      ).toThrow(/append-only/);
+      expect(() => sqlite.prepare("DELETE FROM audit_events WHERE id = 'audit-1'").run()).toThrow(
+        /append-only/,
+      );
+      sqlite.close();
+
+      expect(tableNames.map((row) => row.name).sort()).toEqual([
+        "audit_events",
+        "participant_sessions",
+        "participants",
+        "task_assignments",
+        "task_executor_history",
+      ]);
+      expect(indexNames).toHaveLength(5);
+      expect(triggerNames).toHaveLength(4);
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);

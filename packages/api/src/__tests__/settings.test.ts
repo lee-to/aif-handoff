@@ -543,3 +543,26 @@ describe("settings overview — QA pipeline flag", () => {
     expect(overview.qaPipelineEnabled).toBe(false);
   });
 });
+
+describe("settings overview — GitHub issue-to-PR flag", () => {
+  const original = process.env.AIF_GITHUB_ISSUE_PR_ENABLED;
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env.AIF_GITHUB_ISSUE_PR_ENABLED;
+    } else {
+      process.env.AIF_GITHUB_ISSUE_PR_ENABLED = original;
+    }
+    resetEnvCache();
+  });
+
+  it("reports githubIssuePrEnabled from AIF_GITHUB_ISSUE_PR_ENABLED", async () => {
+    process.env.AIF_GITHUB_ISSUE_PR_ENABLED = "true";
+    resetEnvCache();
+    expect((await buildSettingsOverview()).githubIssuePrEnabled).toBe(true);
+
+    process.env.AIF_GITHUB_ISSUE_PR_ENABLED = "false";
+    resetEnvCache();
+    expect((await buildSettingsOverview()).githubIssuePrEnabled).toBe(false);
+  });
+});

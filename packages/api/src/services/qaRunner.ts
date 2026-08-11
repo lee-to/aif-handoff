@@ -13,6 +13,7 @@ const log = logger("qa-runner");
 export interface RunQaQueryResult {
   ok: boolean;
   error?: string;
+  code?: "ai_handoff_required";
 }
 
 export interface RunQaQueryInput {
@@ -156,6 +157,17 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
     log.error({ taskId, projectId }, msg);
     return { ok: false, error: msg };
   }
+  if (task.executionOwner === "human") {
+    log.warn(
+      { taskId, projectId, executionOwner: task.executionOwner },
+      "[QA] Runtime rejected for human-owned task",
+    );
+    return {
+      ok: false,
+      code: "ai_handoff_required",
+      error: "The task must be handed to AI before QA can run",
+    };
+  }
 
   // Branch/config/slug resolution lives INSIDE the try alongside the runtime
   // call so runQaQuery honors its "NEVER throws" contract. computeQaBranchSlug
@@ -193,6 +205,14 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
     // finalizes the run to "done" / "error".
     const prompt = buildQaPrompt(artifactDir);
 
+    const executionBoundaryTask = findTaskById(taskId);
+    if (!executionBoundaryTask || executionBoundaryTask.executionOwner === "human") {
+      return {
+        ok: false,
+        code: "ai_handoff_required",
+        error: "The task must be handed to AI before QA can run",
+      };
+    }
     const { result } = await runApiRuntimeOneShot({
       projectId,
       projectRoot: executionRoot,

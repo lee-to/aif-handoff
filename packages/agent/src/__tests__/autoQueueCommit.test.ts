@@ -112,6 +112,18 @@ describe("ensureAutoQueueTaskCommit", () => {
     expect(executeSubagentQueryMock).not.toHaveBeenCalled();
   });
 
+  it("does not consume the commit gate for a human-owned task", async () => {
+    const { rootPath, initialSha } = createGitProject();
+    seedAutoQueueTask(rootPath, initialSha);
+    testDb.current.update(tasks).set({ executionOwner: "human" }).run();
+    writeFileSync(join(rootPath, "task.txt"), "human work\n");
+
+    const result = await ensureAutoQueueTaskCommit({ taskId: "task", projectRoot: rootPath });
+
+    expect(result).toEqual({ status: "not_required", commitSha: null });
+    expect(executeSubagentQueryMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the runtime reports success without creating a commit", async () => {
     const { rootPath, initialSha } = createGitProject();
     seedAutoQueueTask(rootPath, initialSha);

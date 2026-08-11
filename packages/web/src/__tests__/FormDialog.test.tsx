@@ -45,7 +45,9 @@ describe("FormDialog", () => {
       </FormDialog>,
     );
 
-    expect(screen.getByTestId("submit-btn")).toBeInTheDocument();
+    const submit = screen.getByTestId("submit-btn");
+    expect(submit).toBeInTheDocument();
+    expect(submit.parentElement).toHaveClass("mt-4");
   });
 
   it("shows error message when error prop is provided", () => {

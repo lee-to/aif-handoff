@@ -33,7 +33,7 @@ function FormDialog({
             {error}
           </p>
         )}
-        <div className="flex justify-end gap-2">{actions}</div>
+        <div className="mt-4 flex justify-end gap-2">{actions}</div>
       </DialogContent>
     </Dialog>
   );

@@ -76,6 +76,45 @@ describe("env validation", () => {
     expect(result.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED).toBe(false);
     expect(result.AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED).toBe(false);
     expect(result.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED).toBe(false);
+    expect(result.AIF_GITHUB_ISSUE_PR_ENABLED).toBe(false);
+    expect(result.AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED).toBe(false);
+    expect(result.PARTICIPANTS_MODE_ENABLED).toBe(false);
+    expect(result.PARTICIPANT_SESSION_TTL_SECONDS).toBe(7 * 24 * 60 * 60);
+    expect(result.PARTICIPANT_SESSION_COOKIE_NAME).toBe("aif_participant_session");
+    expect(result.PARTICIPANT_SESSION_COOKIE_SECURE).toBe(false);
+    expect(result.PARTICIPANT_LOGIN_RATE_LIMIT_WINDOW_MS).toBe(60_000);
+    expect(result.PARTICIPANT_LOGIN_RATE_LIMIT_MAX).toBe(10);
+    expect(result.PARTICIPANT_ALLOWED_ORIGINS).toEqual(["http://localhost:5180"]);
+  });
+
+  it("parses Participants Mode security settings", () => {
+    const result = validateEnv({
+      PARTICIPANTS_MODE_ENABLED: "true",
+      PARTICIPANT_SESSION_TTL_SECONDS: "3600",
+      PARTICIPANT_SESSION_COOKIE_NAME: "team_session",
+      PARTICIPANT_SESSION_COOKIE_SECURE: "yes",
+      PARTICIPANT_LOGIN_RATE_LIMIT_WINDOW_MS: "120000",
+      PARTICIPANT_LOGIN_RATE_LIMIT_MAX: "4",
+      PARTICIPANT_ALLOWED_ORIGINS: "https://team.example.test, http://localhost:5180/",
+    });
+
+    expect(result.PARTICIPANTS_MODE_ENABLED).toBe(true);
+    expect(result.PARTICIPANT_SESSION_TTL_SECONDS).toBe(3600);
+    expect(result.PARTICIPANT_SESSION_COOKIE_NAME).toBe("team_session");
+    expect(result.PARTICIPANT_SESSION_COOKIE_SECURE).toBe(true);
+    expect(result.PARTICIPANT_LOGIN_RATE_LIMIT_WINDOW_MS).toBe(120_000);
+    expect(result.PARTICIPANT_LOGIN_RATE_LIMIT_MAX).toBe(4);
+    expect(result.PARTICIPANT_ALLOWED_ORIGINS).toEqual([
+      "https://team.example.test",
+      "http://localhost:5180",
+    ]);
+  });
+
+  it("rejects wildcard and non-origin Participants Mode origins", () => {
+    expect(() => validateEnv({ PARTICIPANT_ALLOWED_ORIGINS: "*" })).toThrow();
+    expect(() =>
+      validateEnv({ PARTICIPANT_ALLOWED_ORIGINS: "https://team.example.test/path" }),
+    ).toThrow();
   });
 
   it("should parse AIF_WARMUP_ENABLED boolean values", () => {
@@ -83,6 +122,17 @@ describe("env validation", () => {
     expect(validateEnv({ AIF_WARMUP_ENABLED: "1" }).AIF_WARMUP_ENABLED).toBe(true);
     expect(validateEnv({ AIF_WARMUP_ENABLED: "false" }).AIF_WARMUP_ENABLED).toBe(false);
     expect(validateEnv({ AIF_WARMUP_ENABLED: "0" }).AIF_WARMUP_ENABLED).toBe(false);
+  });
+
+  it("should parse the Telegram project-name rollout flag", () => {
+    expect(
+      validateEnv({ AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED: "true" })
+        .AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED,
+    ).toBe(true);
+    expect(
+      validateEnv({ AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED: "false" })
+        .AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED,
+    ).toBe(false);
   });
 
   it("should parse runtime rollout boolean flags", () => {
@@ -93,6 +143,7 @@ describe("env validation", () => {
       AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED: "1",
       AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED: "yes",
       AIF_STAGE_RUNTIME_PIN_ENABLED: "true",
+      AIF_GITHUB_ISSUE_PR_ENABLED: "yes",
     });
     expect(enabled.AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED).toBe(true);
     expect(enabled.AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED).toBe(true);
@@ -100,6 +151,7 @@ describe("env validation", () => {
     expect(enabled.AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED).toBe(true);
     expect(enabled.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED).toBe(true);
     expect(enabled.AIF_STAGE_RUNTIME_PIN_ENABLED).toBe(true);
+    expect(enabled.AIF_GITHUB_ISSUE_PR_ENABLED).toBe(true);
 
     const disabled = validateEnv({
       AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED: "no",
@@ -108,6 +160,7 @@ describe("env validation", () => {
       AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED: "0",
       AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED: "off",
       AIF_STAGE_RUNTIME_PIN_ENABLED: "0",
+      AIF_GITHUB_ISSUE_PR_ENABLED: "off",
     });
     expect(disabled.AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED).toBe(false);
     expect(disabled.AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED).toBe(false);
@@ -115,6 +168,7 @@ describe("env validation", () => {
     expect(disabled.AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED).toBe(false);
     expect(disabled.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED).toBe(false);
     expect(disabled.AIF_STAGE_RUNTIME_PIN_ENABLED).toBe(false);
+    expect(disabled.AIF_GITHUB_ISSUE_PR_ENABLED).toBe(false);
   });
 
   it("should reject invalid stage runtime pin flag values", () => {

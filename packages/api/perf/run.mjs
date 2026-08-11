@@ -67,7 +67,11 @@ function spawnDevStack() {
     cwd: repoRoot,
     stdio: "ignore",
     detached: true,
-    env: { ...process.env, AIF_ENABLE_CODEX_LOGIN_PROXY: "false" },
+    env: {
+      ...process.env,
+      AIF_ENABLE_CODEX_LOGIN_PROXY: "false",
+      PARTICIPANTS_MODE_ENABLED: "false",
+    },
   });
   child.unref();
   return child;

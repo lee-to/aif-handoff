@@ -96,7 +96,7 @@ async function run() {
   const dev = spawnInherited("npm", ["run", "dev:perf"], {
     cwd: REPO_ROOT,
     detached: process.platform !== "win32",
-    env: { AIF_ENABLE_CODEX_LOGIN_PROXY: "false" },
+    env: { AIF_ENABLE_CODEX_LOGIN_PROXY: "false", PARTICIPANTS_MODE_ENABLED: "false" },
   });
 
   const devExit = once(dev, "exit").then(([code, signal]) => ({ code, signal }));

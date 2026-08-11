@@ -31,7 +31,13 @@ Instead, please email security concerns to the maintainers or use [GitHub's priv
 
 - The Agent SDK uses local `~/.claude/` credentials or an API key via `ANTHROPIC_API_KEY`
 - The SQLite database is stored locally in `data/` — ensure appropriate file permissions
-- The WebSocket endpoint has no authentication — intended for local development use
+- Participants Mode authenticates REST and WebSocket connections with the same opaque session;
+  unsafe REST requests additionally require an exact allowed `Origin` and session-bound CSRF token
+- Participants Mode is a shared workspace: authenticated participants can read all projects/tasks,
+  comment or attach files on any task, and receive workspace task/project events. Assignment gates
+  mutations, not visibility or comment access
+- HTTP MCP always requires its separate `MCP_AUTH_TOKEN`; browser cookies cannot authenticate it
+- With Participants Mode disabled, REST and WebSocket access retain the anonymous compatibility mode
 - Never commit `.env` files or API keys to the repository
 
 ## Dependency Audit Policy

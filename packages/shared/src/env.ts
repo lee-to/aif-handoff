@@ -26,6 +26,58 @@ function parseRuntimeModules(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
+function parseCommaSeparatedValues(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+
+  if (typeof value !== "string") return [];
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+const booleanEnvSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+    if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+  }
+  return value;
+}, z.boolean());
+
+const exactOriginSchema = z.string().transform((value, context) => {
+  const trimmed = value.trim().replace(/\/$/, "");
+  if (trimmed === "*") {
+    context.addIssue({
+      code: "custom",
+      message: "Wildcard origins are not allowed",
+    });
+    return z.NEVER;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      parsed.origin !== trimmed ||
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Origin must contain only an http(s) scheme, host, and optional port",
+      });
+      return z.NEVER;
+    }
+    return parsed.origin;
+  } catch {
+    context.addIssue({ code: "custom", message: "Invalid origin URL" });
+    return z.NEVER;
+  }
+});
+
 const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_AUTH_TOKEN: z.string().optional(),
@@ -58,6 +110,23 @@ const envSchema = z.object({
   API_RUNTIME_RUN_TIMEOUT_MS: z.coerce.number().default(120 * 1000),
   DATABASE_URL: z.string().default("./data/aif.sqlite"),
   CORS_ORIGIN: z.string().default("*"),
+  PARTICIPANTS_MODE_ENABLED: booleanEnvSchema.default(false),
+  PARTICIPANT_SESSION_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(300)
+    .max(31_536_000)
+    .default(7 * 24 * 60 * 60),
+  PARTICIPANT_SESSION_COOKIE_NAME: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .default("aif_participant_session"),
+  PARTICIPANT_SESSION_COOKIE_SECURE: booleanEnvSchema.default(false),
+  PARTICIPANT_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).default(60_000),
+  PARTICIPANT_LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000).default(10),
+  PARTICIPANT_ALLOWED_ORIGINS: z
+    .preprocess(parseCommaSeparatedValues, z.array(exactOriginSchema).min(1))
+    .default(["http://localhost:5180"]),
   API_BASE_URL: z.string().default("http://localhost:3009"),
   AGENT_QUERY_AUDIT_ENABLED: z
     .preprocess((value) => {
@@ -204,16 +273,8 @@ const envSchema = z.object({
       return value;
     }, z.boolean())
     .default(false),
-  AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
+  AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: booleanEnvSchema.default(false),
+  AIF_GITHUB_ISSUE_PR_ENABLED: booleanEnvSchema.default(false),
   AIF_RUNTIME_SESSION_FORK_ENABLED: z
     .preprocess((value) => {
       if (typeof value === "string") {
@@ -256,6 +317,7 @@ const envSchema = z.object({
     .default(false),
   AIF_CODEX_LOGIN_BROKER_PORT: z.coerce.number().default(3010),
   AGENT_INTERNAL_URL: z.string().default("http://agent:3010"),
+  AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED: booleanEnvSchema.default(false),
   TELEGRAM_BOT_API_URL: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_USER_ID: z.string().optional(),

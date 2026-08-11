@@ -11,21 +11,25 @@ import { Tabs } from "@/components/ui/tabs";
 import { AlertBox } from "@/components/ui/alert-box";
 import { getRuntimeLimitDisplay } from "@/lib/runtimeLimits";
 import { useUsageLimitsEnabled, useQaPipelineEnabled } from "@/hooks/useSettings";
+import { TaskOwnershipSummary } from "./TaskOwnership";
 
-export type TaskDetailTab = "implementation" | "review" | "comments" | "activity" | "qa";
+export type TaskDetailTab =
+  | "implementation"
+  | "review"
+  | "comments"
+  | "executors"
+  | "activity"
+  | "qa";
 
-const ACTION_BUTTONS_BY_STATUS: Partial<
-  Record<
-    TaskStatus,
-    Array<{
-      label: string;
-      event?: TaskEvent;
-      actionType?: "event" | "open_replanning" | "open_fast_fix" | "open_request_changes";
-      variant?: "default" | "outline";
-      visible?: (task: { autoMode: boolean }) => boolean;
-    }>
-  >
-> = {
+type TaskActionButton = {
+  label: string;
+  event?: TaskEvent;
+  actionType?: "event" | "open_replanning" | "open_fast_fix" | "open_request_changes";
+  variant?: "default" | "outline";
+  visible?: (task: { autoMode: boolean }) => boolean;
+};
+
+const LEGACY_ACTION_BUTTONS_BY_STATUS: Partial<Record<TaskStatus, TaskActionButton[]>> = {
   backlog: [{ label: "Start AI", event: "start_ai" }],
   plan_ready: [
     {
@@ -54,6 +58,40 @@ const ACTION_BUTTONS_BY_STATUS: Partial<
   ],
 };
 
+const ACTION_BUTTONS_BY_EVENT: Record<TaskEvent, TaskActionButton> = {
+  start_ai: { label: "Start AI", event: "start_ai" },
+  accept_existing_plan: { label: "Use existing plan", event: "accept_existing_plan" },
+  start_human_work: { label: "Start work", event: "start_human_work" },
+  mark_plan_ready: { label: "Mark plan ready", event: "mark_plan_ready" },
+  start_implementation: { label: "Start implementation", event: "start_implementation" },
+  submit_implementation: { label: "Submit implementation", event: "submit_implementation" },
+  complete_review: { label: "Complete review", event: "complete_review" },
+  request_review_changes: {
+    label: "Request review changes",
+    event: "request_review_changes",
+    variant: "outline",
+  },
+  pass_verification: { label: "Pass verification", event: "pass_verification" },
+  fail_verification: {
+    label: "Fail verification",
+    event: "fail_verification",
+    variant: "outline",
+  },
+  request_replanning: {
+    label: "Request replanning",
+    actionType: "open_replanning",
+    variant: "outline",
+  },
+  fast_fix: { label: "Fast fix", actionType: "open_fast_fix", variant: "outline" },
+  approve_done: { label: "Approve", event: "approve_done" },
+  request_changes: {
+    label: "Request changes",
+    actionType: "open_request_changes",
+    variant: "outline",
+  },
+  retry_from_blocked: { label: "Retry", event: "retry_from_blocked" },
+};
+
 interface TaskDetailHeaderProps {
   task: Task;
   activeTab: TaskDetailTab;
@@ -63,6 +101,7 @@ interface TaskDetailHeaderProps {
   isDisabled: boolean;
   isCheckingStartAi: boolean;
   planChangeSuccess: string | null;
+  onOpenHandoff?: () => void;
   onClose: () => void;
 }
 
@@ -75,10 +114,22 @@ export function TaskDetailHeader({
   isDisabled,
   isCheckingStartAi,
   planChangeSuccess,
+  onOpenHandoff = () => undefined,
   onClose,
 }: TaskDetailHeaderProps) {
-  const visibleActions = (ACTION_BUTTONS_BY_STATUS[task.status] ?? []).filter(
-    (action) => action.visible?.(task) ?? true,
+  const visibleActions = (
+    task.permissions
+      ? task.permissions.permittedActions.map((event) => ACTION_BUTTONS_BY_EVENT[event])
+      : (LEGACY_ACTION_BUTTONS_BY_STATUS[task.status] ?? []).filter(
+          (action) => action.visible?.(task) ?? true,
+        )
+  ).filter(
+    (action) =>
+      !task.github ||
+      (action.event !== "approve_done" && action.actionType !== "open_request_changes"),
+  );
+  const canManageOwnership = Boolean(
+    task.permissions?.canAssign || task.permissions?.canHandoff || task.permissions?.canSelfAssign,
   );
   const usageLimitsEnabled = useUsageLimitsEnabled();
   const qaPipelineEnabled = useQaPipelineEnabled();
@@ -86,6 +137,7 @@ export function TaskDetailHeader({
     { value: "implementation", label: "Implementation" },
     { value: "review", label: "Review" },
     { value: "comments", label: "Comments" },
+    { value: "executors", label: "Executors" },
     { value: "activity", label: "Activity" },
     ...(qaPipelineEnabled ? [{ value: "qa", label: "QA" }] : []),
   ];
@@ -98,7 +150,8 @@ export function TaskDetailHeader({
   // Pause is also shown in `backlog` so users can park a task that auto-queue
   // would otherwise advance — paused backlog tasks are skipped by both the
   // scheduler and the auto-queue advancer.
-  const showPauseButton = !["done", "verified"].includes(task.status);
+  const showPauseButton =
+    task.executionOwner === "ai" && !["done", "verified"].includes(task.status);
 
   return (
     <div className="border-b border-border p-6 pb-4 pr-14">
@@ -114,6 +167,11 @@ export function TaskDetailHeader({
               className="border-amber-500/35 bg-amber-500/15 text-amber-700 dark:text-amber-300"
             >
               MANUAL REVIEW
+            </Badge>
+          )}
+          {task.github && (
+            <Badge variant="outline" size="sm">
+              GITHUB #{task.github.issueNumber}
             </Badge>
           )}
           {task.paused && (
@@ -154,6 +212,7 @@ export function TaskDetailHeader({
             cost: {formatUsd(task.costUsd)}
           </Badge>
         </div>
+        <TaskOwnershipSummary executionOwner={task.executionOwner} assignees={task.assignees} />
         <SheetTitle className="tracking-tight">{task.title}</SheetTitle>
       </SheetHeader>
 
@@ -174,7 +233,7 @@ export function TaskDetailHeader({
         </AlertBox>
       )}
 
-      {(showPauseButton || visibleActions.length > 0) && (
+      {(showPauseButton || canManageOwnership || visibleActions.length > 0) && (
         <div className="border border-border bg-background/60 p-3">
           <label className="mb-2 block text-xs text-muted-foreground">Actions</label>
           <div className="flex flex-wrap items-center gap-2">
@@ -195,6 +254,11 @@ export function TaskDetailHeader({
                     <Pause className="h-3.5 w-3.5" /> Pause
                   </>
                 )}
+              </Button>
+            )}
+            {canManageOwnership && (
+              <Button variant="outline" size="sm" onClick={onOpenHandoff} disabled={isDisabled}>
+                Assign / hand off
               </Button>
             )}
             {visibleActions.map((action) => (

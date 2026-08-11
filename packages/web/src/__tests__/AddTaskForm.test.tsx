@@ -32,6 +32,19 @@ const mockRuntimesData = {
   data: [] as Array<Record<string, unknown>>,
 };
 const mockQaPipelineEnabled = { value: true };
+const mockAuthSession = {
+  participantsModeEnabled: false,
+  authenticated: false,
+  participant: null as null | {
+    id: string;
+    displayName: string;
+    role: "admin" | "member";
+    active: boolean;
+  },
+  csrfToken: null,
+  expiresAt: null,
+};
+const mockParticipantsData = { data: [] as Array<Record<string, unknown>> };
 
 vi.mock("@/hooks/useProjects", () => ({
   useProjects: () => ({ data: mockProjectsData.data }),
@@ -55,6 +68,14 @@ vi.mock("@/hooks/useTasks", () => ({
   }),
 }));
 
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ session: mockAuthSession }),
+}));
+
+vi.mock("@/hooks/useParticipants", () => ({
+  useParticipants: () => ({ data: mockParticipantsData.data }),
+}));
+
 const { AddTaskForm } = await import("@/components/kanban/AddTaskForm");
 
 describe("AddTaskForm", () => {
@@ -66,6 +87,44 @@ describe("AddTaskForm", () => {
     mockRuntimeProfilesData.data = [];
     mockRuntimesData.data = [];
     mockQaPipelineEnabled.value = true;
+    mockAuthSession.participantsModeEnabled = false;
+    mockAuthSession.authenticated = false;
+    mockAuthSession.participant = null;
+    mockParticipantsData.data = [];
+  });
+
+  it("creates a human-owned task with selected assignees in Participants Mode", async () => {
+    mockAuthSession.participantsModeEnabled = true;
+    mockAuthSession.authenticated = true;
+    mockAuthSession.participant = {
+      id: "admin-1",
+      displayName: "Admin",
+      role: "admin",
+      active: true,
+    };
+    mockParticipantsData.data = [
+      mockAuthSession.participant,
+      { id: "member-1", displayName: "Alice", role: "member", active: true },
+    ];
+    render(<AddTaskForm projectId="p-1" />);
+
+    fireEvent.click(screen.getByText("Add task"));
+    fireEvent.click(screen.getByLabelText("Human"));
+    fireEvent.click(screen.getByText("Alice"));
+    fireEvent.change(screen.getByPlaceholderText("Task title"), {
+      target: { value: "Human task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(mutateCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionOwner: "human",
+          assigneeIds: ["member-1"],
+        }),
+        expect.any(Object),
+      ),
+    );
   });
 
   it("uses autoMode=true by default", { timeout: 15_000 }, async () => {

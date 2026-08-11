@@ -8,6 +8,8 @@ import type {
   TaskEventInput,
   TaskComment,
   CreateTaskCommentInput,
+  HandoffTaskInput,
+  TaskExecutorHistoryEntry,
 } from "@aif/shared/browser";
 import { api } from "../lib/api.js";
 import { invalidateProjectTaskOverviews } from "./useProjects.js";
@@ -41,6 +43,14 @@ export function useTaskComments(id: string | null) {
   });
 }
 
+export function useTaskExecutorHistory(id: string | null) {
+  return useQuery<TaskExecutorHistoryEntry[]>({
+    queryKey: ["task-executor-history", id],
+    queryFn: () => api.getTaskExecutorHistory(id!),
+    enabled: !!id,
+  });
+}
+
 export function useCreateTask() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -59,6 +69,24 @@ export function useUpdateTask() {
     onSuccess: (task) => {
       invalidateTaskCollections(queryClient);
       queryClient.invalidateQueries({ queryKey: ["task", task.id] });
+    },
+  });
+}
+
+export function useHandoffTask() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: HandoffTaskInput }) =>
+      api.handoffTask(id, input),
+    onSuccess: ({ task }) => {
+      console.info("[task-ownership] Handoff completed", {
+        taskId: task.id,
+        executionOwner: task.executionOwner,
+        ownershipRevision: task.ownershipRevision,
+      });
+      queryClient.setQueryData(["task", task.id], task);
+      queryClient.invalidateQueries({ queryKey: ["task-executor-history", task.id] });
+      invalidateTaskCollections(queryClient);
     },
   });
 }

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { logger } from "@aif/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -78,6 +78,22 @@ export function createMcpServer(context: ToolContext): McpServer {
 
 type McpDispatcher = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
+function bearerToken(value: string | undefined): string | null {
+  if (!value) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(value.trim());
+  return match?.[1]?.trim() || null;
+}
+
+function tokensMatch(candidate: string | null, configured: string): boolean {
+  if (!candidate) return false;
+  const candidateBuffer = Buffer.from(candidate, "utf8");
+  const configuredBuffer = Buffer.from(configured, "utf8");
+  return (
+    candidateBuffer.length === configuredBuffer.length &&
+    timingSafeEqual(candidateBuffer, configuredBuffer)
+  );
+}
+
 /**
  * Build the Node HTTP request handler. Exposed (with the factories above) for
  * tests so routing + transport wiring can be exercised without binding a port
@@ -105,6 +121,29 @@ export function createMcpHttpHandler(env: McpEnv, context: ToolContext) {
     }
 
     if (url.pathname === "/mcp") {
+      const token = bearerToken(
+        Array.isArray(req.headers.authorization)
+          ? req.headers.authorization[0]
+          : req.headers.authorization,
+      );
+      if (!env.authToken || !tokensMatch(token, env.authToken)) {
+        log.warn(
+          { method: req.method, path: url.pathname },
+          "Rejected unauthorized MCP HTTP request",
+        );
+        res.writeHead(401, {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": "Bearer",
+        });
+        res.end(
+          JSON.stringify({
+            error: "Unauthorized",
+            code: "mcp_authentication_required",
+          }),
+        );
+        return;
+      }
+      log.debug({ method: req.method, path: url.pathname }, "Authorized MCP HTTP request");
       await handleMcp(req, res);
       return;
     }

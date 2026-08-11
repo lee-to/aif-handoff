@@ -18,7 +18,7 @@ export interface ClaudeRuntimeExecutionOptions {
   allowDangerouslySkipPermissions?: boolean;
   pathToClaudeCodeExecutable?: string;
   settingSources?: string[];
-  settings?: { attribution?: { commit?: string; pr?: string } };
+  settings?: ClaudeSdkSettings;
   systemPromptAppend?: string;
   postToolUseHooks?: HookCallback[];
   subagentStartHooks?: HookCallback[];
@@ -42,6 +42,34 @@ export interface ClaudeOptionsLogger {
 
 function toRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+/**
+ * Claude Code SDK `settings` — an extensible bag forwarded verbatim to the
+ * spawned `claude`. AIF shapes only `attribution`; every other key (e.g.
+ * `outputStyle`, `sandbox`, permission settings) passes through unchanged.
+ *
+ * Attribution semantics (Agent SDK / Claude Code docs):
+ *   - `commit` / `pr` set to an empty string → hides that attribution.
+ *   - field absent → Claude Code applies its default attribution.
+ * Empty strings are therefore the documented suppression mechanism and are
+ * forwarded as-is; they are NOT normalized away. Older Claude Code builds
+ * (<2.1.x fixed) rejected empty strings at startup — the crash is a version
+ * bug, not a reason to strip the suppression contract.
+ */
+export type ClaudeSdkSettings = { attribution?: { commit?: string; pr?: string } } & Record<
+  string,
+  unknown
+>;
+
+/**
+ * Parse the opaque SDK `settings` bag from `RuntimeExecutionIntent.hooks`,
+ * preserving every key (attribution + any extras). Returns `undefined` for
+ * null/non-object input so the caller can apply its own default.
+ */
+function parseSdkSettings(raw: unknown): ClaudeSdkSettings | undefined {
+  const rec = toRecord(raw);
+  return rec ? (rec as ClaudeSdkSettings) : undefined;
 }
 
 function toStringRecord(value: Record<string, unknown> | null): Record<string, string> | undefined {
@@ -131,7 +159,7 @@ export function parseExecutionOptions(
     settingSources: Array.isArray(src.settingSources)
       ? src.settingSources.filter((value): value is string => typeof value === "string")
       : undefined,
-    settings: toRecord(src.settings) as ClaudeRuntimeExecutionOptions["settings"],
+    settings: parseSdkSettings(src.settings),
     systemPromptAppend:
       exec?.systemPromptAppend ??
       (typeof src.systemPromptAppend === "string" ? src.systemPromptAppend : undefined),
@@ -331,6 +359,9 @@ export function buildClaudeQueryOptions(
   });
 
   const mergedAppend = mergeSystemPromptAppend(input, execution);
+  // Forward `settings` verbatim. Default to the documented attribution
+  // suppression (empty commit/pr hide the trailers). Attribution is NOT
+  // normalized — empty strings are the supported suppression mechanism.
   const settings = execution.settings ?? { attribution: { commit: "", pr: "" } };
   const resolvedEnvironment = resolveEnvironment(input, execution);
   logger?.debug?.(

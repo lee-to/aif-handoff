@@ -31,11 +31,16 @@ import {
   logger as createLogger,
   normalizeRuntimeLimitSnapshot,
   redactProviderText,
+  resolveTaskPermissions,
   parseAttachments,
   parseTaskTokenUsage,
   persistTaskPlan,
   projects,
+  participants,
   taskComments,
+  taskAssignments,
+  taskExecutorHistory,
+  auditEvents,
   tasks,
   runtimeProfiles,
   chatSessions,
@@ -56,11 +61,17 @@ import {
   type RuntimeLimitWindow,
   type RuntimeLimitFutureHint,
   type TaskActiveRuntimeSelection,
+  type TaskActionContext,
   type UpdateAppSettingsInput,
   type UpdateRuntimeProfileInput,
   type RuntimeWarmupSessionStatus,
   type Task,
+  type TaskAssigneeSummary,
+  type TaskComment,
   type TaskListItem,
+  type ParticipantSummary,
+  type AuditActor,
+  type ExecutionOwner,
   type TaskStatus,
   type AutoQueueCommitStatus,
   type ProjectTaskOverview,
@@ -76,8 +87,70 @@ import {
   type ChatMessageAttachment,
 } from "@aif/shared";
 import { getDb } from "@aif/shared/server";
+import {
+  buildTaskOwnershipConditions,
+  listTaskAssigneesByTaskIds,
+  type TaskOwnershipFilters,
+} from "./taskOwnership.js";
+import { transitionTaskStatus as transitionTaskStatusAtomic } from "./taskTransitions.js";
+import { createAuditEventValues } from "./audit.js";
 
 export * from "./normalizeBacklogPositions.js";
+export * from "./github.js";
+export {
+  appendAuditEvent,
+  listAuditEvents,
+  type AppendAuditEventInput,
+} from "./audit.js";
+export {
+  authenticateParticipant,
+  createParticipantSession,
+  expireParticipantSessions,
+  hashParticipantPassword,
+  isParticipantSessionActive,
+  normalizeParticipantUsername,
+  resolveParticipantSession,
+  revokeAllParticipantSessions,
+  revokeParticipantSession,
+  verifyParticipantPassword,
+  verifyParticipantPasswordOrDummy,
+  verifyParticipantSessionCsrf,
+  type AuthenticateParticipantResult,
+  type CreatedParticipantSession,
+  type ResolvedParticipantSession,
+} from "./authSessions.js";
+export {
+  countParticipants,
+  changeParticipantPassword,
+  createParticipant,
+  deactivateParticipant,
+  findParticipantById,
+  findParticipantByUsername,
+  listParticipants,
+  resetParticipantPassword,
+  updateParticipant,
+  type ParticipantMutationResult,
+  type ParticipantRepositoryErrorCode,
+} from "./participants.js";
+export {
+  getTaskOwnership,
+  handoffTaskExecution,
+  listTaskAssigneesByTaskIds,
+  listTaskExecutorHistory,
+  type HandoffTaskExecutionConflictCode,
+  type HandoffTaskExecutionInput,
+  type HandoffTaskExecutionResult,
+  type TaskOwnershipFilters,
+} from "./taskOwnership.js";
+export {
+  applyTaskAction,
+  transitionTaskStatus,
+  type ApplyTaskActionInput,
+  type TaskTransitionConflictCode,
+  type TaskTransitionExtra,
+  type TaskTransitionResult,
+  type TransitionTaskStatusInput,
+} from "./taskTransitions.js";
 
 const log = createLogger("data");
 const AUTO_REVIEW_STRATEGY_SET = new Set<string>(AUTO_REVIEW_STRATEGIES);
@@ -96,8 +169,18 @@ export type CodexLimitHeadIndexRow = typeof codexLimitHeads.$inferSelect;
 export type CodexLimitHistoryIndexRow = typeof codexLimitHistory.$inferSelect;
 export type CodexIndexCursorRow = typeof codexIndexCursors.$inferSelect;
 export type HydratedTaskRow = TaskRow & {
+  assignees: TaskAssigneeSummary[];
   autoReviewState?: AutoReviewState | null;
   runtimeLimitSnapshot?: RuntimeLimitSnapshot | null;
+};
+
+const LEGACY_TASK_ACTION_CONTEXT: TaskActionContext = {
+  participantsModeEnabled: false,
+  actor: {
+    kind: "anonymous",
+    id: null,
+    displayNameSnapshot: null,
+  },
 };
 
 export type CoordinatorStage =
@@ -135,7 +218,17 @@ export interface CreateRuntimeWarmupSessionInput extends RuntimeWarmupScopeInput
 }
 
 /** DB-level patch: all mutable task columns with their storage types (attachments/tags as JSON strings). */
-export type TaskFieldsPatch = Partial<Omit<TaskRow, "id" | "projectId" | "createdAt">> & {
+export type TaskFieldsPatch = Partial<
+  Omit<
+    TaskRow,
+    | "id"
+    | "projectId"
+    | "createdAt"
+    | "status"
+    | "executionOwner"
+    | "ownershipRevision"
+  >
+> & {
   autoReviewState?: AutoReviewState | null;
 };
 
@@ -206,10 +299,14 @@ function parseTaskRuntimeLimitSnapshot(
   return snapshot ? sanitizeRuntimeLimitSnapshotForExposure(snapshot, "task") : null;
 }
 
-export function toTaskResponse(task: TaskRow): Task {
+export function toTaskResponse(
+  task: TaskRow & { assignees?: TaskAssigneeSummary[] },
+  actionContext: TaskActionContext = LEGACY_TASK_ACTION_CONTEXT,
+): Task {
   const {
     attachments,
     tags,
+    assignees = [],
     runtimeOptionsJson,
     autoReviewStateJson,
     activeRuntimeSelectionJson: _activeRuntimeSelectionJson,
@@ -221,6 +318,19 @@ export function toTaskResponse(task: TaskRow): Task {
     ...rest,
     attachments: parseAttachments(attachments),
     tags: parseTags(tags),
+    assignees,
+    permissions: resolveTaskPermissions(
+      {
+        status: task.status,
+        autoMode: task.autoMode,
+        executionOwner: task.executionOwner,
+        assignees,
+        blockedFromStatus: task.blockedFromStatus,
+        skipReview: task.skipReview,
+        runPostVerify: task.runPostVerify,
+      },
+      actionContext,
+    ),
     autoReviewState: parseAutoReviewState(autoReviewStateJson),
     runtimeOptions: parseRuntimeObject(runtimeOptionsJson),
     agentActivityLog: redactTaskTextForExternalUse(task.agentActivityLog),
@@ -624,43 +734,115 @@ function toHeadersJsonPayload(value: Record<string, string> | null | undefined):
   return JSON.stringify(value ?? {});
 }
 
-export function toCommentResponse(comment: CommentRow) {
+export type HydratedCommentRow = CommentRow & {
+  participant: ParticipantSummary | null;
+};
+
+export function toCommentResponse(
+  comment: CommentRow & { participant?: ParticipantSummary | null },
+): TaskComment {
   return {
     id: comment.id,
     taskId: comment.taskId,
     author: comment.author,
+    participantId: comment.participantId,
+    participant: comment.participant ?? null,
     message: comment.message,
     attachments: parseAttachments(comment.attachments),
     createdAt: comment.createdAt,
   };
 }
 
-export function findTaskById(id: string): HydratedTaskRow | undefined {
-  const row = getDb().select().from(tasks).where(eq(tasks.id, id)).get();
-  if (!row) return undefined;
+function taskCommentSelection() {
   return {
-    ...row,
-    autoReviewState: parseAutoReviewState(row.autoReviewStateJson),
-    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(row.runtimeLimitSnapshotJson, row.id),
+    comment: taskComments,
+    participantId: participants.id,
+    participantDisplayName: participants.displayName,
+    participantRole: participants.role,
+    participantActive: participants.active,
   };
 }
 
-export function listTasks(projectId?: string): TaskRow[] {
-  const db = getDb();
-  if (projectId) {
-    return db
-      .select()
-      .from(tasks)
-      .where(eq(tasks.projectId, projectId))
-      .orderBy(asc(tasks.status), asc(tasks.position))
-      .all();
+function hydrateCommentSelection(
+  row: {
+    comment: CommentRow;
+    participantId: string | null;
+    participantDisplayName: string | null;
+    participantRole: "admin" | "member" | null;
+    participantActive: boolean | null;
+  },
+): HydratedCommentRow {
+  if (
+    row.participantId === null ||
+    row.participantDisplayName === null ||
+    row.participantRole === null ||
+    row.participantActive === null
+  ) {
+    return {
+      ...row.comment,
+      participant: null,
+    };
   }
-  return db.select().from(tasks).orderBy(asc(tasks.status), asc(tasks.position)).all();
+  return {
+    ...row.comment,
+    participant: {
+      id: row.participantId,
+      displayName: row.participantDisplayName,
+      role: row.participantRole,
+      active: row.participantActive,
+    },
+  };
+}
+
+function findHydratedTaskComment(commentId: string): HydratedCommentRow | undefined {
+  const row = getDb()
+    .select(taskCommentSelection())
+    .from(taskComments)
+    .leftJoin(participants, eq(taskComments.participantId, participants.id))
+    .where(eq(taskComments.id, commentId))
+    .get();
+  return row ? hydrateCommentSelection(row) : undefined;
+}
+
+function hydrateTaskRows(rows: TaskRow[]): HydratedTaskRow[] {
+  const assigneesByTaskId = listTaskAssigneesByTaskIds(rows.map((row) => row.id));
+  return rows.map((row) => ({
+    ...row,
+    assignees: assigneesByTaskId.get(row.id) ?? [],
+    autoReviewState: parseAutoReviewState(row.autoReviewStateJson),
+    runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(row.runtimeLimitSnapshotJson, row.id),
+  }));
+}
+
+export function findTaskById(id: string): HydratedTaskRow | undefined {
+  const row = getDb().select().from(tasks).where(eq(tasks.id, id)).get();
+  if (!row) return undefined;
+  return hydrateTaskRows([row])[0];
+}
+
+export function listTasks(
+  projectId?: string,
+  ownershipFilters: TaskOwnershipFilters = {},
+): HydratedTaskRow[] {
+  const db = getDb();
+  const conditions = [
+    projectId ? eq(tasks.projectId, projectId) : undefined,
+    ...buildTaskOwnershipConditions(ownershipFilters),
+  ].filter((condition) => condition !== undefined);
+  const rows = db
+    .select()
+    .from(tasks)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(asc(tasks.status), asc(tasks.position))
+    .all();
+  return hydrateTaskRows(rows);
 }
 
 type TaskListItemRow = Pick<TaskRow,
   | "id" | "projectId" | "title" | "description" | "status" | "priority" | "position"
-  | "autoMode" | "isFix" | "paused" | "roadmapAlias" | "tags"
+  | "autoMode" | "executionOwner" | "ownershipRevision"
+  | "skipReview" | "runPostVerify"
+  | "isFix" | "paused" | "roadmapAlias" | "tags"
   | "runtimeProfileId" | "modelOverride"
   | "blockedReason" | "blockedFromStatus" | "retryAfter" | "retryCount"
   | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations" | "manualReviewRequired"
@@ -678,6 +860,10 @@ const TASK_LIST_COLUMNS = {
   priority: tasks.priority,
   position: tasks.position,
   autoMode: tasks.autoMode,
+  executionOwner: tasks.executionOwner,
+  ownershipRevision: tasks.ownershipRevision,
+  skipReview: tasks.skipReview,
+  runPostVerify: tasks.runPostVerify,
   isFix: tasks.isFix,
   paused: tasks.paused,
   roadmapAlias: tasks.roadmapAlias,
@@ -721,27 +907,66 @@ function compareTaskListRows(a: TaskListItemRow, b: TaskListItemRow): number {
   return a.position - b.position;
 }
 
-export function toTaskListItem(row: TaskListItemRow): TaskListItem {
-  const { tags, runtimeLimitSnapshotJson, hasPlan, ...rest } = row;
+export function toTaskListItem(
+  row: TaskListItemRow,
+  assignees: TaskAssigneeSummary[] = [],
+  actionContext: TaskActionContext = LEGACY_TASK_ACTION_CONTEXT,
+): TaskListItem {
+  const {
+    tags,
+    runtimeLimitSnapshotJson,
+    hasPlan,
+    skipReview,
+    runPostVerify,
+    ...rest
+  } = row;
   return {
     ...rest,
     tags: parseTags(tags),
+    assignees,
+    permissions: resolveTaskPermissions(
+      {
+        status: row.status,
+        autoMode: row.autoMode,
+        executionOwner: row.executionOwner,
+        assignees,
+        blockedFromStatus: row.blockedFromStatus,
+        skipReview,
+        runPostVerify,
+      },
+      actionContext,
+    ),
     runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(runtimeLimitSnapshotJson, row.id),
     hasPlan: toBooleanFlag(hasPlan),
   };
 }
 
-export function listTaskListItems(projectId: string): TaskListItem[] {
+export function listTaskListItems(
+  projectId: string,
+  ownershipFilters: TaskOwnershipFilters = {},
+  actionContext: TaskActionContext = LEGACY_TASK_ACTION_CONTEXT,
+): TaskListItem[] {
+  const conditions = [
+    eq(tasks.projectId, projectId),
+    ...buildTaskOwnershipConditions(ownershipFilters),
+  ];
   const rows = getDb()
     .select(TASK_LIST_COLUMNS)
     .from(tasks)
-    .where(eq(tasks.projectId, projectId))
+    .where(and(...conditions))
     .orderBy(asc(tasks.position))
     .all();
+  const assigneesByTaskId = listTaskAssigneesByTaskIds(rows.map((row) => row.id));
 
   rows.sort(compareTaskListRows);
   log.debug({ projectId, count: rows.length, projection: "task-list" }, "Listed task list items");
-  return rows.map(toTaskListItem);
+  return rows.map((row) =>
+    toTaskListItem(
+      row,
+      assigneesByTaskId.get(row.id) ?? [],
+      actionContext,
+    ),
+  );
 }
 
 export function getMinBacklogPosition(projectId: string): number | null {
@@ -765,13 +990,15 @@ export function getMaxBacklogPosition(projectId: string): number | null {
 /** Summary projection — excludes heavy text fields for list/search responses. */
 export type TaskSummaryRow = Pick<TaskRow,
   | "id" | "projectId" | "title" | "status" | "priority" | "position"
-  | "autoMode" | "isFix" | "paused" | "roadmapAlias" | "tags"
+  | "autoMode" | "executionOwner" | "ownershipRevision"
+  | "skipReview" | "runPostVerify"
+  | "isFix" | "paused" | "roadmapAlias" | "tags"
   | "runtimeProfileId" | "modelOverride"
   | "blockedReason" | "blockedFromStatus" | "retryAfter" | "retryCount"
   | "reworkRequested" | "reviewIterationCount" | "maxReviewIterations" | "manualReviewRequired"
   | "runtimeLimitSnapshotJson" | "runtimeLimitUpdatedAt"
   | "tokenTotal" | "costUsd" | "lastSyncedAt" | "createdAt" | "updatedAt"
->;
+> & { assignees?: TaskAssigneeSummary[] };
 
 const SUMMARY_COLUMNS = {
   id: tasks.id,
@@ -781,6 +1008,10 @@ const SUMMARY_COLUMNS = {
   priority: tasks.priority,
   position: tasks.position,
   autoMode: tasks.autoMode,
+  executionOwner: tasks.executionOwner,
+  ownershipRevision: tasks.ownershipRevision,
+  skipReview: tasks.skipReview,
+  runPostVerify: tasks.runPostVerify,
   isFix: tasks.isFix,
   paused: tasks.paused,
   roadmapAlias: tasks.roadmapAlias,
@@ -820,7 +1051,7 @@ export function listTasksPaginated(options: {
   status?: string;
   limit?: number;
   offset?: number;
-}): PaginatedResult<TaskSummaryRow> {
+} & TaskOwnershipFilters): PaginatedResult<TaskSummaryRow> {
   const db = getDb();
   const lim = Math.min(options.limit ?? 20, 100);
   const off = options.offset ?? 0;
@@ -828,6 +1059,7 @@ export function listTasksPaginated(options: {
   const conditions = [];
   if (options.projectId) conditions.push(eq(tasks.projectId, options.projectId));
   if (options.status) conditions.push(eq(tasks.status, options.status as any));
+  conditions.push(...buildTaskOwnershipConditions(options));
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -845,8 +1077,17 @@ export function listTasksPaginated(options: {
     .limit(lim)
     .offset(off)
     .all();
+  const assigneesByTaskId = listTaskAssigneesByTaskIds(items.map((row) => row.id));
 
-  return { items, total, limit: lim, offset: off };
+  return {
+    items: items.map((row) => ({
+      ...row,
+      assignees: assigneesByTaskId.get(row.id) ?? [],
+    })),
+    total,
+    limit: lim,
+    offset: off,
+  };
 }
 
 /**
@@ -857,7 +1098,7 @@ export function searchTasksPaginated(options: {
   projectId?: string;
   limit?: number;
   offset?: number;
-}): PaginatedResult<TaskSummaryRow> {
+} & TaskOwnershipFilters): PaginatedResult<TaskSummaryRow> {
   const db = getDb();
   const lim = Math.min(options.limit ?? 20, 50);
   const off = options.offset ?? 0;
@@ -867,6 +1108,7 @@ export function searchTasksPaginated(options: {
     or(like(tasks.title, pattern), like(tasks.description, pattern)),
   ];
   if (options.projectId) conditions.push(eq(tasks.projectId, options.projectId));
+  conditions.push(...buildTaskOwnershipConditions(options));
 
   const where = and(...conditions);
 
@@ -884,16 +1126,48 @@ export function searchTasksPaginated(options: {
     .limit(lim)
     .offset(off)
     .all();
+  const assigneesByTaskId = listTaskAssigneesByTaskIds(items.map((row) => row.id));
 
-  return { items, total, limit: lim, offset: off };
+  return {
+    items: items.map((row) => ({
+      ...row,
+      assignees: assigneesByTaskId.get(row.id) ?? [],
+    })),
+    total,
+    limit: lim,
+    offset: off,
+  };
 }
 
 /** Convert a TaskSummaryRow to a JSON-safe object (parse tags). */
-export function toTaskSummary(row: TaskSummaryRow) {
-  const { tags, runtimeLimitSnapshotJson, ...rest } = row;
+export function toTaskSummary(
+  row: TaskSummaryRow,
+  actionContext: TaskActionContext = LEGACY_TASK_ACTION_CONTEXT,
+) {
+  const {
+    tags,
+    runtimeLimitSnapshotJson,
+    assignees = [],
+    skipReview,
+    runPostVerify,
+    ...rest
+  } = row;
   return {
     ...rest,
     tags: parseTags(tags),
+    assignees,
+    permissions: resolveTaskPermissions(
+      {
+        status: row.status,
+        autoMode: row.autoMode,
+        executionOwner: row.executionOwner,
+        assignees,
+        blockedFromStatus: row.blockedFromStatus,
+        skipReview,
+        runPostVerify,
+      },
+      actionContext,
+    ),
     runtimeLimitSnapshot: parseTaskRuntimeLimitSnapshot(runtimeLimitSnapshotJson, row.id),
   };
 }
@@ -905,6 +1179,9 @@ export function createTask(input: {
   attachments?: unknown[];
   priority?: number;
   autoMode?: boolean;
+  executionOwner?: ExecutionOwner;
+  assigneeIds?: string[];
+  actor?: AuditActor;
   isFix?: boolean;
   plannerMode?: string;
   planPath?: string;
@@ -924,10 +1201,17 @@ export function createTask(input: {
   tags?: string[];
   scheduledAt?: string | null;
   position?: number;
-}): TaskRow | undefined {
+}): HydratedTaskRow | undefined {
   const db = getDb();
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const executionOwner = input.executionOwner ?? "ai";
+  const assigneeIds = [...new Set(input.assigneeIds ?? [])];
+  const actor = input.actor ?? {
+    kind: "system",
+    id: null,
+    displayNameSnapshot: "System",
+  };
 
   // Auto-compute planPath for full mode when no explicit path is provided
   let resolvedPlanPath = input.planPath;
@@ -946,8 +1230,48 @@ export function createTask(input: {
     }
   }
 
-  db.insert(tasks)
-    .values({
+  const assignees =
+    assigneeIds.length === 0
+      ? []
+      : db
+          .select({
+            participantId: participants.id,
+            displayName: participants.displayName,
+            role: participants.role,
+            active: participants.active,
+          })
+          .from(participants)
+          .where(inArray(participants.id, assigneeIds))
+          .orderBy(asc(participants.displayName), asc(participants.id))
+          .all();
+  const hasInvalidAssignees =
+    assignees.length !== assigneeIds.length ||
+    assignees.some((participant) => !participant.active);
+  if (
+    hasInvalidAssignees ||
+    (executionOwner === "ai" && assigneeIds.length > 0)
+  ) {
+    log.warn(
+      {
+        projectId: input.projectId,
+        executionOwner,
+        requestedAssigneeCount: assigneeIds.length,
+        activeAssigneeCount: assignees.filter((participant) => participant.active).length,
+      },
+      "Rejected task creation ownership",
+    );
+    return undefined;
+  }
+  const position =
+    input.position ??
+    (() => {
+      const maxPosition = getMaxBacklogPosition(input.projectId);
+      return (maxPosition ?? 1000) + 100;
+    })();
+
+  db.transaction((tx) => {
+    tx.insert(tasks)
+      .values({
       id,
       projectId: input.projectId,
       title: input.title,
@@ -955,6 +1279,8 @@ export function createTask(input: {
       attachments: JSON.stringify(input.attachments ?? []),
       priority: input.priority,
       autoMode: input.autoMode,
+      executionOwner,
+      ownershipRevision: 0,
       isFix: input.isFix,
       plannerMode: input.plannerMode,
       planPath: resolvedPlanPath,
@@ -977,21 +1303,79 @@ export function createTask(input: {
       reworkRequested: false,
       manualReviewRequired: false,
       status: "backlog",
-      position: input.position ?? (() => {
-        const maxPosition = getMaxBacklogPosition(input.projectId);
-        return (maxPosition ?? 1000) + 100;
-      })(),
+      position,
       lastHeartbeatAt: now,
       createdAt: now,
       updatedAt: now,
     })
     .run();
+    if (executionOwner === "human" && assignees.length > 0) {
+      tx.insert(taskAssignments)
+        .values(
+          assignees.map((assignee) => ({
+            taskId: id,
+            participantId: assignee.participantId,
+            assignedByKind: actor.kind,
+            assignedById: actor.id,
+            assignedByDisplayNameSnapshot: actor.displayNameSnapshot,
+            createdAt: now,
+          })),
+        )
+        .run();
+    }
+    tx.insert(taskExecutorHistory)
+      .values({
+        id: crypto.randomUUID(),
+        taskId: id,
+        taskTitleSnapshot: input.title,
+        ownershipRevision: 0,
+        executionOwner,
+        assigneesSnapshotJson: JSON.stringify(executionOwner === "human" ? assignees : []),
+        statusSnapshot: "backlog",
+        actorKind: actor.kind,
+        actorId: actor.id,
+        actorDisplayNameSnapshot: actor.displayNameSnapshot,
+        reason: "task_created",
+        createdAt: now,
+      })
+      .run();
+    tx.insert(auditEvents)
+      .values(
+        createAuditEventValues({
+          action: "task.created",
+          entityType: "task",
+          entityId: id,
+          taskId: id,
+          taskTitleSnapshot: input.title,
+          executionOwnerSnapshot: executionOwner,
+          assigneesSnapshot: executionOwner === "human" ? assignees : [],
+          statusSnapshot: "backlog",
+          actor,
+          metadata: { ownershipRevision: 0 },
+          createdAt: now,
+        }),
+      )
+      .run();
+  });
 
   return findTaskById(id);
 }
 
 export function updateTask(id: string, fields: TaskFieldsUpdate): TaskRow | undefined {
-  const { attachments, tags, runtimeOptions, autoReviewState, ...rest } = fields;
+  const {
+    attachments,
+    tags,
+    runtimeOptions,
+    autoReviewState,
+    executionOwner: _executionOwner,
+    ownershipRevision: _ownershipRevision,
+    assigneeIds: _assigneeIds,
+    ...rest
+  } = fields as TaskFieldsUpdate & {
+    executionOwner?: unknown;
+    ownershipRevision?: unknown;
+    assigneeIds?: unknown;
+  };
   const patch: TaskFieldsPatch = { ...rest, updatedAt: new Date().toISOString() };
   if (attachments !== undefined) {
     patch.attachments = JSON.stringify(attachments);
@@ -1032,7 +1416,13 @@ export function tryStartQaRun(id: string): boolean {
   const result = getDb()
     .update(tasks)
     .set({ qaStatus: "running", updatedAt: new Date().toISOString() })
-    .where(and(eq(tasks.id, id), ne(tasks.qaStatus, "running")))
+    .where(
+      and(
+        eq(tasks.id, id),
+        eq(tasks.executionOwner, "ai"),
+        ne(tasks.qaStatus, "running"),
+      ),
+    )
     .run();
   return result.changes > 0;
 }
@@ -1062,11 +1452,25 @@ export function updateTaskPositionOnly(id: string, position: number): void {
 }
 
 export function setTaskFields(id: string, fields: TaskFieldsPatch): void {
-  const { autoReviewState, ...rest } = fields;
+  const {
+    autoReviewState,
+    status: _status,
+    executionOwner: _executionOwner,
+    ownershipRevision: _ownershipRevision,
+    ...rest
+  } = fields as TaskFieldsPatch & {
+    status?: unknown;
+    executionOwner?: unknown;
+    ownershipRevision?: unknown;
+  };
   const patch: Partial<TaskRow> & { autoReviewStateJson?: string | null } = { ...rest };
   if (autoReviewState !== undefined) {
     patch.autoReviewStateJson =
       autoReviewState === null ? null : JSON.stringify(autoReviewState);
+  }
+  if (Object.keys(patch).length === 0) {
+    log.warn({ taskId: id }, "Ignored task field update with no mutable fields");
+    return;
   }
   getDb().update(tasks).set(patch).where(eq(tasks.id, id)).run();
 }
@@ -1121,22 +1525,25 @@ export function deleteTask(id: string): void {
   db.delete(taskComments).where(eq(taskComments.taskId, id)).run();
 }
 
-export function listTaskComments(taskId: string): CommentRow[] {
+export function listTaskComments(taskId: string): HydratedCommentRow[] {
   return getDb()
-    .select()
+    .select(taskCommentSelection())
     .from(taskComments)
+    .leftJoin(participants, eq(taskComments.participantId, participants.id))
     .where(eq(taskComments.taskId, taskId))
     .orderBy(asc(taskComments.createdAt), asc(taskComments.id))
-    .all();
+    .all()
+    .map(hydrateCommentSelection);
 }
 
 export function createTaskComment(input: {
   taskId: string;
   author: "human" | "agent";
+  participantId?: string | null;
   message: string;
   attachments?: unknown[];
   createdAt?: string;
-}): CommentRow | undefined {
+}): HydratedCommentRow | undefined {
   const id = crypto.randomUUID();
   const createdAt = input.createdAt ?? new Date().toISOString();
   getDb()
@@ -1145,36 +1552,37 @@ export function createTaskComment(input: {
       id,
       taskId: input.taskId,
       author: input.author,
+      participantId: input.participantId ?? null,
       message: input.message,
       attachments: JSON.stringify(input.attachments ?? []),
       createdAt,
     })
     .run();
-  return getDb().select().from(taskComments).where(eq(taskComments.id, id)).get();
+  return findHydratedTaskComment(id);
 }
 
 export function updateTaskComment(
   commentId: string,
   patch: { attachments?: unknown[] },
-): CommentRow | undefined {
+): HydratedCommentRow | undefined {
   const sets: Record<string, unknown> = {};
   if (patch.attachments !== undefined) {
     sets.attachments = JSON.stringify(patch.attachments);
   }
-  if (Object.keys(sets).length === 0) return getDb().select().from(taskComments).where(eq(taskComments.id, commentId)).get();
+  if (Object.keys(sets).length === 0) return findHydratedTaskComment(commentId);
   getDb()
     .update(taskComments)
     .set(sets)
     .where(eq(taskComments.id, commentId))
     .run();
-  return getDb().select().from(taskComments).where(eq(taskComments.id, commentId)).get();
+  return findHydratedTaskComment(commentId);
 }
 
-export function getLatestHumanComment(taskId: string): CommentRow | undefined {
+export function getLatestHumanComment(taskId: string): HydratedCommentRow | undefined {
   return listTaskComments(taskId).filter((comment) => comment.author === "human").at(-1);
 }
 
-export function getLatestReworkComment(taskId: string): CommentRow | undefined {
+export function getLatestReworkComment(taskId: string): HydratedCommentRow | undefined {
   return listTaskComments(taskId).at(-1);
 }
 
@@ -1696,7 +2104,13 @@ export function findCoordinatorTaskCandidates(stage: CoordinatorStage, limit: nu
   return getDb()
     .select()
     .from(tasks)
-    .where(and(coordinatorStageFilter(stage), unlockedCoordinatorTaskFilter(nowIso)))
+    .where(
+      and(
+        eq(tasks.executionOwner, "ai"),
+        coordinatorStageFilter(stage),
+        unlockedCoordinatorTaskFilter(nowIso),
+      ),
+    )
     .orderBy(asc(tasks.position), asc(tasks.createdAt))
     .limit(limit)
     .all();
@@ -1715,6 +2129,7 @@ export function findCoordinatorTaskCandidatesForProject(
     .where(
       and(
         eq(tasks.projectId, projectId),
+        eq(tasks.executionOwner, "ai"),
         coordinatorStageFilter(stage),
         unlockedCoordinatorTaskFilter(nowIso),
       ),
@@ -1740,7 +2155,11 @@ export function listCoordinatorActionableProjectIds(
 ): string[] {
   const nowIso = new Date().toISOString();
   const excludeProjectIds = options.excludeProjectIds ?? [];
-  const conditions = [coordinatorAnyStageFilter(), unlockedCoordinatorTaskFilter(nowIso)];
+  const conditions = [
+    eq(tasks.executionOwner, "ai"),
+    coordinatorAnyStageFilter(),
+    unlockedCoordinatorTaskFilter(nowIso),
+  ];
   if (excludeProjectIds.length > 0) {
     conditions.push(notInArray(tasks.projectId, [...excludeProjectIds]));
   }
@@ -1766,6 +2185,7 @@ export function claimTask(taskId: string, coordinatorId: string, lockDurationMs:
     .set({ lockedBy: coordinatorId, lockedUntil })
     .where(and(
       eq(tasks.id, taskId),
+      eq(tasks.executionOwner, "ai"),
       or(
         sql`${tasks.lockedBy} IS NULL`,
         lte(tasks.lockedUntil, nowIso),
@@ -1789,6 +2209,7 @@ export function claimCoordinatorTaskIfEligible(
     eq(tasks.id, input.taskId),
     eq(tasks.projectId, input.expectedProjectId),
     eq(tasks.status, input.expectedStatus),
+    eq(tasks.executionOwner, "ai"),
     eq(tasks.paused, false),
     or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
   ];
@@ -1826,6 +2247,7 @@ export function blockTaskForRuntimeGateIfEligible(input: {
   const conditions = [
     eq(tasks.id, input.taskId),
     eq(tasks.status, input.expectedStatus),
+    eq(tasks.executionOwner, "ai"),
     eq(tasks.paused, false),
     or(sql`${tasks.lockedBy} IS NULL`, lte(tasks.lockedUntil, nowIso)),
   ];
@@ -1836,22 +2258,52 @@ export function blockTaskForRuntimeGateIfEligible(input: {
     conditions.push(eq(tasks.autoMode, input.expectedAutoMode));
   }
 
-  const result = getDb()
-    .update(tasks)
-    .set({
-      status: "blocked_external",
-      blockedFromStatus: input.blockedFromStatus,
-      blockedReason: input.blockedReason,
-      retryAfter: input.retryAfter,
-      retryCount: input.retryCount,
-      runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
-      runtimeLimitUpdatedAt: nowIso,
-      updatedAt: nowIso,
-    })
-    .where(and(...conditions))
-    .run();
-
-  return result.changes > 0;
+  return getDb().transaction((tx) => {
+    const task = tx.select().from(tasks).where(eq(tasks.id, input.taskId)).get();
+    if (!task) return false;
+    const updated = tx
+      .update(tasks)
+      .set({
+        status: "blocked_external",
+        blockedFromStatus: input.blockedFromStatus,
+        blockedReason: input.blockedReason,
+        retryAfter: input.retryAfter,
+        retryCount: input.retryCount,
+        runtimeLimitSnapshotJson: serializeRuntimeLimitSnapshot(normalizedSnapshot),
+        runtimeLimitUpdatedAt: nowIso,
+        updatedAt: nowIso,
+      })
+      .where(and(...conditions))
+      .returning({ status: tasks.status })
+      .get();
+    if (!updated) return false;
+    tx.insert(auditEvents)
+      .values(
+        createAuditEventValues({
+          action: "task.runtime_gate_blocked",
+          entityType: "task",
+          entityId: task.id,
+          taskId: task.id,
+          taskTitleSnapshot: task.title,
+          executionOwnerSnapshot: task.executionOwner,
+          assigneesSnapshot: [],
+          statusSnapshot: updated.status,
+          actor: {
+            kind: "system",
+            id: "runtime-gate",
+            displayNameSnapshot: "Runtime Gate",
+          },
+          metadata: {
+            fromStatus: task.status,
+            toStatus: updated.status,
+            ownershipRevision: task.ownershipRevision,
+          },
+          createdAt: nowIso,
+        }),
+      )
+      .run();
+    return true;
+  });
 }
 
 /** Check if any task in a project is currently locked (active, non-expired). */
@@ -1875,34 +2327,72 @@ export function claimBacklogTaskForAdvance(
   },
 ): boolean {
   const nowIso = new Date().toISOString();
-  const result = getDb()
-    .update(tasks)
-    .set({
-      status: "planning",
-      scheduledAt: null,
-      blockedReason: null,
-      blockedFromStatus: null,
-      retryAfter: null,
-      retryCount: 0,
-      reworkRequested: false,
-      reviewIterationCount: 0,
-      manualReviewRequired: false,
-      autoReviewStateJson: null,
-      ...(autoQueueCommit
-        ? {
-            autoQueueCommitStatus: autoQueueCommit.status,
-            autoQueueCommitBaseSha: autoQueueCommit.baseSha,
-            commitSha: null,
-            autoQueueCommitError: null,
-            autoQueueCommitCompletedAt: null,
-          }
-        : {}),
-      lastHeartbeatAt: nowIso,
-      updatedAt: nowIso,
-    })
-    .where(and(eq(tasks.id, taskId), eq(tasks.status, "backlog"), eq(tasks.paused, false)))
-    .run();
-  return result.changes > 0;
+  return getDb().transaction((tx) => {
+    const task = tx.select().from(tasks).where(eq(tasks.id, taskId)).get();
+    if (!task) return false;
+    const updated = tx
+      .update(tasks)
+      .set({
+        status: "planning",
+        scheduledAt: null,
+        blockedReason: null,
+        blockedFromStatus: null,
+        retryAfter: null,
+        retryCount: 0,
+        reworkRequested: false,
+        reviewIterationCount: 0,
+        manualReviewRequired: false,
+        autoReviewStateJson: null,
+        ...(autoQueueCommit
+          ? {
+              autoQueueCommitStatus: autoQueueCommit.status,
+              autoQueueCommitBaseSha: autoQueueCommit.baseSha,
+              commitSha: null,
+              autoQueueCommitError: null,
+              autoQueueCommitCompletedAt: null,
+            }
+          : {}),
+        lastHeartbeatAt: nowIso,
+        updatedAt: nowIso,
+      })
+      .where(
+        and(
+          eq(tasks.id, taskId),
+          eq(tasks.status, "backlog"),
+          eq(tasks.paused, false),
+          eq(tasks.executionOwner, "ai"),
+        ),
+      )
+      .returning({ status: tasks.status })
+      .get();
+    if (!updated) return false;
+    tx.insert(auditEvents)
+      .values(
+        createAuditEventValues({
+          action: "task.automation_advanced",
+          entityType: "task",
+          entityId: task.id,
+          taskId: task.id,
+          taskTitleSnapshot: task.title,
+          executionOwnerSnapshot: task.executionOwner,
+          assigneesSnapshot: [],
+          statusSnapshot: updated.status,
+          actor: {
+            kind: "system",
+            id: "task-automation",
+            displayNameSnapshot: "Task Automation",
+          },
+          metadata: {
+            fromStatus: task.status,
+            toStatus: updated.status,
+            ownershipRevision: task.ownershipRevision,
+          },
+          createdAt: nowIso,
+        }),
+      )
+      .run();
+    return true;
+  });
 }
 
 export function hasBlockingAutoQueueCommitForProject(projectId: string): boolean {
@@ -1912,6 +2402,7 @@ export function hasBlockingAutoQueueCommitForProject(projectId: string): boolean
     .where(
       and(
         eq(tasks.projectId, projectId),
+        eq(tasks.executionOwner, "ai"),
         or(
           eq(tasks.autoQueueCommitStatus, "failed"),
           and(
@@ -1939,6 +2430,7 @@ export function countActivePipelineTasksForProject(projectId: string): number {
     .where(
       and(
         eq(tasks.projectId, projectId),
+        eq(tasks.executionOwner, "ai"),
         inArray(tasks.status, [
           "planning",
           "improve",
@@ -1996,6 +2488,7 @@ export function hasActiveLockedTaskForProject(projectId: string): boolean {
     .from(tasks)
     .where(and(
       eq(tasks.projectId, projectId),
+      eq(tasks.executionOwner, "ai"),
       isNotNull(tasks.lockedBy),
       gt(tasks.lockedUntil, nowIso),
     ))
@@ -2063,6 +2556,7 @@ export function listDueBlockedExternalTasks(nowIso: string): TaskRow[] {
     .where(
       and(
         eq(tasks.status, "blocked_external"),
+        eq(tasks.executionOwner, "ai"),
         eq(tasks.paused, false),
         isNotNull(tasks.retryAfter),
         lte(tasks.retryAfter, nowIso),
@@ -2081,6 +2575,7 @@ export function listDueScheduledTasks(nowIso: string): TaskRow[] {
     .where(
       and(
         eq(tasks.status, "backlog"),
+        eq(tasks.executionOwner, "ai"),
         eq(tasks.paused, false),
         isNotNull(tasks.scheduledAt),
         lte(tasks.scheduledAt, nowIso),
@@ -2153,6 +2648,7 @@ export function nextBacklogTaskByPosition(projectId: string): TaskRow | undefine
       and(
         eq(tasks.projectId, projectId),
         eq(tasks.status, "backlog"),
+        eq(tasks.executionOwner, "ai"),
         eq(tasks.paused, false),
         or(
           isNull(tasks.scheduledAt),
@@ -2173,6 +2669,7 @@ export function listStaleInProgressTasks(): TaskRow[] {
     .where(
       and(
         inArray(tasks.status, ["planning", "improve", "implementing", "review", "verify"]),
+        eq(tasks.executionOwner, "ai"),
         eq(tasks.paused, false),
         // Skip tasks with active (non-expired) locks — they're being processed
         or(
@@ -2206,15 +2703,31 @@ export function updateTaskStatus(
   taskId: string,
   status: TaskStatus,
   extra: Omit<TaskFieldsPatch, "status" | "lastHeartbeatAt" | "updatedAt"> = {},
+  actor: AuditActor = {
+    kind: "system",
+    id: null,
+    displayNameSnapshot: "System",
+  },
 ): void {
-  const nowIso = new Date().toISOString();
-  setTaskFields(taskId, {
+  const result = transitionTaskStatusAtomic({
+    taskId,
     status,
-    sessionId: null,
-    lastHeartbeatAt: nowIso,
-    updatedAt: nowIso,
-    ...extra,
+    extra,
+    actor,
   });
+  if (!result.ok && result.code !== "not_found") {
+    log.warn(
+      {
+        taskId,
+        status,
+        code: result.code,
+        currentStatus: result.currentStatus ?? null,
+        actorKind: actor.kind,
+        actorId: actor.id,
+      },
+      "Task status update rejected",
+    );
+  }
 }
 
 export function saveTaskSessionId(taskId: string, sessionId: string): void {
@@ -2499,7 +3012,11 @@ export function createDbUsageSink(options: CreateDbUsageSinkOptions = {}): DbUsa
  * Case-insensitive SQL LIKE-based search. Returns matching tasks ordered by updatedAt desc.
  * Limited to 50 results.
  */
-export function searchTasks(query: string, projectId?: string): TaskRow[] {
+export function searchTasks(
+  query: string,
+  projectId?: string,
+  ownershipFilters: TaskOwnershipFilters = {},
+): HydratedTaskRow[] {
   const db = getDb();
   const pattern = `%${query}%`;
   const conditions = [
@@ -2511,13 +3028,15 @@ export function searchTasks(query: string, projectId?: string): TaskRow[] {
   if (projectId) {
     conditions.push(eq(tasks.projectId, projectId));
   }
-  return db
+  conditions.push(...buildTaskOwnershipConditions(ownershipFilters));
+  const rows = db
     .select()
     .from(tasks)
     .where(and(...conditions))
     .orderBy(desc(tasks.updatedAt))
     .limit(50)
     .all();
+  return hydrateTaskRows(rows);
 }
 
 /**

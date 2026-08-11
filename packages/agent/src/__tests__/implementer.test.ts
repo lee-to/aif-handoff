@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { projects, taskComments, tasks } from "@aif/shared";
+import { projects, taskComments, taskExecutorHistory, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
@@ -104,6 +104,22 @@ describe("runImplementer rework behavior", () => {
             },
           ],
         }),
+        ownershipRevision: 1,
+      })
+      .run();
+    db.insert(taskExecutorHistory)
+      .values({
+        id: "history-1",
+        taskId: "task-2",
+        taskTitleSnapshot: "Task",
+        ownershipRevision: 1,
+        executionOwner: "ai",
+        assigneesSnapshotJson: "[]",
+        statusSnapshot: "implementing",
+        actorKind: "participant",
+        actorId: "participant-1",
+        actorDisplayNameSnapshot: "Alice",
+        reason: "secret-handoff-note",
       })
       .run();
     db.insert(taskComments)
@@ -166,6 +182,9 @@ describe("runImplementer rework behavior", () => {
     expect(call.prompt).toContain("Plan path:\n@.ai-factory/PLAN.md");
     expect(call.prompt).toContain("Rework mode: true");
     expect(call.prompt).toContain("message: latest-human");
+    expect(call.prompt).toContain("Latest executor responsibility:");
+    expect(call.prompt).toContain("initiatedBy=Alice");
+    expect(call.prompt).not.toContain("secret-handoff-note");
     expect(call.prompt).not.toContain("message: first-human");
     expect(call.prompt).not.toContain("message: agent-msg");
 

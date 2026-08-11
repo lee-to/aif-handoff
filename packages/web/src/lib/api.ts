@@ -22,6 +22,17 @@ import type {
   CreateRuntimeProfileInput,
   UpdateRuntimeProfileInput,
   RuntimeLimitSnapshot,
+  AuthSessionState,
+  Participant,
+  CreateParticipantInput,
+  UpdateParticipantInput,
+  ResetParticipantPasswordInput,
+  HandoffTaskInput,
+  TaskExecutorHistoryEntry,
+  TaskOwnership,
+  GitHubEligibility,
+  GitHubIssueLink,
+  GitHubRepositoryConnection,
 } from "@aif/shared/browser";
 
 export class ApiError extends Error {
@@ -96,6 +107,80 @@ const REQUEST_TIMEOUT_MS = 15_000;
 export const PLAN_FAST_FIX_TIMEOUT_MS = 200_000;
 const CHAT_TIMEOUT_MS = 300_000;
 const IMPORT_ROADMAP_TIMEOUT_MS = 300_000;
+const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const AUTH_SESSION_PATH = "/auth/session";
+const AUTH_LOGIN_PATH = "/auth/login";
+
+type ParticipantAuthState = "unknown" | "disabled" | "authenticated" | "unauthenticated";
+
+let participantAuthState: ParticipantAuthState = "unknown";
+let participantCsrfToken: string | null = null;
+let participantSessionExpiresAt: number | null = null;
+let authSessionRefresh: Promise<AuthSessionState> | null = null;
+const authenticationRequiredListeners = new Set<() => void>();
+
+function requestPathForLog(url: string): string {
+  return url.split("?")[0] ?? url;
+}
+
+function apiErrorCode(error: ApiError): string | null {
+  if (typeof error.data !== "object" || error.data === null || !("code" in error.data)) {
+    return null;
+  }
+  const code = (error.data as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function emitAuthenticationRequired(): void {
+  for (const listener of authenticationRequiredListeners) {
+    listener();
+  }
+}
+
+function rememberAuthSession(session: AuthSessionState): void {
+  const wasAuthenticated = participantAuthState === "authenticated";
+  participantCsrfToken = session.csrfToken;
+  participantSessionExpiresAt = session.expiresAt ? Date.parse(session.expiresAt) : null;
+  participantAuthState = !session.participantsModeEnabled
+    ? "disabled"
+    : session.authenticated
+      ? "authenticated"
+      : "unauthenticated";
+  console.debug("[auth] Session state updated", {
+    state: participantAuthState,
+    participantId: session.participant?.id ?? null,
+  });
+
+  if (wasAuthenticated && session.participantsModeEnabled && !session.authenticated) {
+    emitAuthenticationRequired();
+  }
+}
+
+function forgetAuthSession(notify: boolean): void {
+  const shouldNotify = notify && participantAuthState === "authenticated";
+  participantAuthState = "unauthenticated";
+  participantCsrfToken = null;
+  participantSessionExpiresAt = null;
+  console.debug("[auth] Session state cleared", { state: participantAuthState });
+  if (shouldNotify) {
+    emitAuthenticationRequired();
+  }
+}
+
+export function onAuthenticationRequired(listener: () => void): () => void {
+  authenticationRequiredListeners.add(listener);
+  return () => authenticationRequiredListeners.delete(listener);
+}
+
+export function webSocketAuthenticationIsValid(): boolean {
+  if (participantAuthState === "disabled") return true;
+  if (participantAuthState !== "authenticated") return false;
+  return participantSessionExpiresAt === null || participantSessionExpiresAt > Date.now();
+}
+
+export function reportWebSocketAuthenticationFailure(): void {
+  forgetAuthSession(true);
+}
 
 export interface SettingsResponse {
   useSubagents: boolean;
@@ -104,6 +189,7 @@ export interface SettingsResponse {
   usageLimitsEnabled: boolean;
   warmupEnabled: boolean;
   qaPipelineEnabled?: boolean;
+  githubIssuePrEnabled?: boolean;
   runtimeReadiness: {
     availableRuntimeCount: number;
     runtimeProfileCount: number;
@@ -175,6 +261,11 @@ export interface ClearProjectWarmupResponse {
   cleared: number;
 }
 
+export interface GitHubProjectState {
+  connection: GitHubRepositoryConnection | null;
+  issues: GitHubIssueLink[];
+}
+
 export interface SendChatMessageResponse {
   conversationId: string;
   sessionId: string | null;
@@ -197,19 +288,29 @@ function withChatSessionContext(path: string, context?: ChatSessionRequestContex
   return suffix ? `${path}?${suffix}` : path;
 }
 
-async function request<T>(
+async function performRequest<T>(
   url: string,
   options?: RequestInit,
   timeoutMs = REQUEST_TIMEOUT_MS,
+  csrfToken?: string | null,
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const method = (options?.method ?? "GET").toUpperCase();
+  const headers = new Headers(options?.headers);
+  if (options?.body !== undefined && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
 
   let res: Response;
   try {
     res = await fetch(`${API_PREFIX}${url}`, {
-      headers: { "Content-Type": "application/json" },
       ...options,
+      credentials: "include",
+      headers,
       signal: controller.signal,
     });
   } catch (error) {
@@ -220,6 +321,8 @@ async function request<T>(
   } finally {
     clearTimeout(timeout);
   }
+
+  console.debug("[api] %s %s → %d", method, requestPathForLog(url), res.status);
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
@@ -252,7 +355,65 @@ async function request<T>(
     throw new ApiError(message ?? `HTTP ${res.status}`, res.status, body);
   }
 
-  return res.json();
+  if (res.status === 204) {
+    return undefined as T;
+  }
+  return res.json() as Promise<T>;
+}
+
+async function refreshAuthSession(): Promise<AuthSessionState> {
+  if (authSessionRefresh) return authSessionRefresh;
+  authSessionRefresh = performRequest<AuthSessionState>(AUTH_SESSION_PATH)
+    .then((session) => {
+      rememberAuthSession(session);
+      return session;
+    })
+    .finally(() => {
+      authSessionRefresh = null;
+    });
+  return authSessionRefresh;
+}
+
+async function request<T>(
+  url: string,
+  options?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  allowCsrfRetry = true,
+): Promise<T> {
+  const method = (options?.method ?? "GET").toUpperCase();
+  const requiresCsrf =
+    !SAFE_HTTP_METHODS.has(method) && url !== AUTH_LOGIN_PATH && url !== AUTH_SESSION_PATH;
+
+  if (requiresCsrf && participantAuthState === "unknown") {
+    await refreshAuthSession();
+  }
+  if (requiresCsrf && participantAuthState === "authenticated" && !participantCsrfToken) {
+    await refreshAuthSession();
+  }
+
+  try {
+    return await performRequest<T>(
+      url,
+      options,
+      timeoutMs,
+      requiresCsrf ? participantCsrfToken : null,
+    );
+  } catch (error) {
+    if (
+      error instanceof ApiError &&
+      error.status === 403 &&
+      apiErrorCode(error) === "invalid_csrf" &&
+      requiresCsrf &&
+      allowCsrfRetry
+    ) {
+      await refreshAuthSession();
+      return request<T>(url, options, timeoutMs, false);
+    }
+    if (error instanceof ApiError && error.status === 401 && url !== AUTH_LOGIN_PATH) {
+      forgetAuthSession(true);
+    }
+    throw error;
+  }
 }
 
 // Task list fetch. projectId is required: the board/list view is always scoped.
@@ -262,18 +423,83 @@ async function request<T>(
 // never calls it.
 function listTasks(projectId: string): Promise<TaskListItem[]> {
   const qs = `?projectId=${encodeURIComponent(projectId)}`;
-  console.debug("[api] GET /tasks?projectId=%s", projectId);
   return request<TaskListItem[]>(`${API_BASE}${qs}`);
 }
 
 export const api = {
+  getAuthSession(): Promise<AuthSessionState> {
+    return refreshAuthSession();
+  },
+
+  async login(input: { username: string; password: string }): Promise<AuthSessionState> {
+    const session = await request<AuthSessionState>(AUTH_LOGIN_PATH, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    rememberAuthSession(session);
+    return session;
+  },
+
+  async logout(): Promise<{ ok: true }> {
+    const response = await request<{ ok: true }>("/auth/logout", { method: "POST" });
+    forgetAuthSession(false);
+    return response;
+  },
+
+  changeParticipantPassword(input: {
+    currentPassword: string;
+    newPassword: string;
+  }): Promise<{ ok: true; revokedSessionCount: number }> {
+    return request("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  listParticipants(includeInactive = true): Promise<Participant[]> {
+    return request<Participant[]>(
+      `/participants?includeInactive=${includeInactive ? "true" : "false"}`,
+    );
+  },
+
+  createParticipant(input: CreateParticipantInput): Promise<Participant> {
+    return request<Participant>("/participants", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateParticipant(id: string, input: UpdateParticipantInput): Promise<Participant> {
+    return request<Participant>(`/participants/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  },
+
+  deactivateParticipant(id: string): Promise<Participant> {
+    return request<Participant>(`/participants/${encodeURIComponent(id)}/deactivate`, {
+      method: "POST",
+    });
+  },
+
+  resetParticipantPassword(
+    id: string,
+    input: ResetParticipantPasswordInput,
+  ): Promise<{ ok: true; participant: Participant }> {
+    return request<{ ok: true; participant: Participant }>(
+      `/participants/${encodeURIComponent(id)}/reset-password`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
   getSettings(): Promise<SettingsResponse> {
-    console.debug("[api] GET /settings");
     return request("/settings");
   },
 
   getAppRuntimeDefaults(): Promise<AppRuntimeDefaultsResponse> {
-    console.debug("[api] GET /settings/runtime-defaults");
     return request("/settings/runtime-defaults");
   },
 
@@ -283,7 +509,6 @@ export const api = {
     defaultReviewRuntimeProfileId?: string | null;
     defaultChatRuntimeProfileId?: string | null;
   }): Promise<AppRuntimeDefaultsResponse> {
-    console.debug("[api] PUT /settings/runtime-defaults", input);
     return request("/settings/runtime-defaults", {
       method: "PUT",
       body: JSON.stringify(input),
@@ -292,17 +517,14 @@ export const api = {
 
   // Projects
   listProjects(): Promise<Project[]> {
-    console.debug("[api] GET /projects");
     return request<Project[]>("/projects");
   },
 
   listProjectTaskOverviews(): Promise<ProjectTaskOverview[]> {
-    console.debug("[api] GET /projects/overview");
     return request<ProjectTaskOverview[]>("/projects/overview");
   },
 
   createProject(input: CreateProjectInput): Promise<Project> {
-    console.debug("[api] POST /projects", input);
     return request<Project>("/projects", {
       method: "POST",
       body: JSON.stringify(input),
@@ -310,7 +532,6 @@ export const api = {
   },
 
   updateProject(id: string, input: CreateProjectInput): Promise<Project> {
-    console.debug("[api] PUT /projects/%s", id, input);
     return request<Project>(`/projects/${id}`, {
       method: "PUT",
       body: JSON.stringify(input),
@@ -318,7 +539,6 @@ export const api = {
   },
 
   updateProjectOrganization(id: string, input: UpdateProjectOrganizationInput): Promise<Project> {
-    console.debug("[api] PATCH /projects/%s/organization", id, input);
     return request<Project>(`/projects/${encodeURIComponent(id)}/organization`, {
       method: "PATCH",
       body: JSON.stringify(input),
@@ -326,12 +546,10 @@ export const api = {
   },
 
   getAutoQueueMode(id: string): Promise<{ enabled: boolean }> {
-    console.debug("[api] GET /projects/%s/auto-queue-mode", id);
     return request<{ enabled: boolean }>(`/projects/${id}/auto-queue-mode`);
   },
 
   setAutoQueueMode(id: string, enabled: boolean): Promise<{ enabled: boolean }> {
-    console.debug("[api] PATCH /projects/%s/auto-queue-mode", id, enabled);
     return request<{ enabled: boolean }>(`/projects/${id}/auto-queue-mode`, {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
@@ -339,7 +557,6 @@ export const api = {
   },
 
   deleteProject(id: string): Promise<void> {
-    console.debug("[api] DELETE /projects/%s", id);
     return request(`/projects/${id}`, { method: "DELETE" });
   },
 
@@ -351,8 +568,42 @@ export const api = {
   },
 
   getProjectMcp(id: string): Promise<{ mcpServers: Record<string, unknown> }> {
-    console.debug("[api] GET /projects/%s/mcp", id);
     return request(`/projects/${id}/mcp`);
+  },
+
+  getProjectGitHub(id: string): Promise<GitHubProjectState> {
+    return request(`/projects/${encodeURIComponent(id)}/github`);
+  },
+
+  connectProjectGitHub(
+    id: string,
+    input: {
+      repository: string;
+      tokenEnvVar: string;
+      enabled: boolean;
+      eligibility: GitHubEligibility;
+    },
+  ): Promise<GitHubRepositoryConnection> {
+    return request(`/projects/${encodeURIComponent(id)}/github`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+
+  disconnectProjectGitHub(id: string): Promise<void> {
+    return request(`/projects/${encodeURIComponent(id)}/github`, { method: "DELETE" });
+  },
+
+  syncProjectGitHub(id: string): Promise<{
+    imported: number;
+    updated: number;
+    skipped: number;
+    issues: GitHubIssueLink[];
+  }> {
+    return request(`/projects/${encodeURIComponent(id)}/github/sync`, {
+      method: "POST",
+      body: "{}",
+    });
   },
 
   getProjectWarmup(id: string): Promise<ProjectWarmupResponse> {
@@ -381,12 +632,10 @@ export const api = {
   listTasks,
 
   getTask(id: string): Promise<Task> {
-    console.debug("[api] GET /tasks/%s", id);
     return request<Task>(`${API_BASE}/${id}`);
   },
 
   createTask(input: CreateTaskInput): Promise<Task> {
-    console.debug("[api] POST /tasks", input);
     return request<Task>(API_BASE, {
       method: "POST",
       body: JSON.stringify(input),
@@ -394,15 +643,27 @@ export const api = {
   },
 
   updateTask(id: string, input: UpdateTaskInput): Promise<Task> {
-    console.debug("[api] PUT /tasks/%s", id, input);
     return request<Task>(`${API_BASE}/${id}`, {
       method: "PUT",
       body: JSON.stringify(input),
     });
   },
 
+  handoffTask(
+    id: string,
+    input: HandoffTaskInput,
+  ): Promise<{ task: Task; ownership: TaskOwnership; history: TaskExecutorHistoryEntry }> {
+    return request(`${API_BASE}/${encodeURIComponent(id)}/handoff`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  getTaskExecutorHistory(id: string): Promise<TaskExecutorHistoryEntry[]> {
+    return request(`${API_BASE}/${encodeURIComponent(id)}/executor-history`);
+  },
+
   deleteTask(id: string): Promise<void> {
-    console.debug("[api] DELETE /tasks/%s", id);
     return request(`${API_BASE}/${id}`, { method: "DELETE" });
   },
 
@@ -411,7 +672,6 @@ export const api = {
     event: TaskEvent,
     options?: Pick<TaskEventInput, "deletePlanFile" | "commitOnApprove">,
   ): Promise<Task> {
-    console.debug("[api] POST /tasks/%s/events →", id, event);
     const timeoutMs = event === "fast_fix" ? PLAN_FAST_FIX_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
     return request<Task>(
       `${API_BASE}/${id}/events`,
@@ -428,12 +688,10 @@ export const api = {
   },
 
   listTaskComments(id: string): Promise<TaskComment[]> {
-    console.debug("[api] GET /tasks/%s/comments", id);
     return request<TaskComment[]>(`${API_BASE}/${id}/comments`);
   },
 
   createTaskComment(id: string, input: CreateTaskCommentInput): Promise<TaskComment> {
-    console.debug("[api] POST /tasks/%s/comments", id, input);
     return request<TaskComment>(`${API_BASE}/${id}/comments`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -441,7 +699,6 @@ export const api = {
   },
 
   reorderTask(id: string, position: number): Promise<Task> {
-    console.debug("[api] PATCH /tasks/%s/position →", id, position);
     return request<Task>(`${API_BASE}/${id}/position`, {
       method: "PATCH",
       body: JSON.stringify({ position }),
@@ -449,14 +706,12 @@ export const api = {
   },
 
   syncTaskPlan(id: string): Promise<Task> {
-    console.debug("[api] POST /tasks/%s/sync-plan", id);
     return request<Task>(`${API_BASE}/${id}/sync-plan`, {
       method: "POST",
     });
   },
 
   getTaskPlanFileStatus(id: string): Promise<{ exists: boolean; path: string }> {
-    console.debug("[api] GET /tasks/%s/plan-file-status", id);
     return request<{ exists: boolean; path: string }>(`${API_BASE}/${id}/plan-file-status`);
   },
 
@@ -465,7 +720,6 @@ export const api = {
   },
 
   checkRoadmapStatus(projectId: string): Promise<{ exists: boolean }> {
-    console.debug("[api] GET /projects/%s/roadmap/status", projectId);
     return request<{ exists: boolean }>(`/projects/${projectId}/roadmap/status`);
   },
 
@@ -479,7 +733,6 @@ export const api = {
     taskIds: string[];
     byPhase: Record<number, { created: number; skipped: number }>;
   }> {
-    console.debug("[api] POST /projects/%s/roadmap/import", projectId, { roadmapAlias });
     return request(
       `/projects/${projectId}/roadmap/import`,
       {
@@ -495,10 +748,6 @@ export const api = {
     roadmapAlias: string,
     vision?: string,
   ): Promise<{ status: string; projectId: string; roadmapAlias: string }> {
-    console.debug("[api] POST /projects/%s/roadmap/generate", projectId, {
-      roadmapAlias,
-      vision,
-    });
     return request(`/projects/${projectId}/roadmap/generate`, {
       method: "POST",
       body: JSON.stringify({ roadmapAlias, vision }),
@@ -544,11 +793,6 @@ export const api = {
   },
 
   sendChatMessage(input: ChatRequest): Promise<SendChatMessageResponse> {
-    console.debug("[api] POST /chat", {
-      projectId: input.projectId,
-      explore: input.explore,
-      sessionId: input.sessionId,
-    });
     return request<SendChatMessageResponse>(
       "/chat",
       {
@@ -560,21 +804,22 @@ export const api = {
   },
 
   async abortChat(conversationId: string): Promise<void> {
-    console.debug("[api] POST /chat/%s/abort", conversationId);
-    const res = await fetch(`${API_PREFIX}/chat/${conversationId}/abort`, { method: "POST" });
-    if (!res.ok && res.status !== 404) {
-      throw new Error(`Failed to abort chat: ${res.status}`);
+    try {
+      await request<void>(`/chat/${conversationId}/abort`, { method: "POST" });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return;
+      }
+      throw error;
     }
   },
 
   // Chat Sessions
   listChatSessions(projectId: string): Promise<ChatSession[]> {
-    console.debug("[api] GET /chat/sessions projectId=%s", projectId);
     return request<ChatSession[]>(`/chat/sessions?projectId=${projectId}`);
   },
 
   createChatSession(input: CreateChatSessionInput): Promise<ChatSession> {
-    console.debug("[api] POST /chat/sessions", input);
     return request<ChatSession>("/chat/sessions", {
       method: "POST",
       body: JSON.stringify(input),
@@ -582,7 +827,6 @@ export const api = {
   },
 
   getChatSession(id: string, context?: ChatSessionRequestContext): Promise<ChatSession> {
-    console.debug("[api] GET /chat/sessions/%s", id);
     return request<ChatSession>(withChatSessionContext(`/chat/sessions/${id}`, context));
   },
 
@@ -590,14 +834,12 @@ export const api = {
     sessionId: string,
     context?: ChatSessionRequestContext,
   ): Promise<ChatSessionMessage[]> {
-    console.debug("[api] GET /chat/sessions/%s/messages", sessionId);
     return request<ChatSessionMessage[]>(
       withChatSessionContext(`/chat/sessions/${sessionId}/messages`, context),
     );
   },
 
   updateChatSession(id: string, input: UpdateChatSessionInput): Promise<ChatSession> {
-    console.debug("[api] PUT /chat/sessions/%s", id, input);
     return request<ChatSession>(`/chat/sessions/${id}`, {
       method: "PUT",
       body: JSON.stringify(input),
@@ -605,7 +847,6 @@ export const api = {
   },
 
   deleteChatSession(id: string): Promise<void> {
-    console.debug("[api] DELETE /chat/sessions/%s", id);
     return request(`/chat/sessions/${id}`, { method: "DELETE" });
   },
 
@@ -728,7 +969,6 @@ export const api = {
 
   // Codex login proxy (feature-flagged)
   getCodexLoginCapabilities(): Promise<{ loginProxyEnabled: boolean }> {
-    console.debug("[api] GET /auth/codex/capabilities");
     return request("/auth/codex/capabilities");
   },
 
@@ -768,12 +1008,10 @@ export const api = {
     userCode: string;
     startedAt: string;
   }> {
-    console.debug("[api] POST /auth/codex/login/start");
     return request("/auth/codex/login/start", { method: "POST" }, PLAN_FAST_FIX_TIMEOUT_MS);
   },
 
   cancelCodexLogin(): Promise<{ ok: boolean; cancelled: boolean }> {
-    console.debug("[api] POST /auth/codex/login/cancel");
     return request("/auth/codex/login/cancel", { method: "POST" });
   },
 };

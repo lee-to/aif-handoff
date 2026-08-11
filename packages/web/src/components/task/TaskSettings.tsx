@@ -10,6 +10,7 @@ import { useQaPipelineEnabled } from "@/hooks/useSettings";
 import { useAppRuntimeDefaults, useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
 import { formatRuntimeProfileOptionLabel } from "@/lib/runtimeProfiles";
 import { defaultsForMode, type Task, type UpdateTaskInput } from "@aif/shared/browser";
+import { TaskOwnershipSummary } from "./TaskOwnership";
 
 interface Props {
   task: Task;
@@ -159,6 +160,15 @@ export function TaskSettings({ task, onSave }: Props) {
       </div>
 
       <div className="space-y-2">
+        <div className="border border-border/60 bg-muted/20 p-2">
+          <p className="mb-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Execution responsibility
+          </p>
+          <TaskOwnershipSummary executionOwner={task.executionOwner} assignees={task.assignees} />
+          <p className="mt-1 text-3xs text-muted-foreground">
+            Change owner and assignees through Assign / hand off. Auto mode below is independent.
+          </p>
+        </div>
         <CheckboxField label="Auto mode" checked={autoMode} onChange={setAutoMode}>
           AI moves tasks between statuses automatically.
         </CheckboxField>

@@ -1,3 +1,4 @@
+import { findProjectByTaskId } from "@aif/data";
 import { logger, getEnv, sendTelegramNotification } from "@aif/shared";
 
 const log = logger("agent-notifier");
@@ -5,6 +6,7 @@ const log = logger("agent-notifier");
 type BroadcastType = "task:updated" | "task:moved" | "task:activity" | "task:scheduled_fired";
 
 export interface TaskNotificationInfo {
+  projectName?: string;
   title?: string;
   fromStatus?: string;
   toStatus?: string;
@@ -13,7 +15,7 @@ export interface TaskNotificationInfo {
 type ProjectBroadcastType = "project:auto_queue_mode_changed" | "project:auto_queue_advanced";
 type RuntimeLimitBroadcastType = "project:runtime_limit_updated";
 
-function internalBroadcastHeaders(): Record<string, string> {
+export function internalApiHeaders(): Record<string, string> {
   const token = getEnv().INTERNAL_BROADCAST_TOKEN?.trim() ?? "";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -38,7 +40,7 @@ export async function notifyProjectBroadcast(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: internalBroadcastHeaders(),
+      headers: internalApiHeaders(),
       body: JSON.stringify({ type, taskId: info.taskId }),
     });
     if (res.ok) {
@@ -65,7 +67,7 @@ export async function notifyProjectRuntimeLimitBroadcast(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: internalBroadcastHeaders(),
+      headers: internalApiHeaders(),
       body: JSON.stringify({
         type,
         taskId: info.taskId ?? null,
@@ -105,7 +107,7 @@ export async function notifyTaskBroadcast(
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: internalBroadcastHeaders(),
+      headers: internalApiHeaders(),
       body: JSON.stringify({ type }),
     });
 
@@ -130,6 +132,8 @@ export async function notifyTaskBroadcast(
   if (type === "task:moved" && (!info.fromStatus || info.fromStatus !== info.toStatus)) {
     void sendTelegramNotification({
       taskId,
+      projectName: info.projectName,
+      resolveProjectName: () => findProjectByTaskId(taskId)?.name,
       title: info.title,
       fromStatus: info.fromStatus,
       toStatus: info.toStatus,

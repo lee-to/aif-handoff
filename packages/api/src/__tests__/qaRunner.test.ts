@@ -91,6 +91,18 @@ describe("runQaQuery", () => {
     expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
   });
 
+  it("rejects QA for a human-owned task without invoking the runtime", async () => {
+    mockFindTaskById.mockReturnValue({
+      id: "t1",
+      executionOwner: "human",
+      branchName: BRANCH,
+      qaStatus: "idle",
+    });
+    const res = await runQaQuery({ projectId: "p1", taskId: "t1", executionRoot: root });
+    expect(res).toMatchObject({ ok: false, code: "ai_handoff_required" });
+    expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
+  });
+
   it("falls back to the current git branch when task has no branchName", async () => {
     mockFindTaskById.mockReturnValue({ id: "t1", branchName: null, qaStatus: "idle" });
     // executionRoot is a plain tmpdir (no git work tree), so the skill-mirrored

@@ -138,6 +138,34 @@ describe("MCP tools", () => {
     });
   });
 
+  describe("compact task responses", () => {
+    it("preserves ownership fields while stripping participant credential material", () => {
+      const compact = compactTaskResponse({
+        id: "task",
+        executionOwner: "human",
+        assignees: [{ participantId: "participant", displayName: "Member" }],
+        plan: "plan",
+        implementationLog: null,
+        reviewComments: null,
+        password: "secret-password",
+        passwordHash: "secret-hash",
+        csrfToken: "secret-csrf",
+        sessionToken: "secret-session",
+        tokenDigest: "secret-digest",
+        csrfTokenDigest: "secret-csrf-digest",
+        cookie: "secret-cookie",
+      });
+
+      expect(compact).toMatchObject({
+        id: "task",
+        executionOwner: "human",
+        assignees: [{ participantId: "participant", displayName: "Member" }],
+        hasPlan: true,
+      });
+      expect(JSON.stringify(compact)).not.toContain("secret-");
+    });
+  });
+
   // ── searchTasks ───────────────────────────────────────────
 
   describe("searchTasks data layer", () => {

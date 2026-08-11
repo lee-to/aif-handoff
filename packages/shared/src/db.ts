@@ -72,6 +72,32 @@ function ensureTables(sqlite: Database.Database): void {
     )
   `);
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS participants (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      normalized_username TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+      active INTEGER NOT NULL DEFAULT 1,
+      deactivated_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS participant_sessions (
+      id TEXT PRIMARY KEY,
+      participant_id TEXT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+      token_digest TEXT NOT NULL UNIQUE,
+      csrf_token_digest TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_seen_at TEXT,
+      revoked_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -79,6 +105,8 @@ function ensureTables(sqlite: Database.Database): void {
       description TEXT NOT NULL DEFAULT '',
       attachments TEXT NOT NULL DEFAULT '[]',
       auto_mode INTEGER NOT NULL DEFAULT 1,
+      execution_owner TEXT NOT NULL DEFAULT 'ai' CHECK (execution_owner IN ('ai', 'human')),
+      ownership_revision INTEGER NOT NULL DEFAULT 0,
       is_fix INTEGER NOT NULL DEFAULT 0,
       planner_mode TEXT NOT NULL DEFAULT 'fast',
       plan_path TEXT NOT NULL DEFAULT '.ai-factory/PLAN.md',
@@ -145,9 +173,98 @@ function ensureTables(sqlite: Database.Database): void {
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
       author TEXT NOT NULL DEFAULT 'human',
+      participant_id TEXT REFERENCES participants(id) ON DELETE SET NULL,
       message TEXT NOT NULL,
       attachments TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS task_assignments (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      participant_id TEXT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+      assigned_by_kind TEXT NOT NULL,
+      assigned_by_id TEXT,
+      assigned_by_display_name_snapshot TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      PRIMARY KEY (task_id, participant_id)
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS task_executor_history (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      task_title_snapshot TEXT NOT NULL,
+      ownership_revision INTEGER NOT NULL,
+      execution_owner TEXT NOT NULL CHECK (execution_owner IN ('ai', 'human')),
+      assignees_snapshot_json TEXT NOT NULL DEFAULT '[]',
+      status_snapshot TEXT NOT NULL,
+      actor_kind TEXT NOT NULL,
+      actor_id TEXT,
+      actor_display_name_snapshot TEXT,
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      task_id TEXT,
+      task_title_snapshot TEXT,
+      participant_id TEXT,
+      participant_display_name_snapshot TEXT,
+      execution_owner_snapshot TEXT,
+      assignees_snapshot_json TEXT,
+      status_snapshot TEXT,
+      actor_kind TEXT NOT NULL,
+      actor_id TEXT,
+      actor_display_name_snapshot TEXT,
+      reason TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS github_repositories (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      owner TEXT NOT NULL,
+      name TEXT NOT NULL,
+      html_url TEXT NOT NULL,
+      default_branch TEXT NOT NULL,
+      token_env_var TEXT NOT NULL DEFAULT 'GITHUB_TOKEN',
+      eligibility_json TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_synced_at TEXT,
+      sync_error TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS github_issues (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      issue_number INTEGER NOT NULL,
+      task_id TEXT UNIQUE REFERENCES tasks(id) ON DELETE SET NULL,
+      node_id TEXT NOT NULL,
+      html_url TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      source_updated_at TEXT NOT NULL,
+      last_synced_at TEXT NOT NULL,
+      sync_error TEXT,
+      pr_number INTEGER,
+      pr_url TEXT,
+      pr_state TEXT CHECK (pr_state IS NULL OR pr_state IN ('open', 'closed', 'merged')),
+      pr_checks_status TEXT CHECK (pr_checks_status IS NULL OR pr_checks_status IN ('pending', 'success', 'failure')),
+      review_state TEXT CHECK (review_state IS NULL OR review_state IN ('pending', 'approved', 'changes_requested')),
+      last_review_id INTEGER,
+      review_fingerprint TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      PRIMARY KEY (project_id, issue_number)
     )
   `);
   sqlite.exec(`
@@ -321,6 +438,73 @@ interface Migration {
   sql: string;
   /** Trigger DDL statements that contain internal semicolons and must be executed whole. */
   triggers?: string[];
+  /** Optional data migration that must run atomically with the versioned DDL. */
+  backfill?: (sqlite: Database.Database) => Record<string, number>;
+}
+
+function backfillParticipantOwnership(sqlite: Database.Database): Record<string, number> {
+  const historyCreatedAtExpression = hasColumn(sqlite, "tasks", "created_at")
+    ? "tasks.created_at"
+    : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+  const existingTaskCount = sqlite.prepare("SELECT count(*) AS count FROM tasks").get() as {
+    count: number;
+  };
+  const ownerDefaults = sqlite
+    .prepare(
+      `
+        UPDATE tasks
+        SET execution_owner = 'ai',
+            ownership_revision = 0
+        WHERE execution_owner IS NULL
+           OR ownership_revision IS NULL
+      `,
+    )
+    .run();
+  const historyRows = sqlite
+    .prepare(
+      `
+        INSERT INTO task_executor_history (
+          id,
+          task_id,
+          task_title_snapshot,
+          ownership_revision,
+          execution_owner,
+          assignees_snapshot_json,
+          status_snapshot,
+          actor_kind,
+          actor_id,
+          actor_display_name_snapshot,
+          reason,
+          created_at
+        )
+        SELECT
+          'history-' || lower(hex(randomblob(16))),
+          tasks.id,
+          tasks.title,
+          tasks.ownership_revision,
+          tasks.execution_owner,
+          '[]',
+          tasks.status,
+          'system',
+          NULL,
+          'System',
+          'migration_v27_initial_owner',
+          ${historyCreatedAtExpression}
+        FROM tasks
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM task_executor_history history
+          WHERE history.task_id = tasks.id
+        )
+      `,
+    )
+    .run();
+
+  return {
+    existingTaskCount: existingTaskCount.count,
+    ownerDefaultsUpdated: ownerDefaults.changes,
+    executorHistoryInserted: historyRows.changes,
+  };
 }
 
 const MIGRATIONS: Migration[] = [
@@ -758,6 +942,148 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN auto_queue_commit_completed_at TEXT;
     `,
   },
+  {
+    version: 27,
+    description: "Add participant identity, sessions, task ownership, history, and audit model",
+    sql: `
+      CREATE TABLE IF NOT EXISTS participants (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        normalized_username TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+        active INTEGER NOT NULL DEFAULT 1,
+        deactivated_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS participant_sessions (
+        id TEXT PRIMARY KEY,
+        participant_id TEXT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+        token_digest TEXT NOT NULL UNIQUE,
+        csrf_token_digest TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        last_seen_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      ALTER TABLE tasks ADD COLUMN execution_owner TEXT NOT NULL DEFAULT 'ai';
+      ALTER TABLE tasks ADD COLUMN ownership_revision INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE task_comments ADD COLUMN participant_id TEXT REFERENCES participants(id) ON DELETE SET NULL;
+      CREATE TABLE IF NOT EXISTS task_assignments (
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        participant_id TEXT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+        assigned_by_kind TEXT NOT NULL,
+        assigned_by_id TEXT,
+        assigned_by_display_name_snapshot TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (task_id, participant_id)
+      );
+      CREATE TABLE IF NOT EXISTS task_executor_history (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        task_title_snapshot TEXT NOT NULL,
+        ownership_revision INTEGER NOT NULL,
+        execution_owner TEXT NOT NULL,
+        assignees_snapshot_json TEXT NOT NULL DEFAULT '[]',
+        status_snapshot TEXT NOT NULL,
+        actor_kind TEXT NOT NULL,
+        actor_id TEXT,
+        actor_display_name_snapshot TEXT,
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS audit_events (
+        id TEXT PRIMARY KEY,
+        action TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT,
+        task_id TEXT,
+        task_title_snapshot TEXT,
+        participant_id TEXT,
+        participant_display_name_snapshot TEXT,
+        execution_owner_snapshot TEXT,
+        assignees_snapshot_json TEXT,
+        status_snapshot TEXT,
+        actor_kind TEXT NOT NULL,
+        actor_id TEXT,
+        actor_display_name_snapshot TEXT,
+        reason TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `,
+    backfill: backfillParticipantOwnership,
+    triggers: [
+      `CREATE TRIGGER IF NOT EXISTS trg_task_executor_history_prevent_update
+       BEFORE UPDATE ON task_executor_history
+       FOR EACH ROW
+       BEGIN
+         SELECT RAISE(ABORT, 'task_executor_history is append-only');
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_task_executor_history_prevent_delete
+       BEFORE DELETE ON task_executor_history
+       FOR EACH ROW
+       BEGIN
+         SELECT RAISE(ABORT, 'task_executor_history is append-only');
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_audit_events_prevent_update
+       BEFORE UPDATE ON audit_events
+       FOR EACH ROW
+       BEGIN
+         SELECT RAISE(ABORT, 'audit_events is append-only');
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_audit_events_prevent_delete
+       BEFORE DELETE ON audit_events
+       FOR EACH ROW
+       BEGIN
+         SELECT RAISE(ABORT, 'audit_events is append-only');
+       END`,
+    ],
+  },
+  {
+    version: 28,
+    description: "Add restart-safe GitHub repository, issue, and pull-request linkage",
+    sql: `
+      CREATE TABLE IF NOT EXISTS github_repositories (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        owner TEXT NOT NULL,
+        name TEXT NOT NULL,
+        html_url TEXT NOT NULL,
+        default_branch TEXT NOT NULL,
+        token_env_var TEXT NOT NULL DEFAULT 'GITHUB_TOKEN',
+        eligibility_json TEXT NOT NULL DEFAULT '{}',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_synced_at TEXT,
+        sync_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS github_issues (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        issue_number INTEGER NOT NULL,
+        task_id TEXT UNIQUE REFERENCES tasks(id) ON DELETE SET NULL,
+        node_id TEXT NOT NULL,
+        html_url TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        source_updated_at TEXT NOT NULL,
+        last_synced_at TEXT NOT NULL,
+        sync_error TEXT,
+        pr_number INTEGER,
+        pr_url TEXT,
+        pr_state TEXT CHECK (pr_state IS NULL OR pr_state IN ('open', 'closed', 'merged')),
+        pr_checks_status TEXT CHECK (pr_checks_status IS NULL OR pr_checks_status IN ('pending', 'success', 'failure')),
+        review_state TEXT CHECK (review_state IS NULL OR review_state IN ('pending', 'approved', 'changes_requested')),
+        last_review_id INTEGER,
+        review_fingerprint TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        PRIMARY KEY (project_id, issue_number)
+      );
+    `,
+  },
 ];
 
 function splitSqlStatements(sqlText: string): string[] {
@@ -804,6 +1130,13 @@ function runMigrations(sqlite: Database.Database): void {
           }
           throw err;
         }
+      }
+      const backfillCounts = migration.backfill?.(sqlite);
+      if (backfillCounts) {
+        log.info(
+          { version: migration.version, ...backfillCounts },
+          "Migration data backfill complete",
+        );
       }
       for (const trigger of migration.triggers ?? []) {
         try {
@@ -995,8 +1328,28 @@ function ensureIndexes(sqlite: Database.Database): void {
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_retry ON tasks(status, retry_after)",
     // Composite: task list ordering within a project by status and position
     "CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status, position)",
+    // Owner-aware coordinator and participant task filters
+    "CREATE INDEX IF NOT EXISTS idx_tasks_execution_owner_status ON tasks(execution_owner, status)",
     // Task comments lookup by task
     "CREATE INDEX IF NOT EXISTS idx_task_comments_task_id ON task_comments(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_task_comments_participant_id ON task_comments(participant_id)",
+    // Participant identity and active-role administration
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_normalized_username ON participants(normalized_username)",
+    "CREATE INDEX IF NOT EXISTS idx_participants_active_role ON participants(active, role)",
+    // Session token resolution and participant-wide revocation
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_participant_sessions_token_digest ON participant_sessions(token_digest)",
+    "CREATE INDEX IF NOT EXISTS idx_participant_sessions_participant ON participant_sessions(participant_id, revoked_at, expires_at)",
+    // Current assignment hydration and participant task filters
+    "CREATE INDEX IF NOT EXISTS idx_task_assignments_task ON task_assignments(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_task_assignments_participant ON task_assignments(participant_id, task_id)",
+    // Immutable executor timeline and audit lookups
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_task_executor_history_revision ON task_executor_history(task_id, ownership_revision)",
+    "CREATE INDEX IF NOT EXISTS idx_task_executor_history_created ON task_executor_history(task_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_events_task ON audit_events(task_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_events_participant ON audit_events(participant_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_kind, actor_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_github_issues_task ON github_issues(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_github_issues_pr ON github_issues(project_id, pr_number)",
     // Task locking: find unlocked or stale-locked tasks
     "CREATE INDEX IF NOT EXISTS idx_tasks_locked ON tasks(locked_by, locked_until)",
     // Coordinator scheduled-task scan: backlog tasks with due scheduled_at

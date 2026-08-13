@@ -534,7 +534,7 @@ export const api = {
         method: "POST",
         body: JSON.stringify(input),
       },
-      PROJECT_CREATE_TIMEOUT_MS,
+      "githubRepository" in input ? PROJECT_CREATE_TIMEOUT_MS : undefined,
     );
   },
 

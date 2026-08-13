@@ -71,6 +71,17 @@ describe("api client", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("keeps the standard timeout for existing-path project creation", async () => {
+    await api.getAuthSession();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await api.createProject({ name: "Local", rootPath: "/tmp/local" });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 15_000);
+    expect(timeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), PROJECT_CREATE_TIMEOUT_MS);
+    timeoutSpy.mockRestore();
+  });
+
   it("updates project organization with PATCH", async () => {
     await api.getAuthSession();
     const fetchMock = vi.mocked(fetch);

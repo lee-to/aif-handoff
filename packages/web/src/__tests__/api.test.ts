@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, onAuthenticationRequired } from "@/lib/api";
+import { api, onAuthenticationRequired, PROJECT_CREATE_TIMEOUT_MS } from "@/lib/api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -59,6 +59,16 @@ describe("api client", () => {
     const fetchMock = vi.mocked(fetch);
     const [url] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/projects/overview");
+  });
+
+  it("allows project creation enough time for a managed clone", async () => {
+    await api.getAuthSession();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await api.createProject({ name: "Cloned", githubRepository: "owner/repository" });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), PROJECT_CREATE_TIMEOUT_MS);
+    timeoutSpy.mockRestore();
   });
 
   it("updates project organization with PATCH", async () => {

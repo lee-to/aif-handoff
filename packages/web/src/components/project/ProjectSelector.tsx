@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Radio } from "@/components/ui/radio";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { ListButton } from "@/components/ui/list-button";
@@ -60,6 +61,7 @@ interface Props {
 }
 
 type DialogMode = "create" | "edit";
+type ProjectSource = "path" | "github";
 
 export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = true }: Props) {
   const { data: projects } = useProjects();
@@ -73,6 +75,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
   const syncGitHub = useSyncProjectGitHub();
   const { toast } = useToast();
   const { data: settings } = useSettings();
+  const githubProjectCloneEnabled = settings?.githubProjectCloneEnabled ?? false;
   const githubIssuePrEnabled = settings?.githubIssuePrEnabled ?? false;
 
   const showMutationError = (error: unknown, fallback: string) => {
@@ -86,6 +89,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
   const [projectSort, setProjectSort] = useState<ProjectSort>("name");
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [projectSource, setProjectSource] = useState<ProjectSource>("path");
   const [rootPath, setRootPath] = useState("");
   const [groupName, setGroupName] = useState("");
   const [plannerMaxBudgetUsd, setPlannerMaxBudgetUsd] = useState("");
@@ -205,6 +209,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
     setDialogMode("create");
     setEditingId(null);
     setName("");
+    setProjectSource("path");
     setRootPath("");
     setGroupName("");
     setPlannerMaxBudgetUsd("");
@@ -325,7 +330,8 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !rootPath.trim()) return;
+    const sourceValue = projectSource === "path" ? rootPath.trim() : githubRepository.trim();
+    if (!name.trim() || (dialogMode === "create" ? !sourceValue : !rootPath.trim())) return;
     const parsedPlannerBudget = plannerMaxBudgetUsd.trim()
       ? Number(plannerMaxBudgetUsd)
       : undefined;
@@ -350,16 +356,18 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
     }
 
     if (dialogMode === "create") {
+      const settings = {
+        name: name.trim(),
+        plannerMaxBudgetUsd: parsedPlannerBudget,
+        planCheckerMaxBudgetUsd: parsedPlanCheckerBudget,
+        implementerMaxBudgetUsd: parsedImplementerBudget,
+        reviewSidecarMaxBudgetUsd: parsedBudget,
+        parallelEnabled,
+      };
       createProject.mutate(
-        {
-          name: name.trim(),
-          rootPath: rootPath.trim(),
-          plannerMaxBudgetUsd: parsedPlannerBudget,
-          planCheckerMaxBudgetUsd: parsedPlanCheckerBudget,
-          implementerMaxBudgetUsd: parsedImplementerBudget,
-          reviewSidecarMaxBudgetUsd: parsedBudget,
-          parallelEnabled,
-        },
+        projectSource === "path"
+          ? { ...settings, rootPath: rootPath.trim() }
+          : { ...settings, githubRepository: githubRepository.trim() },
         {
           onSuccess: (project) => {
             if (autoQueueMode) {
@@ -445,6 +453,12 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
 
   const isPending =
     createProject.isPending || updateProject.isPending || updateOrganization.isPending;
+  const isSourceMissing =
+    dialogMode === "edit"
+      ? !rootPath.trim()
+      : projectSource === "path"
+        ? !rootPath.trim()
+        : !githubRepository.trim();
 
   const closeDropdown = useCallback(() => {
     setDropdownOpen(false);
@@ -679,19 +693,60 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
                 autoFocus
               />
             </div>
-            <div>
-              <label className="text-sm font-medium">Root Path</label>
-              <Input
-                placeholder="/Users/me/projects/my-project"
-                value={rootPath}
-                onChange={(e) => setRootPath(e.target.value)}
-                className="font-mono text-sm"
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Absolute path where agents will create files. In Docker, paths are stored under
-                PROJECTS_MOUNT; host paths under PROJECTS_DIR use the same mount.
-              </p>
-            </div>
+            {dialogMode === "create" && githubProjectCloneEnabled && (
+              <fieldset>
+                <legend className="text-sm font-medium">Project source</legend>
+                <div className="mt-2 flex gap-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <Radio
+                      name="project-source"
+                      value="path"
+                      checked={projectSource === "path"}
+                      onChange={() => setProjectSource("path")}
+                    />
+                    Existing Path
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Radio
+                      name="project-source"
+                      value="github"
+                      checked={projectSource === "github"}
+                      onChange={() => setProjectSource("github")}
+                    />
+                    GitHub Repository
+                  </label>
+                </div>
+              </fieldset>
+            )}
+            {(dialogMode === "edit" || projectSource === "path") && (
+              <div>
+                <label className="text-sm font-medium">Root Path</label>
+                <Input
+                  placeholder="/Users/me/projects/my-project"
+                  value={rootPath}
+                  onChange={(e) => setRootPath(e.target.value)}
+                  className="font-mono text-sm"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Absolute path where agents will create files. In Docker, paths are stored under
+                  PROJECTS_MOUNT; host paths under PROJECTS_DIR use the same mount.
+                </p>
+              </div>
+            )}
+            {dialogMode === "create" && githubProjectCloneEnabled && projectSource === "github" && (
+              <div>
+                <label className="text-sm font-medium">GitHub Repository</label>
+                <Input
+                  placeholder="owner/repository"
+                  aria-label="GitHub repository to clone"
+                  value={githubRepository}
+                  onChange={(event) => setGitHubRepository(event.target.value)}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  The server clones the repository into its managed projects directory.
+                </p>
+              </div>
+            )}
             {dialogMode === "edit" && githubIssuePrEnabled && (
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -913,7 +968,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
               type="submit"
               disabled={
                 !name.trim() ||
-                !rootPath.trim() ||
+                isSourceMissing ||
                 (plannerMaxBudgetUsd.trim() !== "" &&
                   (!Number.isFinite(Number(plannerMaxBudgetUsd)) ||
                     Number(plannerMaxBudgetUsd) <= 0)) ||

@@ -13,6 +13,7 @@ const mutateDisconnectGitHub = vi.fn();
 const mutateSyncGitHub = vi.fn();
 const mockToast = vi.fn();
 let mockGitHubIssuePrEnabled = true;
+let mockGitHubProjectCloneEnabled = true;
 let mockProjects = [
   {
     id: "p-1",
@@ -69,7 +70,12 @@ vi.mock("@/components/ui/toast", () => ({
 }));
 
 vi.mock("@/hooks/useSettings", () => ({
-  useSettings: () => ({ data: { githubIssuePrEnabled: mockGitHubIssuePrEnabled } }),
+  useSettings: () => ({
+    data: {
+      githubIssuePrEnabled: mockGitHubIssuePrEnabled,
+      githubProjectCloneEnabled: mockGitHubProjectCloneEnabled,
+    },
+  }),
 }));
 
 const { ProjectSelector } = await import("@/components/project/ProjectSelector");
@@ -87,6 +93,7 @@ describe("ProjectSelector", () => {
     mutateSyncGitHub.mockReset();
     mockToast.mockReset();
     mockGitHubIssuePrEnabled = true;
+    mockGitHubProjectCloneEnabled = true;
     mockProjects = [
       {
         id: "p-1",
@@ -498,6 +505,89 @@ describe("ProjectSelector", () => {
 
     expect(screen.getByText("Create Project")).toBeDefined();
     expect(screen.queryByText("MCP Servers")).toBeNull();
+  });
+
+  it("creates from exactly one selected source", () => {
+    mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+    fireEvent.click(screen.getByText("New project"));
+
+    expect(screen.getByRole("radio", { name: "Existing Path" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText("My Project"), {
+      target: { value: "Local Project" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("/Users/me/projects/my-project"), {
+      target: { value: "/tmp/local-project" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(mutateCreateProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Local Project",
+        rootPath: "/tmp/local-project",
+      }),
+      expect.any(Object),
+    );
+    expect(mutateCreateProject.mock.calls[0]?.[0]).not.toHaveProperty("githubRepository");
+  });
+
+  it("creates from GitHub when cloning is enabled independently of the issue-to-PR flag", () => {
+    mockGitHubIssuePrEnabled = false;
+    mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+    fireEvent.click(screen.getByText("New project"));
+    fireEvent.click(screen.getByRole("radio", { name: "GitHub Repository" }));
+
+    expect(screen.queryByPlaceholderText("/Users/me/projects/my-project")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("My Project"), {
+      target: { value: "GitHub Project" },
+    });
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "GitHub repository to clone" }), {
+      target: { value: "owner/repository" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(mutateCreateProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "GitHub Project",
+        githubRepository: "owner/repository",
+      }),
+      expect.any(Object),
+    );
+    expect(mutateCreateProject.mock.calls[0]?.[0]).not.toHaveProperty("rootPath");
+  });
+
+  it("hides GitHub project creation when cloning is disabled", () => {
+    mockGitHubProjectCloneEnabled = false;
+    mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+    fireEvent.click(screen.getByText("New project"));
+
+    expect(screen.queryByRole("radio", { name: "GitHub Repository" })).toBeNull();
+    expect(screen.getByPlaceholderText("/Users/me/projects/my-project")).toBeDefined();
+  });
+
+  it("resets the create source when the dialog is reopened", () => {
+    mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+    render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+    fireEvent.click(screen.getByText("New project"));
+    fireEvent.click(screen.getByRole("radio", { name: "GitHub Repository" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+    fireEvent.click(screen.getByText("New project"));
+
+    expect(screen.getByRole("radio", { name: "Existing Path" })).toBeChecked();
+    expect(screen.getByPlaceholderText("/Users/me/projects/my-project")).toBeDefined();
   });
 
   it("shows error toast when project creation fails", () => {

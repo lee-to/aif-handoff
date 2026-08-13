@@ -10,6 +10,7 @@ import type {
   Project,
   ProjectTaskOverview,
   CreateProjectInput,
+  UpdateProjectInput,
   UpdateProjectOrganizationInput,
   ChatRequest,
   ChatSession,
@@ -105,6 +106,7 @@ const API_PREFIX = import.meta.env.DEV ? "" : "/api";
 const API_BASE = "/tasks";
 const REQUEST_TIMEOUT_MS = 15_000;
 export const PLAN_FAST_FIX_TIMEOUT_MS = 200_000;
+export const PROJECT_CREATE_TIMEOUT_MS = 240_000;
 const CHAT_TIMEOUT_MS = 300_000;
 const IMPORT_ROADMAP_TIMEOUT_MS = 300_000;
 const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -189,6 +191,7 @@ export interface SettingsResponse {
   usageLimitsEnabled: boolean;
   warmupEnabled: boolean;
   qaPipelineEnabled?: boolean;
+  githubProjectCloneEnabled?: boolean;
   githubIssuePrEnabled?: boolean;
   runtimeReadiness: {
     availableRuntimeCount: number;
@@ -525,13 +528,17 @@ export const api = {
   },
 
   createProject(input: CreateProjectInput): Promise<Project> {
-    return request<Project>("/projects", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
+    return request<Project>(
+      "/projects",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      PROJECT_CREATE_TIMEOUT_MS,
+    );
   },
 
-  updateProject(id: string, input: CreateProjectInput): Promise<Project> {
+  updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
     return request<Project>(`/projects/${id}`, {
       method: "PUT",
       body: JSON.stringify(input),

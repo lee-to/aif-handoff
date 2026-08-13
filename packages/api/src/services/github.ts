@@ -1,8 +1,10 @@
+import { execFile, type ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 import { logger, type GitHubEligibility, type GitHubIssueSnapshot } from "@aif/shared";
 
 const log = logger("github-api");
 const API_BASE = "https://api.github.com";
+export const GITHUB_CLONE_TIMEOUT_MS = 120_000;
 
 export class GitHubApiError extends Error {
   constructor(
@@ -22,12 +24,137 @@ export class GitHubApiError extends Error {
   }
 }
 
-interface GitHubRepositoryResponse {
+export interface GitHubRepositoryResponse {
   name: string;
   full_name: string;
   html_url: string;
   default_branch: string;
   owner: { login: string };
+}
+
+export class GitHubCloneError extends Error {
+  readonly adapterCode = "clone_failed";
+
+  constructor(
+    readonly exitCode: string | number | null,
+    readonly signal: NodeJS.Signals | null,
+    readonly killed: boolean,
+  ) {
+    super("GitHub repository clone failed");
+    this.name = "GitHubCloneError";
+  }
+}
+
+export interface GitHubErrorResponse {
+  body: {
+    error: string;
+    code: string;
+    retryAt: string | null;
+  };
+  status: 400 | 401 | 403 | 404 | 422 | 429 | 502;
+}
+
+export function resolveGitHubToken(
+  envVar: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  if (!/^GITHUB_[A-Z0-9_]+$/.test(envVar)) {
+    throw new GitHubApiError(
+      "GitHub token environment variable must use the GITHUB_* prefix",
+      400,
+      "authentication",
+    );
+  }
+  const token = environment[envVar]?.trim();
+  if (!token) {
+    throw new GitHubApiError(
+      `GitHub token environment variable ${envVar} is not configured`,
+      400,
+      "authentication",
+    );
+  }
+  return token;
+}
+
+export function toGitHubErrorResponse(error: GitHubApiError): GitHubErrorResponse {
+  const status = [400, 401, 403, 404, 422, 429].includes(error.httpStatus)
+    ? (error.httpStatus as GitHubErrorResponse["status"])
+    : 502;
+  return {
+    body: {
+      error: error.message,
+      code: `github_${error.adapterCode}`,
+      retryAt: error.retryAt,
+    },
+    status,
+  };
+}
+
+function runGitClone(args: string[], environment: NodeJS.ProcessEnv): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { env: environment, timeout: GITHUB_CLONE_TIMEOUT_MS }, (error) =>
+      error ? reject(error) : resolve(),
+    );
+  });
+}
+
+export async function cloneGitHubRepository(input: {
+  owner: string;
+  repository: string;
+  destination: string;
+  token: string;
+}): Promise<void> {
+  const startedAt = Date.now();
+  const remoteUrl = `https://github.com/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repository)}.git`;
+  log.debug(
+    { owner: input.owner, repository: input.repository, destination: input.destination },
+    "GitHub repository clone started",
+  );
+
+  const authorization = Buffer.from(`x-access-token:${input.token}`).toString("base64");
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${authorization}`,
+    GIT_CONFIG_KEY_1: "credential.helper",
+    GIT_CONFIG_VALUE_1: "",
+  };
+
+  try {
+    await runGitClone(["clone", remoteUrl, input.destination], environment);
+    log.info(
+      {
+        owner: input.owner,
+        repository: input.repository,
+        destination: input.destination,
+        elapsedMs: Date.now() - startedAt,
+      },
+      "GitHub repository clone completed",
+    );
+  } catch (error) {
+    const processError = error as ExecFileException;
+    const cloneError = new GitHubCloneError(
+      processError.code ?? null,
+      processError.signal ?? null,
+      processError.killed ?? false,
+    );
+    log.error(
+      {
+        owner: input.owner,
+        repository: input.repository,
+        destination: input.destination,
+        adapterCode: cloneError.adapterCode,
+        exitCode: cloneError.exitCode,
+        signal: cloneError.signal,
+        killed: cloneError.killed,
+        elapsedMs: Date.now() - startedAt,
+      },
+      "GitHub repository clone failed",
+    );
+    throw cloneError;
+  }
 }
 
 interface GitHubIssueResponse {

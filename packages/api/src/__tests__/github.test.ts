@@ -10,7 +10,8 @@ vi.mock("@aif/shared/server", async (importOriginal) => {
 });
 
 const { githubRouter } = await import("../routes/github.js");
-const { GitHubClient, issueIsEligible } = await import("../services/github.js");
+const { GitHubApiError, GitHubClient, issueIsEligible, toGitHubErrorResponse } =
+  await import("../services/github.js");
 const { deleteTask, findGitHubIssue, findTaskById, importGitHubIssueTask, upsertGitHubRepository } =
   await import("@aif/data");
 
@@ -41,6 +42,17 @@ afterEach(() => {
 });
 
 describe("GitHub client", () => {
+  it("maps API errors from structured status and adapter fields", () => {
+    expect(toGitHubErrorResponse(new GitHubApiError("missing", 404, "not_found"))).toEqual({
+      body: { error: "missing", code: "github_not_found", retryAt: null },
+      status: 404,
+    });
+    expect(toGitHubErrorResponse(new GitHubApiError("upstream", 503, "upstream"))).toMatchObject({
+      status: 502,
+      body: { code: "github_upstream" },
+    });
+  });
+
   it("classifies rate limits from structured HTTP fields", async () => {
     vi.stubGlobal(
       "fetch",

@@ -22,6 +22,7 @@ import {
   broadcastProjectSchema,
   autoQueueModeSchema,
   warmupCreateSchema,
+  updateProjectSchema,
   updateProjectOrganizationSchema,
 } from "../schemas.js";
 import { getAutoQueueMode, setAutoQueueMode } from "@aif/data";
@@ -210,6 +211,12 @@ projectsRouter.get("/overview", (c) => {
 // POST /projects
 projectsRouter.post("/", jsonValidator(createProjectSchema), async (c) => {
   const body = c.req.valid("json");
+  const sourceKind = "githubRepository" in body ? "github" : "path";
+  if (sourceKind === "github" && !getEnv().AIF_GITHUB_PROJECT_CLONE_ENABLED) {
+    log.debug({ sourceKind }, "Rejected disabled GitHub project creation source");
+    return c.json({ error: "GitHub project cloning is disabled", code: "feature_disabled" }, 403);
+  }
+  log.debug({ sourceKind }, "Accepted project creation source");
   const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
     projectId: null,
     selections: {
@@ -223,10 +230,18 @@ projectsRouter.post("/", jsonValidator(createProjectSchema), async (c) => {
     log.warn({ fieldErrors: runtimeValidation.fieldErrors }, "Rejected invalid project defaults");
     return c.json(runtimeValidation, 400);
   }
-  const { project: created, pathError, initError } = await createProject(body);
-  if (pathError) return c.json({ error: pathError }, 400);
-  if (initError) return c.json({ error: initError }, 500);
-  if (!created) return c.json({ error: "Failed to create project" }, 500);
+  const result = await createProject(body);
+  if (!result.ok) {
+    return c.json(
+      {
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.retryAt !== undefined ? { retryAt: result.retryAt } : {}),
+      },
+      result.status,
+    );
+  }
+  const created = result.project;
 
   log.debug({ projectId: created.id, name: body.name }, "Project created");
   broadcast({ type: "project:created", payload: created });
@@ -234,7 +249,7 @@ projectsRouter.post("/", jsonValidator(createProjectSchema), async (c) => {
 });
 
 // PUT /projects/:id
-projectsRouter.put("/:id", jsonValidator(createProjectSchema), async (c) => {
+projectsRouter.put("/:id", jsonValidator(updateProjectSchema), async (c) => {
   const { id } = c.req.param();
   const body = c.req.valid("json");
 

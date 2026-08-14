@@ -78,6 +78,7 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
     AGENT_FIRST_ACTIVITY_TIMEOUT_MS: 60_000,
     AIF_USAGE_LIMITS_ENABLED: false,
     AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED: false,
+    AIF_GITHUB_PROJECT_CLONE_ENABLED: false,
     AIF_GITHUB_ISSUE_PR_ENABLED: false,
     AIF_STAGE_RUNTIME_PIN_ENABLED: false,
     AIF_WARMUP_ENABLED: false,

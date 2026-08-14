@@ -144,9 +144,8 @@ export interface GitHubIssueLink {
   updatedAt: string;
 }
 
-export interface CreateProjectInput {
+interface ProjectInputSettings {
   name: string;
-  rootPath: string;
   plannerMaxBudgetUsd?: number;
   planCheckerMaxBudgetUsd?: number;
   implementerMaxBudgetUsd?: number;
@@ -157,6 +156,13 @@ export interface CreateProjectInput {
   defaultPlanRuntimeProfileId?: string | null;
   defaultReviewRuntimeProfileId?: string | null;
   defaultChatRuntimeProfileId?: string | null;
+}
+
+export type CreateProjectInput = ProjectInputSettings &
+  ({ rootPath: string; githubRepository?: never } | { rootPath?: never; githubRepository: string });
+
+export interface UpdateProjectInput extends ProjectInputSettings {
+  rootPath: string;
 }
 
 export interface UpdateProjectOrganizationInput {

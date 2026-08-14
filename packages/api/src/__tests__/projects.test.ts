@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -10,9 +10,18 @@ import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
 const mockBroadcast = vi.fn();
+const mockExecFile = vi.hoisted(() => vi.fn());
+const mockRmSync = vi.hoisted(() => vi.fn());
+const mockLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
 const mockInternalBroadcastToken = { value: "" };
 const mockWarmupEnabled = { value: false };
 const mockTaskWorktreesEnabled = { value: false };
+const mockGitHubProjectCloneEnabled = { value: false };
 const baseMockEnv = {
   AIF_DEFAULT_RUNTIME_ID: "claude",
   AIF_DEFAULT_PROVIDER_ID: "anthropic",
@@ -23,12 +32,28 @@ vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
   return {
     ...actual,
+    logger: () => mockLogger,
     getEnv: () => ({
       ...baseMockEnv,
       INTERNAL_BROADCAST_TOKEN: mockInternalBroadcastToken.value,
       AIF_WARMUP_ENABLED: mockWarmupEnabled.value,
       AIF_TASK_WORKTREES_ENABLED: mockTaskWorktreesEnabled.value,
+      AIF_GITHUB_PROJECT_CLONE_ENABLED: mockGitHubProjectCloneEnabled.value,
     }),
+  };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFile: mockExecFile };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  mockRmSync.mockImplementation(actual.rmSync);
+  return {
+    ...actual,
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => mockRmSync(...args),
   };
 });
 
@@ -77,12 +102,40 @@ vi.mock("../ws.js", () => ({
 }));
 
 const { projectsRouter } = await import("../routes/projects.js");
+const { findGitHubRepository, listEnabledGitHubRepositories } = await import("@aif/data");
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 function createApp() {
   const app = new Hono();
   app.route("/projects", projectsRouter);
   return app;
+}
+
+function githubRepositoryResponse(
+  owner = "canonical-owner",
+  repository = "canonical-repository",
+): Response {
+  return new Response(
+    JSON.stringify({
+      name: repository,
+      full_name: `${owner}/${repository}`,
+      html_url: `https://github.com/${owner}/${repository}`,
+      default_branch: "main",
+      owner: { login: owner },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+function createGitHubProjectRequest(
+  app: ReturnType<typeof createApp>,
+  repository = "requested/repository",
+) {
+  return app.request("/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "GitHub Project", githubRepository: repository }),
+  });
 }
 
 describe("projects API", () => {
@@ -96,6 +149,7 @@ describe("projects API", () => {
     mockInternalBroadcastToken.value = "";
     mockWarmupEnabled.value = false;
     mockTaskWorktreesEnabled.value = false;
+    mockGitHubProjectCloneEnabled.value = false;
     mockResolveApiWarmupSupport.mockReset();
     const unsupportedWarmup = {
       supported: false,
@@ -122,7 +176,13 @@ describe("projects API", () => {
       context: {},
     });
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     vi.stubEnv("NODE_ENV", "test");
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error | null) => void;
+      callback(null);
+      return {};
+    });
   });
 
   it("returns projects list", async () => {
@@ -615,6 +675,9 @@ describe("projects API", () => {
 
   it("returns 500 and rolls back project when ai-factory init fails", async () => {
     const { initProject: initProjectMock } = await import("@aif/runtime");
+    const rootPath = mkdtempSync("/tmp/aif-local-init-fail-");
+    const sentinel = join(rootPath, "keep.txt");
+    writeFileSync(sentinel, "keep");
     (initProjectMock as ReturnType<typeof vi.fn>).mockReturnValueOnce({
       ok: false,
       error: "ai-factory init failed: command not found",
@@ -625,7 +688,7 @@ describe("projects API", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: "Demo",
-        rootPath: "/tmp/demo-project",
+        rootPath,
       }),
     });
 
@@ -637,6 +700,7 @@ describe("projects API", () => {
     const listRes = await app.request("/projects");
     const projects = await listRes.json();
     expect(projects.find((p: { name: string }) => p.name === "Demo")).toBeUndefined();
+    expect(readFileSync(sentinel, "utf8")).toBe("keep");
   });
 
   it("returns 500 and rolls back project when runtime registry throws", async () => {
@@ -678,6 +742,288 @@ describe("projects API", () => {
     const body = await res.json();
     expect(body.name).toBe("Demo");
     expect(body.rootPath).toBe("/tmp/demo-project");
+  });
+
+  describe("GitHub project creation", () => {
+    beforeEach(() => {
+      mockGitHubProjectCloneEnabled.value = true;
+      vi.stubEnv("GITHUB_TOKEN", "secret-token");
+      vi.stubEnv("AIF_GITHUB_ISSUE_PR_ENABLED", "false");
+    });
+
+    it("does not call GitHub when project cloning is disabled", async () => {
+      mockGitHubProjectCloneEnabled.value = false;
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const response = await createGitHubProjectRequest(app);
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: "feature_disabled" });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [{ name: "Missing source" }, 400],
+      [
+        {
+          name: "Both sources",
+          rootPath: "/tmp/both-sources",
+          githubRepository: "owner/repository",
+        },
+        400,
+      ],
+      [{ name: "Malformed repository", githubRepository: "not-a-repository" }, 400],
+    ])("rejects an invalid source payload", async (body, status) => {
+      const response = await app.request("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      expect(response.status).toBe(status);
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+
+    it("creates a project from the canonical GitHub repository without exposing credentials", async () => {
+      const managedRoot = mkdtempSync("/tmp/aif-github-create-");
+      vi.stubEnv("PROJECTS_MOUNT", managedRoot);
+      const fetchMock = vi.fn().mockResolvedValue(githubRepositoryResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const { initProject: initProjectMock } = await import("@aif/runtime");
+
+      const response = await createGitHubProjectRequest(app);
+      const body = await response.json();
+      const destination = join(managedRoot, "github", "canonical-owner", "canonical-repository");
+
+      expect(response.status).toBe(201);
+      expect(body.rootPath).toBe(destination);
+      expect(findGitHubRepository(body.id)).toMatchObject({
+        owner: "canonical-owner",
+        name: "canonical-repository",
+        tokenEnvVar: "GITHUB_TOKEN",
+        enabled: true,
+        eligibility: { labels: [], assignee: null, milestone: null },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(mockExecFile).toHaveBeenCalledTimes(1);
+      const [command, args, options] = mockExecFile.mock.calls[0] as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv; timeout: number },
+      ];
+      expect(command).toBe("git");
+      expect(args).toEqual([
+        "clone",
+        "https://github.com/canonical-owner/canonical-repository.git",
+        destination,
+      ]);
+      expect(JSON.stringify(args)).not.toContain("secret-token");
+      expect(options.env).toMatchObject({
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_1: "credential.helper",
+        GIT_CONFIG_VALUE_1: "",
+      });
+      expect(options.env.GIT_CONFIG_VALUE_0).toContain("AUTHORIZATION: basic ");
+      expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
+        mockExecFile.mock.invocationCallOrder[0],
+      );
+      expect(mockExecFile.mock.invocationCallOrder[0]).toBeLessThan(
+        (initProjectMock as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+      );
+      expect(
+        (initProjectMock as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0],
+      ).toBeLessThan(mockBroadcast.mock.invocationCallOrder[0]);
+      const serializedLogs = JSON.stringify([
+        ...mockLogger.debug.mock.calls,
+        ...mockLogger.info.mock.calls,
+        ...mockLogger.warn.mock.calls,
+        ...mockLogger.error.mock.calls,
+      ]);
+      expect(serializedLogs).not.toContain("secret-token");
+      expect(serializedLogs).not.toContain(options.env.GIT_CONFIG_VALUE_0);
+    });
+
+    it("resolves a relative native clone directory from the monorepo root", async () => {
+      const relativeRoot = ".test-projects-relative";
+      const managedRoot = join(repoRoot, relativeRoot);
+      rmSync(managedRoot, { recursive: true, force: true });
+      vi.stubEnv("PROJECTS_DIR", `./${relativeRoot}`);
+      vi.stubEnv("PROJECTS_HOST_ROOT", "");
+      vi.stubEnv("PROJECTS_MOUNT", "");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(githubRepositoryResponse()));
+
+      try {
+        const response = await createGitHubProjectRequest(app);
+        const body = await response.json();
+        const destination = join(managedRoot, "github", "canonical-owner", "canonical-repository");
+
+        expect(response.status).toBe(201);
+        expect(body.rootPath).toBe(destination);
+        expect(mockExecFile).toHaveBeenCalledWith(
+          "git",
+          ["clone", "https://github.com/canonical-owner/canonical-repository.git", destination],
+          expect.anything(),
+          expect.any(Function),
+        );
+      } finally {
+        rmSync(managedRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects a missing GitHub token before any external call", async () => {
+      vi.stubEnv("GITHUB_TOKEN", "");
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const response = await createGitHubProjectRequest(app);
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "github_authentication" });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+
+    it.each<{ status: number; code: string; headers: Record<string, string> }>([
+      { status: 404, code: "github_not_found", headers: {} },
+      { status: 403, code: "github_forbidden", headers: {} },
+      {
+        status: 403,
+        code: "github_rate_limited",
+        headers: { "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "2000000000" },
+      },
+    ])(
+      "maps GitHub API $status failures through structured fields",
+      async ({ status, code, headers }) => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ message: "upstream failure" }), {
+              status,
+              headers: { "Content-Type": "application/json", ...headers },
+            }),
+          ),
+        );
+
+        const response = await createGitHubProjectRequest(app);
+
+        expect(response.status).toBe(status);
+        expect(await response.json()).toMatchObject({ code });
+        expect(mockExecFile).not.toHaveBeenCalled();
+      },
+    );
+
+    it("preserves a pre-existing clone destination on conflict", async () => {
+      const managedRoot = mkdtempSync("/tmp/aif-github-conflict-");
+      const destination = join(managedRoot, "github", "canonical-owner", "canonical-repository");
+      mkdirSync(destination, { recursive: true });
+      const sentinel = join(destination, "keep.txt");
+      writeFileSync(sentinel, "keep");
+      vi.stubEnv("PROJECTS_MOUNT", managedRoot);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(() => Promise.resolve(githubRepositoryResponse())),
+      );
+
+      const response = await createGitHubProjectRequest(app);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "github_clone_conflict" });
+      expect(readFileSync(sentinel, "utf8")).toBe("keep");
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+
+    it("cleans a partial managed directory after clone failure", async () => {
+      const managedRoot = mkdtempSync("/tmp/aif-github-clone-fail-");
+      const destination = join(managedRoot, "github", "canonical-owner", "canonical-repository");
+      vi.stubEnv("PROJECTS_MOUNT", managedRoot);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(githubRepositoryResponse()));
+      mockExecFile.mockImplementationOnce((...args: unknown[]) => {
+        const callback = args.at(-1) as (error: Error) => void;
+        callback(
+          Object.assign(new Error("clone failed"), { code: 128, killed: false, signal: null }),
+        );
+        return {};
+      });
+
+      const response = await createGitHubProjectRequest(app);
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ code: "github_clone_failed" });
+      expect(existsSync(destination)).toBe(false);
+    });
+
+    it("preserves the clone error when managed-directory cleanup fails", async () => {
+      const managedRoot = mkdtempSync("/tmp/aif-github-cleanup-fail-");
+      vi.stubEnv("PROJECTS_MOUNT", managedRoot);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(githubRepositoryResponse()));
+      mockExecFile.mockImplementationOnce((...args: unknown[]) => {
+        const callback = args.at(-1) as (error: Error) => void;
+        callback(
+          Object.assign(new Error("clone failed"), { code: 128, killed: false, signal: null }),
+        );
+        return {};
+      });
+      mockRmSync.mockImplementationOnce(() => {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      });
+
+      const response = await createGitHubProjectRequest(app);
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ code: "github_clone_failed" });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ errorCode: "EACCES" }),
+        "Managed GitHub clone cleanup failed",
+      );
+    });
+
+    it("rolls back the database and managed directory when init fails", async () => {
+      const managedRoot = mkdtempSync("/tmp/aif-github-init-fail-");
+      const destination = join(managedRoot, "github", "canonical-owner", "canonical-repository");
+      vi.stubEnv("PROJECTS_MOUNT", managedRoot);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(githubRepositoryResponse()));
+      const { initProject: initProjectMock } = await import("@aif/runtime");
+      (initProjectMock as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        ok: false,
+        error: "ai-factory init failed",
+      });
+
+      const response = await createGitHubProjectRequest(app);
+
+      expect(response.status).toBe(500);
+      expect(existsSync(destination)).toBe(false);
+      expect(listEnabledGitHubRepositories()).toEqual([]);
+      const projectsResponse = await app.request("/projects");
+      expect(await projectsResponse.json()).toEqual([]);
+    });
+
+    it("allows exactly one concurrent request to claim a clone destination", async () => {
+      const managedRoot = mkdtempSync("/tmp/aif-github-race-");
+      vi.stubEnv("PROJECTS_MOUNT", managedRoot);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(() => Promise.resolve(githubRepositoryResponse())),
+      );
+      let finishFirstClone: (() => void) | undefined;
+      mockExecFile.mockImplementationOnce((...args: unknown[]) => {
+        const callback = args.at(-1) as (error: Error | null) => void;
+        finishFirstClone = () => callback(null);
+        return {};
+      });
+
+      const firstRequest = createGitHubProjectRequest(app);
+      await vi.waitFor(() => expect(mockExecFile).toHaveBeenCalledTimes(1));
+      const secondResponse = await createGitHubProjectRequest(app);
+      expect(secondResponse.status).toBe(409);
+
+      finishFirstClone?.();
+      const firstResponse = await firstRequest;
+      expect(firstResponse.status).toBe(201);
+      expect(mockExecFile).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("rejects foreign project-owned runtime profile defaults on create", async () => {

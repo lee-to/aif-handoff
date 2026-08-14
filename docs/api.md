@@ -62,6 +62,8 @@ Returns frontend-visible defaults and runtime readiness metadata.
   "useSubagents": false,
   "maxReviewIterations": 3,
   "autoReviewStrategy": "full_re_review",
+  "githubProjectCloneEnabled": false,
+  "githubIssuePrEnabled": false,
   "runtimeReadiness": {
     "availableRuntimeCount": 3,
     "runtimeProfileCount": 6,
@@ -285,7 +287,8 @@ POST /projects
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Project name (1-200 chars) |
-| `rootPath` | string | yes | Absolute path to project root, for example `/Users/me/projects/my-project`. With Docker, paths outside `PROJECTS_MOUNT` are resolved below that mount |
+| `rootPath` | string | conditional | Existing absolute project path. Required when `githubRepository` is omitted; cannot be combined with it |
+| `githubRepository` | string | conditional | GitHub repository in `owner/name` form. Required when `rootPath` is omitted; cannot be combined with it |
 | `plannerMaxBudgetUsd` | number | no | Budget for planner agent. If omitted, unlimited |
 | `planCheckerMaxBudgetUsd` | number | no | Budget for plan-checker agent. If omitted, unlimited |
 | `implementerMaxBudgetUsd` | number | no | Budget for implementer agent. If omitted, unlimited |
@@ -295,7 +298,21 @@ POST /projects
 | `defaultReviewRuntimeProfileId` | string\|null | no | Project-level review runtime default |
 | `defaultChatRuntimeProfileId` | string\|null | no | Project-level chat runtime default |
 
-**Response:** `201 Created` — the created project object.
+`githubRepository` requires `AIF_GITHUB_PROJECT_CLONE_ENABLED=true`; otherwise
+the API returns `403 feature_disabled` without calling GitHub or Git. The
+request is synchronous. With `githubRepository`, the API validates access
+using `GITHUB_TOKEN`, clones into `github/<canonical-owner>/<canonical-name>`
+below the managed projects root, saves the GitHub connection, and initializes
+the project from the cloned path. It does not run an issue sync.
+
+**Response:** `201 Created` — the created and initialized project object.
+
+**Errors:** `400` for an invalid source or missing token, `401`/`403`/`404` for
+GitHub access failures, `409` when the managed destination already exists,
+`422` for GitHub validation failures, `429` for rate limiting (with `retryAt`),
+`502` for upstream or clone failures, and `500` for persistence or project
+initialization failures. Failed GitHub-backed creation rolls back the project
+record, saved connection, and newly reserved clone directory.
 
 ### Update Project
 
@@ -303,7 +320,8 @@ POST /projects
 PUT /projects/:id
 ```
 
-**Body:** Same as Create Project.
+**Body:** Project settings plus required `rootPath`. Updating a project does not
+accept `githubRepository` and never clones a repository.
 
 **Response:** `200 OK` — the updated project object.
 

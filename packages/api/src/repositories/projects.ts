@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import { initProject } from "@aif/runtime";
-import { validateProjectRootPath, logger } from "@aif/shared";
+import { findMonorepoRoot, validateProjectRootPath, logger } from "@aif/shared";
 import type { CreateProjectInput, UpdateProjectOrganizationInput } from "@aif/shared";
 import { getApiRuntimeRegistry } from "../services/runtime.js";
 import {
@@ -25,6 +25,7 @@ import {
 } from "../services/github.js";
 
 const log = logger("projects-repo");
+const MONOREPO_ROOT = findMonorepoRoot(import.meta.dirname);
 
 function readContainerProjectsMount(): string {
   const configured = process.env.PROJECTS_MOUNT?.trim();
@@ -51,7 +52,7 @@ function resolveHostProjectsDir(hostProjectsDir: string): string {
   const hostRoot = process.env.PROJECTS_HOST_ROOT?.trim();
   return hostRoot && isAbsolute(hostRoot)
     ? resolve(hostRoot, hostProjectsDir)
-    : resolve(hostProjectsDir);
+    : resolve(MONOREPO_ROOT, hostProjectsDir);
 }
 
 function mapProjectPathToContainer(rootPath: string): string {
@@ -155,7 +156,7 @@ function resolveManagedProjectsRoot(): string {
   const projectsMount = process.env.PROJECTS_MOUNT?.trim();
   if (projectsMount && isAbsolute(projectsMount)) return resolve(projectsMount);
   const projectsDir = process.env.PROJECTS_DIR?.trim();
-  return projectsDir ? resolveHostProjectsDir(projectsDir) : resolve(process.cwd(), "projects");
+  return projectsDir ? resolveHostProjectsDir(projectsDir) : resolve(MONOREPO_ROOT, "projects");
 }
 
 function isSafePathSegment(value: string): boolean {

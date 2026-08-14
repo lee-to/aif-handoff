@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -844,6 +844,33 @@ describe("projects API", () => {
       ]);
       expect(serializedLogs).not.toContain("secret-token");
       expect(serializedLogs).not.toContain(options.env.GIT_CONFIG_VALUE_0);
+    });
+
+    it("resolves a relative native clone directory from the monorepo root", async () => {
+      const relativeRoot = ".test-projects-relative";
+      const managedRoot = join(repoRoot, relativeRoot);
+      rmSync(managedRoot, { recursive: true, force: true });
+      vi.stubEnv("PROJECTS_DIR", `./${relativeRoot}`);
+      vi.stubEnv("PROJECTS_HOST_ROOT", "");
+      vi.stubEnv("PROJECTS_MOUNT", "");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(githubRepositoryResponse()));
+
+      try {
+        const response = await createGitHubProjectRequest(app);
+        const body = await response.json();
+        const destination = join(managedRoot, "github", "canonical-owner", "canonical-repository");
+
+        expect(response.status).toBe(201);
+        expect(body.rootPath).toBe(destination);
+        expect(mockExecFile).toHaveBeenCalledWith(
+          "git",
+          ["clone", "https://github.com/canonical-owner/canonical-repository.git", destination],
+          expect.anything(),
+          expect.any(Function),
+        );
+      } finally {
+        rmSync(managedRoot, { recursive: true, force: true });
+      }
     });
 
     it("rejects a missing GitHub token before any external call", async () => {

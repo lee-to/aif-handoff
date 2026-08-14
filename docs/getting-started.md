@@ -36,11 +36,26 @@ live in the host `PROJECTS_DIR` bind mount.
 
 ### Docker Project Paths
 
-When you create a project in the UI, the **Root Path** field accepts an absolute
-path such as `/Users/me/projects/my-project`. The dev compose mounts the host
-directory `PROJECTS_DIR` at `PROJECTS_MOUNT` (default `/home/www`) in every
-container. With `PROJECTS_DIR=/Users/me/projects`, the example path is persisted
-as `/home/www/my-project`.
+When you create a project in the UI, choose one source:
+
+- **Existing Path** accepts an absolute path such as
+  `/Users/me/projects/my-project`.
+- **GitHub Repository** appears when
+  `AIF_GITHUB_PROJECT_CLONE_ENABLED=true`; it accepts `owner/name`, validates
+  it with `GITHUB_TOKEN`, clones it, and initializes the project from the
+  managed clone.
+
+For a native install, managed clones are stored under
+`PROJECTS_DIR/github/<owner>/<repository>` when `PROJECTS_DIR` is configured,
+or `./projects/github/<owner>/<repository>` otherwise. In Docker, they are
+stored at `PROJECTS_MOUNT/github/<owner>/<repository>` (default
+`/home/www/github/<owner>/<repository>`) and persist in the host
+`PROJECTS_DIR` bind mount.
+
+The dev compose mounts the host directory `PROJECTS_DIR` at `PROJECTS_MOUNT`
+(default `/home/www`) in every container. With
+`PROJECTS_DIR=/Users/me/projects`, an existing path such as
+`/Users/me/projects/my-project` is persisted as `/home/www/my-project`.
 
 Other POSIX absolute paths are resolved below `PROJECTS_MOUNT` instead of the
 container filesystem root.
@@ -55,6 +70,9 @@ PROJECTS_DIR=/srv/aif-projects docker compose up --build
 Create the host directory before `docker compose up`. If the bind-mount target
 is missing, Docker creates it as root-owned and the container's `node` user
 cannot write project files there.
+
+GitHub-backed creation only clones and initializes the project. It does not
+deploy the repository or configure Angie.
 
 ### Resetting Docker State
 

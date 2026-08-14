@@ -99,11 +99,19 @@ Development starts three services by default. If `MCP_PORT` is set to a valid in
 
 #### Project paths (host ↔ container)
 
-When you create a project in the UI, the **Root Path** field accepts an absolute
-path such as `/Users/me/projects/my-project`. The dev compose mounts the host
-directory `PROJECTS_DIR` at `PROJECTS_MOUNT` (default `/home/www`) in every
-container. With `PROJECTS_DIR=/Users/me/projects`, the example path is persisted
-as `/home/www/my-project`.
+When you create a project in the UI, choose either **Existing Path** (an
+absolute path such as `/Users/me/projects/my-project`) or **GitHub Repository**
+(`owner/name`). The GitHub option requires
+`AIF_GITHUB_PROJECT_CLONE_ENABLED=true` and `GITHUB_TOKEN`, clones
+synchronously, and initializes the managed path. It does not deploy the
+project or configure Angie.
+
+Managed clones use `PROJECTS_DIR/github/<owner>/<repository>` natively (or
+`./projects/github/...` when unset) and
+`PROJECTS_MOUNT/github/<owner>/<repository>` in Docker. The dev compose mounts
+the host `PROJECTS_DIR` at `PROJECTS_MOUNT` (default `/home/www`). With
+`PROJECTS_DIR=/Users/me/projects`, an existing path such as
+`/Users/me/projects/my-project` is persisted as `/home/www/my-project`.
 
 Other POSIX absolute paths are resolved below `PROJECTS_MOUNT` instead of the
 container filesystem root.

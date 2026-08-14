@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tansta
 import type {
   Project,
   CreateProjectInput,
+  UpdateProjectInput,
   ProjectTaskOverview,
   UpdateProjectOrganizationInput,
 } from "@aif/shared/browser";
@@ -60,7 +61,7 @@ export function useDeleteProject() {
 export function useUpdateProject() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: CreateProjectInput }) =>
+    mutationFn: ({ id, input }: { id: string; input: UpdateProjectInput }) =>
       api.updateProject(id, input),
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
@@ -107,7 +108,8 @@ export function useCreateProject() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreateProjectInput) => api.createProject(input),
-    onSuccess: () => {
+    onSuccess: (project) => {
+      queryClient.setQueryData<Project[]>(["projects"], (projects = []) => [...projects, project]);
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       invalidateProjectTaskOverviews(queryClient);
     },

@@ -108,7 +108,8 @@ export function useCreateProject() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreateProjectInput) => api.createProject(input),
-    onSuccess: () => {
+    onSuccess: (project) => {
+      queryClient.setQueryData<Project[]>(["projects"], (projects = []) => [...projects, project]);
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       invalidateProjectTaskOverviews(queryClient);
     },

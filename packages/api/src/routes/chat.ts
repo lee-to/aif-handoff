@@ -32,12 +32,15 @@ import {
 import {
   createChatMessage,
   createChatSession,
+  createThreadObjective,
   deleteChatSession,
   findChatSessionById,
   findCodexSessionFilePathBySessionId,
   findProjectById,
   findRuntimeProfileById,
   findTaskById,
+  getThreadWorkspace,
+  linkTaskToThread,
   listChatMessages,
   listChatSessions,
   listCodexSessionsByProjectRoot,
@@ -47,8 +50,17 @@ import {
   toTaskResponse,
   updateChatSession,
   updateChatSessionTimestamp,
+  updateThreadObjective,
+  unlinkTaskFromThread,
 } from "@aif/data";
-import { chatRequestSchema, createChatSessionSchema, updateChatSessionSchema } from "../schemas.js";
+import {
+  chatRequestSchema,
+  createChatSessionSchema,
+  createThreadObjectiveSchema,
+  linkThreadTaskSchema,
+  updateChatSessionSchema,
+  updateThreadObjectiveSchema,
+} from "../schemas.js";
 import { persistAttachments } from "../services/attachmentPersistence.js";
 import { readAttachment } from "../services/attachmentStorage.js";
 import { broadcast, sendToClient } from "../ws.js";
@@ -172,6 +184,9 @@ const log = logger("chat-route");
 const API_RUNTIME_LOG = "api-runtime";
 type CreateChatSessionPayload = z.infer<typeof createChatSessionSchema>;
 type UpdateChatSessionPayload = z.infer<typeof updateChatSessionSchema>;
+type CreateThreadObjectivePayload = z.infer<typeof createThreadObjectiveSchema>;
+type UpdateThreadObjectivePayload = z.infer<typeof updateThreadObjectiveSchema>;
+type LinkThreadTaskPayload = z.infer<typeof linkThreadTaskSchema>;
 type ChatRequestPayload = z.infer<typeof chatRequestSchema>;
 
 interface VirtualRuntimeSessionRef {
@@ -334,6 +349,7 @@ async function loadIndexedCodexVirtualSession(input: {
     agentSessionId: null,
     runtimeProfileId: input.runtimeProfileId,
     runtimeSessionId: meta.id,
+    status: "open",
     source: "agent",
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
@@ -808,10 +824,11 @@ chatRouter.get("/sessions", async (c) => {
             context.resolvedProfile.transport,
           ),
           projectId,
-          title: session.title || session.previewText || "Untitled",
+          title: (session.title || session.previewText || "Untitled").slice(0, 200),
           agentSessionId: null,
           runtimeProfileId: context.resolvedProfile.profileId,
           runtimeSessionId: session.sessionId,
+          status: "open",
           source: runtimeSourceFromTransport(context.resolvedProfile.transport),
           createdAt: session.sourceCreatedAt ?? session.createdAt,
           updatedAt: session.sourceUpdatedAt ?? session.updatedAt,
@@ -880,10 +897,11 @@ chatRouter.get("/sessions", async (c) => {
               context.resolvedProfile.transport,
             ),
             projectId,
-            title: session.title || "Untitled",
+            title: (session.title || "Untitled").slice(0, 200),
             agentSessionId: null,
             runtimeProfileId: context.resolvedProfile.profileId,
             runtimeSessionId: session.id,
+            status: "open",
             source: runtimeSourceFromTransport(context.resolvedProfile.transport),
             createdAt: session.createdAt,
             updatedAt: session.updatedAt,
@@ -929,6 +947,48 @@ chatRouter.post("/sessions", jsonValidator(createChatSessionSchema), async (c) =
   });
   if (runtimeValidation) {
     return c.json(runtimeValidation, 400);
+  }
+  if (body.runtimeSessionId) {
+    const project = findProjectById(body.projectId);
+    if (!project) return c.json({ error: "Project not found" }, 404);
+    const { context } = await resolveChatRuntimeAdapter(
+      body.projectId,
+      "session-claim",
+      buildContextAppend(project.name, null),
+    );
+    if ((body.runtimeProfileId ?? null) !== (context.resolvedProfile.profileId ?? null)) {
+      return c.json({ error: "Runtime profile does not match project session discovery" }, 400);
+    }
+    const runtimeId = context.resolvedProfile.runtimeId;
+    let found = false;
+    if (isLocalCodexRuntimeId(runtimeId)) {
+      found = listCodexSessionsByProjectRoot({
+        projectRoot: project.rootPath,
+        limit: 50,
+      }).some((session) => session.sessionId === body.runtimeSessionId);
+    } else {
+      const adapter = context.adapter;
+      const caps = resolveAdapterCapabilities(adapter, context.resolvedProfile.transport);
+      if (caps.supportsSessionList && adapter.listSessions) {
+        const sessions = await adapter.listSessions({
+          runtimeId,
+          providerId: context.resolvedProfile.providerId,
+          profileId: context.resolvedProfile.profileId,
+          projectRoot: project.rootPath,
+          transport: context.resolvedProfile.transport,
+          limit: 50,
+          options: {
+            ...context.resolvedProfile.options,
+            ...(context.resolvedProfile.baseUrl
+              ? { baseUrl: context.resolvedProfile.baseUrl }
+              : {}),
+          },
+          headers: context.resolvedProfile.headers,
+        });
+        found = sessions.some((session) => session.id === body.runtimeSessionId);
+      }
+    }
+    if (!found) return c.json({ error: "Runtime session not found in this project" }, 404);
   }
 
   const row = createChatSession({
@@ -1005,6 +1065,7 @@ chatRouter.get("/sessions/:id", async (c) => {
         agentSessionId: null,
         runtimeProfileId: lookupContext.runtimeProfileId,
         runtimeSessionId: info.id,
+        status: "open",
         source: runtimeSourceFromTransport(lookupContext.transport ?? RuntimeTransport.API),
         createdAt: info.createdAt,
         updatedAt: info.updatedAt,
@@ -1021,6 +1082,60 @@ chatRouter.get("/sessions/:id", async (c) => {
     return c.json({ error: "Chat session not found" }, 404);
   }
   return c.json(toChatSessionResponse(row));
+});
+
+// GET /chat/sessions/:id/workspace
+chatRouter.get("/sessions/:id/workspace", (c) => {
+  const workspace = getThreadWorkspace(c.req.param("id"));
+  return workspace ? c.json(workspace) : c.json({ error: "Thread not found" }, 404);
+});
+
+// POST /chat/sessions/:id/objectives
+chatRouter.post("/sessions/:id/objectives", jsonValidator(createThreadObjectiveSchema), (c) => {
+  const objective = createThreadObjective({
+    threadId: c.req.param("id"),
+    ...(c.req.valid("json") as CreateThreadObjectivePayload),
+  });
+  return objective ? c.json(objective, 201) : c.json({ error: "Thread not found" }, 404);
+});
+
+// PUT /chat/sessions/:id/objectives/:objectiveId
+chatRouter.put(
+  "/sessions/:id/objectives/:objectiveId",
+  jsonValidator(updateThreadObjectiveSchema),
+  (c) => {
+    const objective = updateThreadObjective(
+      c.req.param("id"),
+      c.req.param("objectiveId"),
+      c.req.valid("json") as UpdateThreadObjectivePayload,
+    );
+    return objective ? c.json(objective) : c.json({ error: "Objective not found or invalid" }, 404);
+  },
+);
+
+// PUT /chat/sessions/:id/tasks/:taskId
+chatRouter.put("/sessions/:id/tasks/:taskId", jsonValidator(linkThreadTaskSchema), (c) => {
+  const thread = findChatSessionById(c.req.param("id"));
+  const task = findTaskById(c.req.param("taskId"));
+  if (!thread || !task) return c.json({ error: "Thread or task not found" }, 404);
+  if (thread.projectId !== task.projectId) {
+    return c.json({ error: "Task and thread must belong to the same project" }, 400);
+  }
+  const body = c.req.valid("json") as LinkThreadTaskPayload;
+  const linked = linkTaskToThread({
+    threadId: thread.id,
+    taskId: task.id,
+    objectiveId: body.objectiveId,
+  });
+  return linked
+    ? c.json(getThreadWorkspace(thread.id))
+    : c.json({ error: "Objective does not belong to this thread" }, 400);
+});
+
+// DELETE /chat/sessions/:id/tasks/:taskId
+chatRouter.delete("/sessions/:id/tasks/:taskId", (c) => {
+  const removed = unlinkTaskFromThread(c.req.param("id"), c.req.param("taskId"));
+  return removed ? c.body(null, 204) : c.json({ error: "Task link not found" }, 404);
 });
 
 // GET /chat/sessions/:id/messages
@@ -1204,9 +1319,13 @@ chatRouter.put("/sessions/:id", jsonValidator(updateChatSessionSchema), async (c
 
   const row = updateChatSession(id, {
     title: body.title,
+    status: body.status,
     runtimeProfileId: body.runtimeProfileId,
     runtimeSessionId: body.runtimeSessionId,
   });
+  if (!row && body.status === "done") {
+    return c.json({ error: "Complete or drop required objectives before closing" }, 409);
+  }
   return c.json(row ? toChatSessionResponse(row) : null);
 });
 

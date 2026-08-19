@@ -64,7 +64,7 @@ export function SessionList({
           className="w-full gap-1.5 bg-primary/10 text-primary hover:bg-primary/20"
         >
           <Plus className="h-3.5 w-3.5" />
-          New Chat
+          New Thread
         </Button>
         <p className="mt-2 text-3xs uppercase tracking-[0.12em] text-muted-foreground">
           {projectName ? `Current Project: ${projectName}` : "Current Project"}
@@ -72,9 +72,7 @@ export function SessionList({
       </div>
       <div className="flex-1 overflow-y-auto overscroll-contain py-1">
         {sessions.length === 0 && (
-          <p className="px-3 py-4 text-center text-xs text-muted-foreground">
-            No conversations yet
-          </p>
+          <p className="px-3 py-4 text-center text-xs text-muted-foreground">No threads yet</p>
         )}
         {sessions.map((session) => (
           <div
@@ -139,6 +137,7 @@ export function SessionList({
                 <>
                   <p className="text-xs font-medium text-foreground truncate">{session.title}</p>
                   <p className="text-3xs text-muted-foreground">
+                    <span className="mr-1 uppercase font-semibold">{session.status}</span>
                     {session.source !== "web" && (
                       <span
                         className={cn(

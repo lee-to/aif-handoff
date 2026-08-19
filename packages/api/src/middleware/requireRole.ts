@@ -59,6 +59,7 @@ export function isAdminOnlyRoute(method: string, path: string): boolean {
   if (method === "DELETE" && (path.startsWith("/tasks/") || path.startsWith("/chat/"))) {
     return true;
   }
+  if (method === "PUT" && /^\/chat\/sessions\/[^/]+\/tasks\/[^/]+$/.test(path)) return true;
   return false;
 }
 

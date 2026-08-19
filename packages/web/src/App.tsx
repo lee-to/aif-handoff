@@ -75,6 +75,7 @@ function AppContent({
   );
   const [commandOpen, setCommandOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [projectWorkspace, setProjectWorkspace] = useState<"threads" | "execution">("threads");
   const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [density, setDensity] = useState<"comfortable" | "compact">(() => {
@@ -233,12 +234,43 @@ function AppContent({
           />
         )}
         {project ? (
-          <Board
-            projectId={project.id}
-            onTaskClick={handleTaskOpen}
-            density={density}
-            viewMode={viewMode}
-          />
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <Button
+                variant={projectWorkspace === "threads" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setProjectWorkspace("threads")}
+              >
+                Threads
+              </Button>
+              <Button
+                variant={projectWorkspace === "execution" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setProjectWorkspace("execution")}
+              >
+                Execution
+              </Button>
+            </div>
+            {projectWorkspace === "threads" ? (
+              <ChatPanel
+                key={`workspace-${project.id}`}
+                embedded
+                isOpen
+                projectId={project.id}
+                projectName={project.name}
+                taskId={selectedTaskId}
+                onClose={() => undefined}
+                onOpenTask={handleTaskOpen}
+              />
+            ) : (
+              <Board
+                projectId={project.id}
+                onTaskClick={handleTaskOpen}
+                density={density}
+                viewMode={viewMode}
+              />
+            )}
+          </div>
         ) : (
           <ProjectsOverview projects={projects ?? []} onSelectProject={handleSelectProject} />
         )}
@@ -256,7 +288,7 @@ function AppContent({
         }}
       />
 
-      {project && (
+      {project && projectWorkspace === "execution" && (
         <>
           <ChatPanel
             key={project.id}

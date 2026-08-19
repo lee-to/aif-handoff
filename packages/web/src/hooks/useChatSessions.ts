@@ -53,7 +53,8 @@ export function useChatSessions(projectId: string | null) {
   }, [projectId, queryClient]);
 
   const createMutation = useMutation({
-    mutationFn: (title?: string) => api.createChatSession({ projectId: projectId!, title }),
+    mutationFn: (input: Parameters<typeof api.createChatSession>[0]) =>
+      api.createChatSession(input),
     onSuccess: (session) => {
       console.debug("[useChatSessions] Created session %s", session.id);
       queryClient.invalidateQueries({ queryKey: ["chatSessions", projectId] });
@@ -83,8 +84,19 @@ export function useChatSessions(projectId: string | null) {
   });
 
   const createSession = useCallback(
-    (title?: string) => createMutation.mutateAsync(title),
-    [createMutation],
+    (title?: string) => createMutation.mutateAsync({ projectId: projectId!, title }),
+    [createMutation, projectId],
+  );
+
+  const claimSession = useCallback(
+    (session: ChatSession) =>
+      createMutation.mutateAsync({
+        projectId: projectId!,
+        title: session.title.slice(0, 200),
+        runtimeProfileId: session.runtimeProfileId,
+        runtimeSessionId: session.runtimeSessionId,
+      }),
+    [createMutation, projectId],
   );
 
   const deleteSession = useCallback(
@@ -130,6 +142,9 @@ export function useChatSessions(projectId: string | null) {
     pinActiveSession,
     clearActiveSession,
     createSession,
+    claimSession,
+    isClaiming: createMutation.isPending,
+    claimError: createMutation.error instanceof Error ? createMutation.error.message : null,
     deleteSession,
     renameSession,
     loadSessionMessages,

@@ -81,6 +81,43 @@ describe("useChatSessions", () => {
     expect(result.current.activeSessionId).toBe("s-new");
   });
 
+  it("claims a discovered runtime session and selects the persisted thread", async () => {
+    mockCreateChatSession.mockResolvedValue({
+      id: "s-claimed",
+      projectId: "proj-1",
+      title: "Existing Codex chat".repeat(20),
+      source: "web",
+    });
+    const discovered = {
+      id: "runtime:codex:runtime-1",
+      projectId: "proj-1",
+      title: "Existing Codex chat".repeat(20),
+      source: "cli" as const,
+      runtimeProfileId: "profile-1",
+      runtimeSessionId: "runtime-1",
+      status: "open" as const,
+      agentSessionId: null,
+      createdAt: "2026-08-19T00:00:00.000Z",
+      updatedAt: "2026-08-19T00:00:00.000Z",
+    };
+
+    const { result } = renderHook(() => useChatSessions("proj-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.claimSession(discovered);
+    });
+
+    expect(mockCreateChatSession).toHaveBeenCalledWith({
+      projectId: "proj-1",
+      title: "Existing Codex chat".repeat(20).slice(0, 200),
+      runtimeProfileId: "profile-1",
+      runtimeSessionId: "runtime-1",
+    });
+    expect(result.current.activeSessionId).toBe("s-claimed");
+  });
+
   it("deletes session and switches to next", async () => {
     mockListChatSessions.mockResolvedValue([
       { id: "s1", projectId: "proj-1", title: "Chat 1", updatedAt: "2026-01-01" },

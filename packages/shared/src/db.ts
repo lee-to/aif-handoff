@@ -292,11 +292,33 @@ function ensureTables(sqlite: Database.Database): void {
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Chat',
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'wip', 'waiting', 'blocked', 'done')),
       agent_session_id TEXT,
       runtime_profile_id TEXT,
       runtime_session_id TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS thread_objectives (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'dropped')),
+      required INTEGER NOT NULL DEFAULT 1,
+      drop_reason TEXT,
+      position REAL NOT NULL DEFAULT 1000.0,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS thread_task_links (
+      task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+      thread_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      objective_id TEXT REFERENCES thread_objectives(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     )
   `);
   sqlite.exec(`
@@ -1084,6 +1106,30 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 29,
+    description: "Add thread status, objectives, and optional task ownership",
+    sql: `
+      ALTER TABLE chat_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'wip', 'waiting', 'blocked', 'done'));
+      CREATE TABLE IF NOT EXISTS thread_objectives (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'dropped')),
+        required INTEGER NOT NULL DEFAULT 1,
+        drop_reason TEXT,
+        position REAL NOT NULL DEFAULT 1000.0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS thread_task_links (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        thread_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+        objective_id TEXT REFERENCES thread_objectives(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `,
+  },
 ];
 
 function splitSqlStatements(sqlText: string): string[] {
@@ -1362,6 +1408,9 @@ function ensureIndexes(sqlite: Database.Database): void {
     "CREATE INDEX IF NOT EXISTS idx_tasks_runtime_profile_id ON tasks(runtime_profile_id)",
     // Runtime profile lookups for chat sessions
     "CREATE INDEX IF NOT EXISTS idx_chat_sessions_runtime_profile_id ON chat_sessions(runtime_profile_id)",
+    // Thread workspace hydration
+    "CREATE INDEX IF NOT EXISTS idx_thread_objectives_thread ON thread_objectives(thread_id, position)",
+    "CREATE INDEX IF NOT EXISTS idx_thread_task_links_thread ON thread_task_links(thread_id, created_at)",
     // Usage event scope lookups for per-entity aggregation queries and dashboards
     "CREATE INDEX IF NOT EXISTS idx_usage_events_project ON usage_events(project_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_usage_events_task ON usage_events(task_id, created_at)",

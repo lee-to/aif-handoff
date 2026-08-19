@@ -63,6 +63,7 @@ function createApp(options: { cors?: boolean } = {}) {
   app.get("/board", (c) => c.json({ ok: true }));
   app.post("/tasks/example/comments", (c) => c.json({ ok: true }));
   app.delete("/tasks/example", (c) => c.json({ ok: true }));
+  app.put("/chat/sessions/thread-1/tasks/task-1", (c) => c.json({ ok: true }));
   app.post("/projects", (c) => c.json({ ok: true }));
   app.post("/tasks/example/broadcast", internalBroadcastAuth, (c) => c.json({ ok: true }));
   return app;
@@ -433,8 +434,11 @@ describe("Participants Mode request security", () => {
       ).status,
     ).toBe(200);
 
-    for (const path of ["/projects", "/tasks/example"]) {
-      const method = path === "/projects" ? "POST" : "DELETE";
+    for (const [path, method] of [
+      ["/projects", "POST"],
+      ["/tasks/example", "DELETE"],
+      ["/chat/sessions/thread-1/tasks/task-1", "PUT"],
+    ] as const) {
       const forbidden = await app.request(path, {
         method,
         headers: {

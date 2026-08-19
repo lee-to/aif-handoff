@@ -17,6 +17,10 @@ import type {
   UpdateChatSessionInput,
   ChatSessionMessage,
   ChatMessageAttachment,
+  ThreadObjective,
+  ThreadObjectiveStatus,
+  ThreadStatus,
+  ThreadWorkspace,
   RuntimeDescriptor,
   RuntimeProfile,
   CreateRuntimeProfileInput,
@@ -183,6 +187,7 @@ export function reportWebSocketAuthenticationFailure(): void {
 }
 
 export interface SettingsResponse {
+  kerryPilotMode?: boolean;
   useSubagents: boolean;
   maxReviewIterations: number;
   autoReviewStrategy: "full_re_review" | "closure_first";
@@ -848,6 +853,55 @@ export const api = {
 
   deleteChatSession(id: string): Promise<void> {
     return request(`/chat/sessions/${id}`, { method: "DELETE" });
+  },
+
+  getThreadWorkspace(id: string): Promise<ThreadWorkspace> {
+    return request<ThreadWorkspace>(`/chat/sessions/${id}/workspace`);
+  },
+
+  createThreadObjective(
+    threadId: string,
+    input: { title: string; required?: boolean },
+  ): Promise<ThreadObjective> {
+    return request<ThreadObjective>(`/chat/sessions/${threadId}/objectives`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateThreadObjective(
+    threadId: string,
+    objectiveId: string,
+    input: {
+      title?: string;
+      status?: ThreadObjectiveStatus;
+      required?: boolean;
+      dropReason?: string | null;
+    },
+  ): Promise<ThreadObjective> {
+    return request<ThreadObjective>(`/chat/sessions/${threadId}/objectives/${objectiveId}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+
+  linkTaskToThread(
+    threadId: string,
+    taskId: string,
+    objectiveId?: string | null,
+  ): Promise<ThreadWorkspace> {
+    return request<ThreadWorkspace>(`/chat/sessions/${threadId}/tasks/${taskId}`, {
+      method: "PUT",
+      body: JSON.stringify({ objectiveId: objectiveId ?? null }),
+    });
+  },
+
+  unlinkTaskFromThread(threadId: string, taskId: string): Promise<void> {
+    return request(`/chat/sessions/${threadId}/tasks/${taskId}`, { method: "DELETE" });
+  },
+
+  updateThreadStatus(threadId: string, status: ThreadStatus): Promise<ChatSession> {
+    return api.updateChatSession(threadId, { status });
   },
 
   // Runtime profiles

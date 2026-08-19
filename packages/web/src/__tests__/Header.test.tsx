@@ -113,7 +113,7 @@ const metrics: TaskMetricsSummary = {
   completionRate: 0,
 };
 
-function renderHeader(canManageConfiguration = true) {
+function renderHeader(canManageConfiguration = true, kerryPilotMode = false) {
   return render(
     <Header
       selectedProject={project}
@@ -129,6 +129,7 @@ function renderHeader(canManageConfiguration = true) {
       runtimeProfilesOpen={false}
       onToggleRuntimeProfiles={vi.fn()}
       canManageConfiguration={canManageConfiguration}
+      kerryPilotMode={kerryPilotMode}
     />,
   );
 }
@@ -154,6 +155,12 @@ describe("Header", () => {
     mockRuntimeProfiles = [];
     mockWarmupEnabled = false;
     mockWarmupData = undefined;
+  });
+
+  it("shows that execution is off in Kerry pilot mode", () => {
+    renderHeader(true, true);
+    expect(screen.getByText("PILOT · EXECUTION OFF")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Generate roadmap tasks" })).toBeDisabled();
   });
 
   it("hides the warmup entry point by default", () => {

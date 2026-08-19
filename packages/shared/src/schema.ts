@@ -6,6 +6,8 @@ import type {
   ExecutionOwner,
   ParticipantRole,
   TaskStatus,
+  ThreadObjectiveStatus,
+  ThreadStatus,
 } from "./types.js";
 
 export const projects = sqliteTable("projects", {
@@ -369,6 +371,7 @@ export const chatSessions = sqliteTable("chat_sessions", {
     .$defaultFn(() => crypto.randomUUID()),
   projectId: text("project_id").notNull(),
   title: text("title").notNull().default("New Chat"),
+  status: text("status").$type<ThreadStatus>().notNull().default("open"),
   agentSessionId: text("agent_session_id"),
   runtimeProfileId: text("runtime_profile_id"),
   runtimeSessionId: text("runtime_session_id"),
@@ -386,6 +389,45 @@ export const chatSessions = sqliteTable("chat_sessions", {
 
 export type ChatSessionRow = typeof chatSessions.$inferSelect;
 export type NewChatSessionRow = typeof chatSessions.$inferInsert;
+
+export const threadObjectives = sqliteTable("thread_objectives", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  threadId: text("thread_id")
+    .notNull()
+    .references(() => chatSessions.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  status: text("status").$type<ThreadObjectiveStatus>().notNull().default("open"),
+  required: integer("required", { mode: "boolean" }).notNull().default(true),
+  dropReason: text("drop_reason"),
+  position: real("position").notNull().default(1000),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type ThreadObjectiveRow = typeof threadObjectives.$inferSelect;
+
+export const threadTaskLinks = sqliteTable("thread_task_links", {
+  taskId: text("task_id")
+    .primaryKey()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  threadId: text("thread_id")
+    .notNull()
+    .references(() => chatSessions.id, { onDelete: "cascade" }),
+  objectiveId: text("objective_id").references(() => threadObjectives.id, {
+    onDelete: "set null",
+  }),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+});
+
+export type ThreadTaskLinkRow = typeof threadTaskLinks.$inferSelect;
 
 export const chatMessages = sqliteTable("chat_messages", {
   id: text("id")

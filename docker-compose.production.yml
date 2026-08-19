@@ -116,7 +116,7 @@ services:
     environment:
       - DATABASE_URL=/data/aif.sqlite
       - API_BASE_URL=http://api:3009
-      - AGENT_BYPASS_PERMISSIONS=true
+      - AGENT_BYPASS_PERMISSIONS=false
       - LOG_LEVEL=info
       - PROJECTS_MOUNT=${PROJECTS_MOUNT:-/home/www}
       # Codex OAuth login proxy is dev-only. Production should rely on OPENAI_API_KEY.

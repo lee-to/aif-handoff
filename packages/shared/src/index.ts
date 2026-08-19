@@ -13,6 +13,8 @@ export {
   githubIssues,
   runtimeProfiles,
   chatSessions,
+  threadObjectives,
+  threadTaskLinks,
   chatMessages,
   usageEvents,
   runtimeWarmupSessions,
@@ -49,6 +51,8 @@ export type {
   NewRuntimeProfileRow,
   ChatSessionRow,
   NewChatSessionRow,
+  ThreadObjectiveRow,
+  ThreadTaskLinkRow,
   ChatMessageRow,
   NewChatMessageRow,
   UsageEventRow,
@@ -157,10 +161,15 @@ export {
   type RuntimeLimitEventPayload,
   type WarmupBroadcastPayload,
   type ChatSessionSource,
+  type ThreadStatus,
+  type ThreadObjectiveStatus,
   type ChatSession,
   type CreateChatSessionInput,
   type UpdateChatSessionInput,
   type ChatSessionMessage,
+  type ThreadObjective,
+  type ThreadTaskReference,
+  type ThreadWorkspace,
 } from "./types.js";
 
 // Database

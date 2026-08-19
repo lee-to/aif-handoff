@@ -9,10 +9,16 @@ const mockClearMessages = vi.fn();
 const mockSetExplore = vi.fn();
 const mockPinActiveSession = vi.fn();
 const mockClearActiveSession = vi.fn();
+const mockClaimSession = vi.fn();
 const mockDeleteSession = vi.fn();
 const mockRenameSession = vi.fn();
 const mockSetActiveSessionId = vi.fn();
 const mockNewSession = vi.fn();
+const mockCreateObjective = vi.fn();
+const mockUpdateObjective = vi.fn();
+const mockLinkTask = vi.fn();
+const mockUnlinkTask = vi.fn();
+const mockUpdateThreadStatus = vi.fn();
 
 let mockMessages: {
   role: string;
@@ -53,6 +59,11 @@ let mockEffectiveChatRuntime: {
   } | null;
   resolved?: { runtimeId: string; providerId: string; model: string | null };
 } | null = null;
+let mockWorkspace: Record<string, unknown> | undefined;
+let mockWorkspaceError: string | null = null;
+let mockClaimError: string | null = null;
+let mockIsClaiming = false;
+let mockProjectTasks: Array<Record<string, unknown>> = [];
 
 vi.mock("@/hooks/useChat", () => ({
   useChat: () => ({
@@ -76,6 +87,9 @@ vi.mock("@/hooks/useChatSessions", () => ({
     setActiveSessionId: mockSetActiveSessionId,
     pinActiveSession: mockPinActiveSession,
     clearActiveSession: mockClearActiveSession,
+    claimSession: mockClaimSession,
+    isClaiming: mockIsClaiming,
+    claimError: mockClaimError,
     createSession: vi.fn(),
     deleteSession: mockDeleteSession,
     renameSession: mockRenameSession,
@@ -85,7 +99,21 @@ vi.mock("@/hooks/useChatSessions", () => ({
 
 vi.mock("@/hooks/useTasks", () => ({
   useTask: () => ({ data: null }),
+  useTasks: () => ({ data: mockProjectTasks }),
   useCreateTask: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+vi.mock("@/hooks/useThreadWorkspace", () => ({
+  useThreadWorkspace: () => ({
+    workspace: mockWorkspace,
+    isLoading: false,
+    error: mockWorkspaceError,
+    createObjective: mockCreateObjective,
+    updateObjective: mockUpdateObjective,
+    linkTask: mockLinkTask,
+    unlinkTask: mockUnlinkTask,
+    updateStatus: mockUpdateThreadStatus,
+  }),
 }));
 
 vi.mock("@/hooks/useRuntimeProfiles", () => ({
@@ -107,6 +135,8 @@ function renderPanel(
     projectId: string | null;
     projectName: string | null;
     taskId: string | null;
+    embedded: boolean;
+    kerryPilotMode: boolean;
   }> = {},
 ) {
   return render(
@@ -132,16 +162,34 @@ describe("ChatPanel", () => {
     mockSessions = [];
     mockRuntimeProfiles = [];
     mockEffectiveChatRuntime = null;
+    mockWorkspace = undefined;
+    mockWorkspaceError = null;
+    mockClaimError = null;
+    mockIsClaiming = false;
+    mockProjectTasks = [];
     mockSendMessage.mockClear();
     mockClearMessages.mockClear();
     mockSetExplore.mockClear();
     mockPinActiveSession.mockClear();
     mockClearActiveSession.mockClear();
+    mockClaimSession.mockClear();
+    mockClaimSession.mockResolvedValue({});
     mockDeleteSession.mockClear();
     mockRenameSession.mockClear();
     mockSetActiveSessionId.mockClear();
     mockNewSession.mockClear();
+    mockCreateObjective.mockClear();
+    mockUpdateObjective.mockClear();
+    mockLinkTask.mockClear();
+    mockUnlinkTask.mockClear();
+    mockUpdateThreadStatus.mockClear();
     mockOnClose.mockClear();
+  });
+
+  it("disables chat execution in Kerry pilot mode", () => {
+    renderPanel({ kerryPilotMode: true });
+    expect(screen.getByPlaceholderText("Execution is disabled in pilot mode")).toBeDisabled();
+    expect(screen.getByLabelText("Send message")).toBeDisabled();
   });
 
   it("shows active chat runtime profile and model", () => {
@@ -197,6 +245,107 @@ describe("ChatPanel", () => {
   it("shows empty state when no messages", () => {
     renderPanel();
     expect(screen.getByText('Ask anything about "Project One"')).toBeDefined();
+  });
+
+  it("shows thread objectives, linked tasks, and pull request evidence", () => {
+    mockActiveSessionId = "session-1";
+    mockSessions = [
+      {
+        id: "session-1",
+        title: "Thread first",
+        source: "web",
+        status: "wip",
+        runtimeProfileId: null,
+        updatedAt: "2026-08-19T00:00:00.000Z",
+      },
+    ];
+    mockWorkspace = {
+      thread: {
+        ...mockSessions[0],
+        projectId: "p-1",
+        agentSessionId: null,
+        createdAt: "2026-08-19T00:00:00.000Z",
+      },
+      objectives: [
+        { id: "objective-1", title: "Ship the feature", status: "open", required: true },
+      ],
+      tasks: [
+        {
+          taskId: "task-1",
+          title: "Implement workspace",
+          status: "review",
+          objectiveId: "objective-1",
+          prNumber: 42,
+          prUrl: "https://github.com/example/repo/pull/42",
+          prState: "open",
+        },
+      ],
+    };
+
+    renderPanel({ embedded: true });
+
+    expect(screen.getByText("Ship the feature")).toBeDefined();
+    expect(screen.getByText("Implement workspace")).toBeDefined();
+    expect(screen.getByRole("link", { name: /PR #42/ })).toBeDefined();
+  });
+
+  it("claims a discovered runtime chat without sending a model message", () => {
+    mockActiveSessionId = "runtime:codex:runtime-1";
+    mockSessions = [
+      {
+        id: "runtime:codex:runtime-1",
+        projectId: "p-1",
+        title: "Existing Codex chat",
+        source: "cli",
+        runtimeProfileId: "profile-1",
+        runtimeSessionId: "runtime-1",
+        status: "open",
+        createdAt: "2026-08-19T00:00:00.000Z",
+        updatedAt: "2026-08-19T00:00:00.000Z",
+      },
+    ];
+
+    renderPanel({ embedded: true });
+    fireEvent.click(screen.getByRole("button", { name: "Add objectives and tasks" }));
+
+    expect(mockClaimSession).toHaveBeenCalledWith(mockSessions[0]);
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("disables the claim action and shows claim errors", () => {
+    mockActiveSessionId = "runtime:codex:runtime-1";
+    mockSessions = [
+      {
+        id: "runtime:codex:runtime-1",
+        title: "Existing Codex chat",
+        source: "cli",
+        runtimeSessionId: "runtime-1",
+      },
+    ];
+    mockIsClaiming = true;
+    mockClaimError = "Runtime session not found in this project";
+
+    renderPanel({ embedded: true });
+
+    expect(screen.getByRole("button", { name: "Adding..." })).toHaveProperty("disabled", true);
+    expect(screen.getByText("Runtime session not found in this project")).toBeDefined();
+  });
+
+  it("shows workspace loading errors even when no workspace data loaded", () => {
+    mockActiveSessionId = "session-1";
+    mockSessions = [
+      {
+        id: "session-1",
+        title: "Broken workspace",
+        source: "web",
+        runtimeProfileId: null,
+      },
+    ];
+    mockWorkspaceError = "Unable to load thread workspace";
+
+    renderPanel({ embedded: true });
+
+    expect(screen.getByText("Unable to load thread workspace")).toBeDefined();
   });
 
   it("renders user and assistant messages", () => {
@@ -416,7 +565,7 @@ describe("ChatPanel", () => {
 
   it("does not call onClose on inside click", () => {
     renderPanel();
-    fireEvent.pointerDown(screen.getByText("AI Chat"));
+    fireEvent.pointerDown(screen.getByText("New Thread"));
     expect(mockOnClose).not.toHaveBeenCalled();
   });
 

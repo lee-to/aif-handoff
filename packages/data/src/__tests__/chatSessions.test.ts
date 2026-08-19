@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { projects } from "@aif/shared";
+import { githubIssues, projects, tasks } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
@@ -22,6 +22,11 @@ const {
   updateChatSessionTimestamp,
   toChatSessionResponse,
   toChatMessageResponse,
+  createThreadObjective,
+  updateThreadObjective,
+  getThreadWorkspace,
+  linkTaskToThread,
+  unlinkTaskFromThread,
   upsertCodexSessions,
   upsertCodexSessionFiles,
   listCodexSessionsByProjectRoot,
@@ -50,12 +55,29 @@ describe("chat sessions data layer", () => {
       expect(session!.agentSessionId).toBeNull();
       expect(session!.runtimeProfileId).toBeNull();
       expect(session!.runtimeSessionId).toBeNull();
+      expect(session!.status).toBe("open");
     });
 
     it("creates a session with custom title", () => {
       const session = createChatSession({ projectId: "proj-1", title: "My Chat" });
       expect(session).toBeDefined();
       expect(session!.title).toBe("My Chat");
+    });
+
+    it("returns the existing thread when the runtime session was already claimed", () => {
+      const first = createChatSession({
+        projectId: "proj-1",
+        title: "Existing chat",
+        runtimeSessionId: "runtime-1",
+      });
+      const second = createChatSession({
+        projectId: "proj-1",
+        title: "Existing chat again",
+        runtimeSessionId: "runtime-1",
+      });
+
+      expect(second?.id).toBe(first?.id);
+      expect(listChatSessions("proj-1")).toHaveLength(1);
     });
 
     it("persists runtime profile and session metadata from the create payload", () => {
@@ -138,6 +160,101 @@ describe("chat sessions data layer", () => {
 
       expect(findChatSessionById(session!.id)).toBeUndefined();
       expect(listChatMessages(session!.id)).toHaveLength(0);
+    });
+  });
+
+  describe("thread workspace", () => {
+    it("requires required objectives to be resolved before closing", () => {
+      const session = createChatSession({ projectId: "proj-1", title: "Ship thread view" })!;
+      const objective = createThreadObjective({
+        threadId: session.id,
+        title: "Show objectives",
+      })!;
+
+      expect(updateChatSession(session.id, { status: "done" })).toBeUndefined();
+      updateThreadObjective(session.id, objective.id, { status: "done" });
+      expect(updateChatSession(session.id, { status: "done" })?.status).toBe("done");
+      expect(
+        createThreadObjective({ threadId: session.id, title: "Required after close" }),
+      ).toBeUndefined();
+      expect(
+        updateThreadObjective(session.id, objective.id, { status: "open" }),
+      ).toBeUndefined();
+    });
+
+    it("links same-project tasks and projects their pull request evidence", () => {
+      const session = createChatSession({ projectId: "proj-1" })!;
+      const objective = createThreadObjective({ threadId: session.id, title: "Deliver code" })!;
+      testDb.current
+        .insert(tasks)
+        .values({ id: "task-1", projectId: "proj-1", title: "Implement view" })
+        .run();
+      testDb.current
+        .insert(githubIssues)
+        .values({
+          projectId: "proj-1",
+          issueNumber: 12,
+          taskId: "task-1",
+          nodeId: "issue-node-12",
+          htmlUrl: "https://github.com/example/repo/issues/12",
+          state: "open",
+          metadataJson: "{}",
+          sourceUpdatedAt: "2026-08-19T00:00:00.000Z",
+          lastSyncedAt: "2026-08-19T00:00:00.000Z",
+          prNumber: 34,
+          prUrl: "https://github.com/example/repo/pull/34",
+          prState: "open",
+          prChecksStatus: "success",
+          reviewState: "approved",
+        })
+        .run();
+
+      expect(
+        linkTaskToThread({
+          threadId: session.id,
+          taskId: "task-1",
+          objectiveId: objective.id,
+        }),
+      ).toBe(true);
+      expect(getThreadWorkspace(session.id)?.tasks).toEqual([
+        expect.objectContaining({
+          taskId: "task-1",
+          objectiveId: objective.id,
+          prNumber: 34,
+          prState: "open",
+          prChecksStatus: "success",
+          reviewState: "approved",
+        }),
+      ]);
+      expect(unlinkTaskFromThread(session.id, "task-1")).toBe(true);
+      expect(getThreadWorkspace(session.id)?.tasks).toHaveLength(0);
+    });
+
+    it("rejects task links across project and objective boundaries", () => {
+      seedProject("proj-2");
+      const first = createChatSession({ projectId: "proj-1" })!;
+      const second = createChatSession({ projectId: "proj-2" })!;
+      const otherObjective = createThreadObjective({
+        threadId: second.id,
+        title: "Other project",
+      })!;
+      testDb.current
+        .insert(tasks)
+        .values({ id: "task-2", projectId: "proj-2", title: "Other task" })
+        .run();
+      testDb.current
+        .insert(tasks)
+        .values({ id: "task-1", projectId: "proj-1", title: "Local task" })
+        .run();
+
+      expect(linkTaskToThread({ threadId: first.id, taskId: "task-2" })).toBe(false);
+      expect(
+        linkTaskToThread({
+          threadId: first.id,
+          taskId: "task-1",
+          objectiveId: otherObjective.id,
+        }),
+      ).toBe(false);
     });
   });
 
@@ -280,6 +397,7 @@ describe("chat sessions data layer", () => {
         agentSessionId: null,
         runtimeProfileId: null,
         runtimeSessionId: null,
+        status: "open",
         source: "web",
         createdAt: session!.createdAt,
         updatedAt: session!.updatedAt,

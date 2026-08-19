@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from "hono";
-import { logger, type ParticipantRole } from "@aif/shared";
+import { getEnv, logger, type ParticipantRole } from "@aif/shared";
 import { getParticipantAuth, type ParticipantApiEnv } from "./participantAuth.js";
 
 const log = logger("participant-authorization");
@@ -59,6 +59,7 @@ export function isAdminOnlyRoute(method: string, path: string): boolean {
   if (method === "DELETE" && (path.startsWith("/tasks/") || path.startsWith("/chat/"))) {
     return true;
   }
+  if (method === "PUT" && /^\/chat\/sessions\/[^/]+\/tasks\/[^/]+$/.test(path)) return true;
   return false;
 }
 
@@ -78,5 +79,31 @@ export function participantRouteAuthorization(): MiddlewareHandler<ParticipantAp
       return adminGuard(c, next);
     }
     return memberGuard(c, next);
+  };
+}
+
+export function pilotModePolicy(): MiddlewareHandler<ParticipantApiEnv> {
+  return async (c, next) => {
+    if (!getEnv().AIF_KERRY_PILOT_MODE) return next();
+
+    const method = c.req.method;
+    const path = c.req.path;
+    const blocked =
+      (method === "POST" && path === "/chat") ||
+      (method === "POST" && /\/chat\/[^/]+\/abort$/.test(path)) ||
+      (method === "GET" && /\/chat\/sessions\/(runtime:|sdk:)/.test(path)) ||
+      (method !== "GET" && method !== "HEAD" && path.startsWith("/runtime-profiles")) ||
+      (method !== "GET" && method !== "HEAD" && path.startsWith("/settings")) ||
+      (method !== "GET" && method !== "HEAD" && path.startsWith("/auth/codex")) ||
+      /\/projects\/[^/]+\/github(?:\/|$)/.test(path) ||
+      /\/projects\/[^/]+\/(roadmap|warmup|auto-queue|broadcast)/.test(path) ||
+      /\/tasks\/[^/]+\/(broadcast|handoff|sync-plan|events|run-qa)$/.test(path);
+
+    if (!blocked) return next();
+    log.warn({ method, path, code: "pilot_execution_disabled" }, "Pilot blocked execution");
+    return c.json(
+      { error: "Execution is disabled in the Kerry pilot", code: "pilot_execution_disabled" },
+      403,
+    );
   };
 }

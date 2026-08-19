@@ -78,250 +78,271 @@ const exactOriginSchema = z.string().transform((value, context) => {
   }
 });
 
-const envSchema = z.object({
-  ANTHROPIC_API_KEY: z.string().optional(),
-  ANTHROPIC_AUTH_TOKEN: z.string().optional(),
-  ANTHROPIC_BASE_URL: z.string().optional(),
-  ANTHROPIC_MODEL: z.string().optional(),
-  OPENAI_API_KEY: z.string().optional(),
-  OPENAI_BASE_URL: z.string().optional(),
-  OPENAI_MODEL: z.string().optional(),
-  CODEX_CLI_PATH: z.string().optional(),
-  HTTP_PROXY: z.string().optional(),
-  HTTPS_PROXY: z.string().optional(),
-  ALL_PROXY: z.string().optional(),
-  NO_PROXY: z.string().optional(),
-  http_proxy: z.string().optional(),
-  https_proxy: z.string().optional(),
-  all_proxy: z.string().optional(),
-  no_proxy: z.string().optional(),
-  AIF_RUNTIME_MODULES: z.preprocess(parseRuntimeModules, z.array(z.string())).default([]),
-  AIF_DEFAULT_RUNTIME_ID: z.string().default("claude"),
-  AIF_DEFAULT_PROVIDER_ID: z.string().default("anthropic"),
-  PORT: z.coerce.number().default(3009),
-  POLL_INTERVAL_MS: z.coerce.number().default(30000),
-  AGENT_STAGE_STALE_TIMEOUT_MS: z.coerce.number().default(90 * 60 * 1000),
-  AGENT_STAGE_STALE_MAX_RETRY: z.coerce.number().default(3),
-  AGENT_STAGE_RUN_TIMEOUT_MS: z.coerce.number().default(60 * 60 * 1000),
-  AGENT_QUERY_START_TIMEOUT_MS: z.coerce.number().default(60 * 1000),
-  AGENT_QUERY_START_RETRY_DELAY_MS: z.coerce.number().default(1000),
-  AGENT_FIRST_ACTIVITY_TIMEOUT_MS: z.coerce.number().default(60 * 1000),
-  API_RUNTIME_START_TIMEOUT_MS: z.coerce.number().default(60 * 1000),
-  API_RUNTIME_RUN_TIMEOUT_MS: z.coerce.number().default(120 * 1000),
-  DATABASE_URL: z.string().default("./data/aif.sqlite"),
-  CORS_ORIGIN: z.string().default("*"),
-  PARTICIPANTS_MODE_ENABLED: booleanEnvSchema.default(false),
-  PARTICIPANT_SESSION_TTL_SECONDS: z.coerce
-    .number()
-    .int()
-    .min(300)
-    .max(31_536_000)
-    .default(7 * 24 * 60 * 60),
-  PARTICIPANT_SESSION_COOKIE_NAME: z
-    .string()
-    .regex(/^[A-Za-z0-9_-]+$/)
-    .default("aif_participant_session"),
-  PARTICIPANT_SESSION_COOKIE_SECURE: booleanEnvSchema.default(false),
-  PARTICIPANT_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).default(60_000),
-  PARTICIPANT_LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000).default(10),
-  PARTICIPANT_ALLOWED_ORIGINS: z
-    .preprocess(parseCommaSeparatedValues, z.array(exactOriginSchema).min(1))
-    .default(["http://localhost:5180"]),
-  API_BASE_URL: z.string().default("http://localhost:3009"),
-  AGENT_QUERY_AUDIT_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
+const envSchema = z
+  .object({
+    ANTHROPIC_API_KEY: z.string().optional(),
+    ANTHROPIC_AUTH_TOKEN: z.string().optional(),
+    ANTHROPIC_BASE_URL: z.string().optional(),
+    ANTHROPIC_MODEL: z.string().optional(),
+    OPENAI_API_KEY: z.string().optional(),
+    OPENAI_BASE_URL: z.string().optional(),
+    OPENAI_MODEL: z.string().optional(),
+    CODEX_CLI_PATH: z.string().optional(),
+    HTTP_PROXY: z.string().optional(),
+    HTTPS_PROXY: z.string().optional(),
+    ALL_PROXY: z.string().optional(),
+    NO_PROXY: z.string().optional(),
+    http_proxy: z.string().optional(),
+    https_proxy: z.string().optional(),
+    all_proxy: z.string().optional(),
+    no_proxy: z.string().optional(),
+    AIF_RUNTIME_MODULES: z.preprocess(parseRuntimeModules, z.array(z.string())).default([]),
+    AIF_KERRY_PILOT_MODE: booleanEnvSchema.default(false),
+    AIF_DEFAULT_RUNTIME_ID: z.string().default("claude"),
+    AIF_DEFAULT_PROVIDER_ID: z.string().default("anthropic"),
+    PORT: z.coerce.number().default(3009),
+    POLL_INTERVAL_MS: z.coerce.number().default(30000),
+    AGENT_STAGE_STALE_TIMEOUT_MS: z.coerce.number().default(90 * 60 * 1000),
+    AGENT_STAGE_STALE_MAX_RETRY: z.coerce.number().default(3),
+    AGENT_STAGE_RUN_TIMEOUT_MS: z.coerce.number().default(60 * 60 * 1000),
+    AGENT_QUERY_START_TIMEOUT_MS: z.coerce.number().default(60 * 1000),
+    AGENT_QUERY_START_RETRY_DELAY_MS: z.coerce.number().default(1000),
+    AGENT_FIRST_ACTIVITY_TIMEOUT_MS: z.coerce.number().default(60 * 1000),
+    API_RUNTIME_START_TIMEOUT_MS: z.coerce.number().default(60 * 1000),
+    API_RUNTIME_RUN_TIMEOUT_MS: z.coerce.number().default(120 * 1000),
+    DATABASE_URL: z.string().default("./data/aif.sqlite"),
+    CORS_ORIGIN: z.string().default("*"),
+    PARTICIPANTS_MODE_ENABLED: booleanEnvSchema.default(false),
+    PARTICIPANT_SESSION_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(300)
+      .max(31_536_000)
+      .default(7 * 24 * 60 * 60),
+    PARTICIPANT_SESSION_COOKIE_NAME: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]+$/)
+      .default("aif_participant_session"),
+    PARTICIPANT_SESSION_COOKIE_SECURE: booleanEnvSchema.default(false),
+    PARTICIPANT_LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).default(60_000),
+    PARTICIPANT_LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000).default(10),
+    PARTICIPANT_ALLOWED_ORIGINS: z
+      .preprocess(parseCommaSeparatedValues, z.array(exactOriginSchema).min(1))
+      .default(["http://localhost:5180"]),
+    API_BASE_URL: z.string().default("http://localhost:3009"),
+    AGENT_QUERY_AUDIT_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(true),
+    INTERNAL_BROADCAST_TOKEN: z.string().optional(),
+    LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("debug"),
+    ACTIVITY_LOG_MODE: z
+      .preprocess((value) => {
+        if (typeof value !== "string") return "sync";
         const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(true),
-  INTERNAL_BROADCAST_TOKEN: z.string().optional(),
-  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("debug"),
-  ACTIVITY_LOG_MODE: z
-    .preprocess((value) => {
-      if (typeof value !== "string") return "sync";
-      const normalized = value.trim().toLowerCase();
-      if (!(ACTIVITY_LOG_MODES as readonly string[]).includes(normalized)) {
-        log.warn(
-          { value, fallback: "sync" },
-          "Invalid ACTIVITY_LOG_MODE value, falling back to sync",
-        );
-        return "sync";
-      }
-      return normalized;
-    }, z.enum(ACTIVITY_LOG_MODES))
-    .default("sync"),
-  ACTIVITY_LOG_BATCH_SIZE: z.coerce.number().min(1).default(20),
-  ACTIVITY_LOG_BATCH_MAX_AGE_MS: z.coerce.number().min(100).default(5000),
-  ACTIVITY_LOG_QUEUE_LIMIT: z.coerce.number().min(1).default(500),
-  AGENT_WAKE_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(true),
-  AGENT_BYPASS_PERMISSIONS: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(true),
-  COORDINATOR_MAX_CONCURRENT_TASKS: z.coerce.number().min(1).max(100).default(12),
-  COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT: z.coerce.number().min(1).max(10).default(3),
-  COORDINATOR_MAX_CONCURRENT_PROJECTS: z.coerce.number().min(1).max(10).default(4),
-  AGENT_CHAT_MAX_TURNS: z.coerce.number().min(1).default(50),
-  AGENT_MAX_REVIEW_ITERATIONS: z.coerce.number().min(1).default(3),
-  AGENT_AUTO_REVIEW_STRATEGY: z.enum(AUTO_REVIEW_STRATEGIES).default("full_re_review"),
-  AGENT_USE_SUBAGENTS: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_USAGE_LIMITS_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_STAGE_RUNTIME_PIN_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_WARMUP_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_QA_PIPELINE_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_TASK_WORKTREES_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_GITHUB_PROJECT_CLONE_ENABLED: booleanEnvSchema.default(false),
-  AIF_GITHUB_ISSUE_PR_ENABLED: booleanEnvSchema.default(false),
-  AIF_RUNTIME_SESSION_FORK_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_ENABLE_CODEX_LOGIN_PROXY: z
-    .preprocess((value) => {
-      if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase();
-        if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
-        if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
-      }
-      return value;
-    }, z.boolean())
-    .default(false),
-  AIF_CODEX_LOGIN_BROKER_PORT: z.coerce.number().default(3010),
-  AGENT_INTERNAL_URL: z.string().default("http://agent:3010"),
-  AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED: booleanEnvSchema.default(false),
-  TELEGRAM_BOT_API_URL: z.string().optional(),
-  TELEGRAM_BOT_TOKEN: z.string().optional(),
-  TELEGRAM_USER_ID: z.string().optional(),
-});
+        if (!(ACTIVITY_LOG_MODES as readonly string[]).includes(normalized)) {
+          log.warn(
+            { value, fallback: "sync" },
+            "Invalid ACTIVITY_LOG_MODE value, falling back to sync",
+          );
+          return "sync";
+        }
+        return normalized;
+      }, z.enum(ACTIVITY_LOG_MODES))
+      .default("sync"),
+    ACTIVITY_LOG_BATCH_SIZE: z.coerce.number().min(1).default(20),
+    ACTIVITY_LOG_BATCH_MAX_AGE_MS: z.coerce.number().min(100).default(5000),
+    ACTIVITY_LOG_QUEUE_LIMIT: z.coerce.number().min(1).default(500),
+    AGENT_WAKE_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(true),
+    AGENT_BYPASS_PERMISSIONS: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(true),
+    COORDINATOR_MAX_CONCURRENT_TASKS: z.coerce.number().min(1).max(100).default(12),
+    COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT: z.coerce.number().min(1).max(10).default(3),
+    COORDINATOR_MAX_CONCURRENT_PROJECTS: z.coerce.number().min(1).max(10).default(4),
+    AGENT_CHAT_MAX_TURNS: z.coerce.number().min(1).default(50),
+    AGENT_MAX_REVIEW_ITERATIONS: z.coerce.number().min(1).default(3),
+    AGENT_AUTO_REVIEW_STRATEGY: z.enum(AUTO_REVIEW_STRATEGIES).default("full_re_review"),
+    AGENT_USE_SUBAGENTS: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_USAGE_LIMITS_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_STAGE_RUNTIME_PIN_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_WARMUP_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_QA_PIPELINE_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_TASK_WORKTREES_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_GITHUB_PROJECT_CLONE_ENABLED: booleanEnvSchema.default(false),
+    AIF_GITHUB_ISSUE_PR_ENABLED: booleanEnvSchema.default(false),
+    AIF_RUNTIME_SESSION_FORK_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_ENABLE_CODEX_LOGIN_PROXY: z
+      .preprocess((value) => {
+        if (typeof value === "string") {
+          const normalized = value.trim().toLowerCase();
+          if (BOOLEAN_TRUE_VALUES.has(normalized)) return true;
+          if (BOOLEAN_FALSE_VALUES.has(normalized)) return false;
+        }
+        return value;
+      }, z.boolean())
+      .default(false),
+    AIF_CODEX_LOGIN_BROKER_PORT: z.coerce.number().default(3010),
+    AGENT_INTERNAL_URL: z.string().default("http://agent:3010"),
+    AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED: booleanEnvSchema.default(false),
+    TELEGRAM_BOT_API_URL: z.string().optional(),
+    TELEGRAM_BOT_TOKEN: z.string().optional(),
+    TELEGRAM_USER_ID: z.string().optional(),
+  })
+  .superRefine((env, context) => {
+    if (!env.AIF_KERRY_PILOT_MODE) return;
+
+    const unsafe: Array<[boolean, string]> = [
+      [!env.PARTICIPANTS_MODE_ENABLED, "PARTICIPANTS_MODE_ENABLED must be true"],
+      [env.AGENT_WAKE_ENABLED, "AGENT_WAKE_ENABLED must be false"],
+      [env.AGENT_BYPASS_PERMISSIONS, "AGENT_BYPASS_PERMISSIONS must be false"],
+      [env.AIF_WARMUP_ENABLED, "AIF_WARMUP_ENABLED must be false"],
+      [env.AIF_QA_PIPELINE_ENABLED, "AIF_QA_PIPELINE_ENABLED must be false"],
+      [env.AIF_GITHUB_PROJECT_CLONE_ENABLED, "AIF_GITHUB_PROJECT_CLONE_ENABLED must be false"],
+      [env.AIF_GITHUB_ISSUE_PR_ENABLED, "AIF_GITHUB_ISSUE_PR_ENABLED must be false"],
+      [env.AIF_RUNTIME_SESSION_FORK_ENABLED, "AIF_RUNTIME_SESSION_FORK_ENABLED must be false"],
+      [env.AIF_ENABLE_CODEX_LOGIN_PROXY, "AIF_ENABLE_CODEX_LOGIN_PROXY must be false"],
+      [env.AIF_RUNTIME_MODULES.length > 0, "AIF_RUNTIME_MODULES must be empty"],
+    ];
+    for (const [invalid, message] of unsafe) {
+      if (invalid) context.addIssue({ code: "custom", message });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

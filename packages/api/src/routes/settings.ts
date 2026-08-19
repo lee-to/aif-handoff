@@ -87,6 +87,7 @@ export async function buildSettingsOverview() {
     const runtimeProfiles = listRuntimeProfiles();
     const enabledProfiles = runtimeProfiles.filter((profile) => profile.enabled);
     return {
+      kerryPilotMode: env.AIF_KERRY_PILOT_MODE,
       useSubagents: env.AGENT_USE_SUBAGENTS,
       maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
       autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,
@@ -112,6 +113,7 @@ export async function buildSettingsOverview() {
     const allProfiles = listRuntimeProfiles();
     const enabledProfiles = listRuntimeProfiles({ enabledOnly: true });
     return {
+      kerryPilotMode: env.AIF_KERRY_PILOT_MODE,
       useSubagents: env.AGENT_USE_SUBAGENTS,
       maxReviewIterations: env.AGENT_MAX_REVIEW_ITERATIONS,
       autoReviewStrategy: env.AGENT_AUTO_REVIEW_STRATEGY,

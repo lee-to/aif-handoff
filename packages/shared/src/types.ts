@@ -913,6 +913,8 @@ export interface RuntimeLimitEventPayload {
 // ── Chat session types ──────────────────────────────────────
 
 export type ChatSessionSource = "web" | "cli" | "agent";
+export type ThreadStatus = "open" | "wip" | "waiting" | "blocked" | "done";
+export type ThreadObjectiveStatus = "open" | "done" | "dropped";
 
 export interface ChatSession {
   id: string;
@@ -921,6 +923,7 @@ export interface ChatSession {
   agentSessionId: string | null;
   runtimeProfileId?: string | null;
   runtimeSessionId?: string | null;
+  status: ThreadStatus;
   source: ChatSessionSource;
   createdAt: string;
   updatedAt: string;
@@ -935,9 +938,40 @@ export interface CreateChatSessionInput {
 
 export interface UpdateChatSessionInput {
   title?: string;
+  status?: ThreadStatus;
   agentSessionId?: string | null;
   runtimeProfileId?: string | null;
   runtimeSessionId?: string | null;
+}
+
+export interface ThreadObjective {
+  id: string;
+  threadId: string;
+  title: string;
+  status: ThreadObjectiveStatus;
+  required: boolean;
+  dropReason: string | null;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ThreadTaskReference {
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  objectiveId: string | null;
+  prNumber: number | null;
+  prUrl: string | null;
+  prState: "open" | "closed" | "merged" | null;
+  prChecksStatus: "pending" | "success" | "failure" | null;
+  reviewState: "pending" | "approved" | "changes_requested" | null;
+}
+
+export interface ThreadWorkspace {
+  thread: ChatSession;
+  objectives: ThreadObjective[];
+  tasks: ThreadTaskReference[];
 }
 
 export interface ChatMessageAttachment {

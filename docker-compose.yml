@@ -60,7 +60,7 @@ services:
     environment:
       - DATABASE_URL=/data/aif.sqlite
       - API_BASE_URL=http://api:3009
-      - AGENT_BYPASS_PERMISSIONS=true
+      - AGENT_BYPASS_PERMISSIONS=false
       - AIF_ENABLE_CODEX_LOGIN_PROXY=true
       - AIF_CODEX_LOGIN_BROKER_PORT=3010
       - AGENT_INTERNAL_URL=http://agent:3010

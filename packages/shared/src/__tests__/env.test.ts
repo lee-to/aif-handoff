@@ -53,6 +53,7 @@ describe("env validation", () => {
     expect(result.OPENAI_MODEL).toBeUndefined();
     expect(result.CODEX_CLI_PATH).toBeUndefined();
     expect(result.AIF_RUNTIME_MODULES).toEqual([]);
+    expect(result.AIF_KERRY_PILOT_MODE).toBe(false);
     expect(result.TELEGRAM_BOT_API_URL).toBeUndefined();
     expect(result.AGENT_QUERY_AUDIT_ENABLED).toBe(true);
     expect(result.LOG_LEVEL).toBe("debug");
@@ -116,6 +117,31 @@ describe("env validation", () => {
     expect(() =>
       validateEnv({ PARTICIPANT_ALLOWED_ORIGINS: "https://team.example.test/path" }),
     ).toThrow();
+  });
+
+  it("requires fail-closed settings in Kerry pilot mode", () => {
+    const safePilot = {
+      AIF_KERRY_PILOT_MODE: "true",
+      PARTICIPANTS_MODE_ENABLED: "true",
+      AGENT_WAKE_ENABLED: "false",
+      AGENT_BYPASS_PERMISSIONS: "false",
+    };
+
+    expect(validateEnv(safePilot).AIF_KERRY_PILOT_MODE).toBe(true);
+    for (const unsafe of [
+      { PARTICIPANTS_MODE_ENABLED: "false" },
+      { AGENT_WAKE_ENABLED: "true" },
+      { AGENT_BYPASS_PERMISSIONS: "true" },
+      { AIF_WARMUP_ENABLED: "true" },
+      { AIF_QA_PIPELINE_ENABLED: "true" },
+      { AIF_GITHUB_PROJECT_CLONE_ENABLED: "true" },
+      { AIF_GITHUB_ISSUE_PR_ENABLED: "true" },
+      { AIF_RUNTIME_SESSION_FORK_ENABLED: "true" },
+      { AIF_ENABLE_CODEX_LOGIN_PROXY: "true" },
+      { AIF_RUNTIME_MODULES: "unsafe-runtime" },
+    ]) {
+      expect(() => validateEnv({ ...safePilot, ...unsafe })).toThrow();
+    }
   });
 
   it("should parse AIF_WARMUP_ENABLED boolean values", () => {

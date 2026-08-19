@@ -40,7 +40,7 @@ export function createToolContext(env: McpEnv): ToolContext {
     "Shared tool context created",
   );
 
-  return { rateLimiter };
+  return { rateLimiter, kerryPilotMode: Boolean(env.kerryPilotMode) };
 }
 
 /**
@@ -67,9 +67,11 @@ export function createMcpServer(context: ToolContext): McpServer {
   registerListProjects(server, context);
 
   // Register write tools
-  registerCreateTask(server, context);
-  registerUpdateTask(server, context);
-  registerSyncStatus(server, context);
+  if (!context.kerryPilotMode) {
+    registerCreateTask(server, context);
+    registerUpdateTask(server, context);
+    registerSyncStatus(server, context);
+  }
   registerPushPlan(server, context);
   registerAnnotatePlan(server, context);
 

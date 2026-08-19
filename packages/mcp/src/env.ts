@@ -27,6 +27,8 @@ export interface McpEnv {
   httpMultiSession: boolean;
   /** Whether Participants Mode is enabled in the shared application. */
   participantsModeEnabled: boolean;
+  /** Kerry pilot exposes planning tools but no task execution mutations. */
+  kerryPilotMode?: boolean;
   /** Dedicated bearer token for HTTP MCP. Never used for participant sessions. */
   authToken: string | null;
 }
@@ -91,6 +93,7 @@ export function loadMcpEnv(): McpEnv {
     rateLimitWriteBurst: parseInt(process.env.MCP_RATE_LIMIT_WRITE_BURST || "5", 10),
     httpMultiSession: parseBooleanFlag(process.env.AIF_MCP_HTTP_MULTI_SESSION_ENABLED),
     participantsModeEnabled: Boolean(sharedEnv.PARTICIPANTS_MODE_ENABLED),
+    kerryPilotMode: sharedEnv.AIF_KERRY_PILOT_MODE,
     authToken: process.env.MCP_AUTH_TOKEN?.trim() || null,
   };
 

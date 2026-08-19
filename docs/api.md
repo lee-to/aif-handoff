@@ -1503,12 +1503,32 @@ GET /chat/sessions?projectId=<uuid>
 POST /chat/sessions
 PUT /chat/sessions/:id
 DELETE /chat/sessions/:id
+GET /chat/sessions/:id/workspace
+POST /chat/sessions/:id/objectives
+PUT /chat/sessions/:id/objectives/:objectiveId
+PUT /chat/sessions/:id/tasks/:taskId
+DELETE /chat/sessions/:id/tasks/:taskId
 ```
 
 Chat sessions persist the runtime profile chosen when the session starts. This keeps older conversations tied to the runtime they were created with even if the project's current default changes later.
 For local Codex runtimes, session discovery uses the indexed `codex_sessions` read-model. Session detail/message reads resolve `sessionId -> filePath` from the same index before compatibility fallback to runtime-adapter lookups.
 
 `POST` and `PUT` accept `runtimeProfileId` as an optional field. The value must be either a global profile or one owned by the same project.
+
+The project workspace treats persisted chat sessions as threads. A thread has an independent
+`status` (`open`, `wip`, `waiting`, `blocked`, or `done`), ordered objectives, and optional task
+links. A task can belong to at most one thread. Linking rejects tasks from another project and
+objectives from another thread. `GET .../workspace` returns each linked task together with any
+GitHub pull-request number, URL, state, checks, and review evidence already synchronized for that
+task. Pull requests remain evidence for a task; they do not replace the thread or objective. When
+Participants Mode is enabled, linking or unlinking a task requires an administrator session.
+Discovered Codex or Claude sessions can be claimed as managed threads without sending a new model
+message. A claim is accepted only when the runtime session is visible in that project's current
+runtime discovery, and repeated claims return the existing managed thread.
+
+Required objectives must be `done` or `dropped` before the thread can move to `done`. Dropping an
+objective requires a non-empty `dropReason`. A completed thread cannot receive a new objective or
+reopen a required objective.
 
 ### Permissions
 

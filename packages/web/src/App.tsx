@@ -10,6 +10,7 @@ import { useProjectTaskOverviews, useProjects } from "./hooks/useProjects";
 import { useTasks } from "./hooks/useTasks";
 import { useAuth } from "./hooks/useAuth";
 import { useTheme } from "./hooks/useTheme";
+import { useSettings } from "./hooks/useSettings";
 import { useKeyboardShortcut } from "./hooks/useKeyboardShortcut";
 import { ChatBubble } from "./components/chat/ChatBubble";
 import { ChatPanel } from "./components/chat/ChatPanel";
@@ -67,6 +68,8 @@ function AppContent({
   useCommitToasts();
   const { theme, toggleTheme } = useTheme();
   const { data: projects } = useProjects();
+  const { data: settings } = useSettings();
+  const kerryPilotMode = settings?.kerryPilotMode ?? false;
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     () => readInitialSelection().projectId,
   );
@@ -75,6 +78,7 @@ function AppContent({
   );
   const [commandOpen, setCommandOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [projectWorkspace, setProjectWorkspace] = useState<"threads" | "execution">("threads");
   const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [density, setDensity] = useState<"comfortable" | "compact">(() => {
@@ -195,6 +199,7 @@ function AppContent({
   return (
     <div className="app-pattern-bg min-h-screen text-foreground">
       <Header
+        kerryPilotMode={kerryPilotMode}
         selectedProject={project}
         onSelectProject={handleSelectProject}
         onDeselectProject={() => {
@@ -233,12 +238,44 @@ function AppContent({
           />
         )}
         {project ? (
-          <Board
-            projectId={project.id}
-            onTaskClick={handleTaskOpen}
-            density={density}
-            viewMode={viewMode}
-          />
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <Button
+                variant={projectWorkspace === "threads" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setProjectWorkspace("threads")}
+              >
+                Threads
+              </Button>
+              <Button
+                variant={projectWorkspace === "execution" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setProjectWorkspace("execution")}
+              >
+                Execution
+              </Button>
+            </div>
+            {projectWorkspace === "threads" ? (
+              <ChatPanel
+                kerryPilotMode={kerryPilotMode}
+                key={`workspace-${project.id}`}
+                embedded
+                isOpen
+                projectId={project.id}
+                projectName={project.name}
+                taskId={selectedTaskId}
+                onClose={() => undefined}
+                onOpenTask={handleTaskOpen}
+              />
+            ) : (
+              <Board
+                projectId={project.id}
+                onTaskClick={handleTaskOpen}
+                density={density}
+                viewMode={viewMode}
+              />
+            )}
+          </div>
         ) : (
           <ProjectsOverview projects={projects ?? []} onSelectProject={handleSelectProject} />
         )}
@@ -256,9 +293,10 @@ function AppContent({
         }}
       />
 
-      {project && (
+      {project && projectWorkspace === "execution" && (
         <>
           <ChatPanel
+            kerryPilotMode={kerryPilotMode}
             key={project.id}
             isOpen={chatOpen}
             projectId={project.id}

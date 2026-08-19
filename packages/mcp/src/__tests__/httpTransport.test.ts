@@ -28,7 +28,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
 });
 
 // Import the handler from server.ts — NOT index.ts, which self-runs main().
-const { createMcpHttpHandler, createToolContext } = await import("../server.js");
+const { createMcpHttpHandler, createMcpServer, createToolContext } = await import("../server.js");
 
 const env = {
   apiUrl: "http://localhost:3009",
@@ -197,6 +197,26 @@ describe("MCP HTTP transport — multi-session (opt-in)", () => {
       expect(context.rateLimiter.check("listTasks", "read")).toBe(true);
     }
     expect(context.rateLimiter.check("listTasks", "read")).toBe(false);
+  });
+
+  it("does not register task execution tools in Kerry pilot mode", () => {
+    const server = createMcpServer(createToolContext({ ...env, kerryPilotMode: true }));
+    const tools = Object.keys(
+      (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools,
+    );
+
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        "handoff_list_tasks",
+        "handoff_get_task",
+        "handoff_search_tasks",
+        "handoff_list_projects",
+        "handoff_push_plan",
+      ]),
+    );
+    expect(tools).not.toEqual(
+      expect.arrayContaining(["handoff_create_task", "handoff_update_task", "handoff_sync_status"]),
+    );
   });
 });
 

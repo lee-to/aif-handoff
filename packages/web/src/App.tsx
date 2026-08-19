@@ -10,6 +10,7 @@ import { useProjectTaskOverviews, useProjects } from "./hooks/useProjects";
 import { useTasks } from "./hooks/useTasks";
 import { useAuth } from "./hooks/useAuth";
 import { useTheme } from "./hooks/useTheme";
+import { useSettings } from "./hooks/useSettings";
 import { useKeyboardShortcut } from "./hooks/useKeyboardShortcut";
 import { ChatBubble } from "./components/chat/ChatBubble";
 import { ChatPanel } from "./components/chat/ChatPanel";
@@ -67,6 +68,8 @@ function AppContent({
   useCommitToasts();
   const { theme, toggleTheme } = useTheme();
   const { data: projects } = useProjects();
+  const { data: settings } = useSettings();
+  const kerryPilotMode = settings?.kerryPilotMode ?? false;
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     () => readInitialSelection().projectId,
   );
@@ -196,6 +199,7 @@ function AppContent({
   return (
     <div className="app-pattern-bg min-h-screen text-foreground">
       <Header
+        kerryPilotMode={kerryPilotMode}
         selectedProject={project}
         onSelectProject={handleSelectProject}
         onDeselectProject={() => {
@@ -253,6 +257,7 @@ function AppContent({
             </div>
             {projectWorkspace === "threads" ? (
               <ChatPanel
+                kerryPilotMode={kerryPilotMode}
                 key={`workspace-${project.id}`}
                 embedded
                 isOpen
@@ -291,6 +296,7 @@ function AppContent({
       {project && projectWorkspace === "execution" && (
         <>
           <ChatPanel
+            kerryPilotMode={kerryPilotMode}
             key={project.id}
             isOpen={chatOpen}
             projectId={project.id}

@@ -18,7 +18,7 @@ import { createCodexIndexService } from "./services/codexIndex.js";
 import { createGracefulShutdownHandler } from "./shutdown.js";
 import { participantAuth, type ParticipantApiEnv } from "./middleware/participantAuth.js";
 import { participantCsrf } from "./middleware/csrf.js";
-import { participantRouteAuthorization } from "./middleware/requireRole.js";
+import { participantRouteAuthorization, pilotModePolicy } from "./middleware/requireRole.js";
 import { participantCors } from "./middleware/participantCors.js";
 
 const log = logger("server");
@@ -37,6 +37,7 @@ app.use("*", requestLogger);
 app.use("*", participantAuth);
 app.use("*", participantRouteAuthorization());
 app.use("*", participantCsrf());
+app.use("*", pilotModePolicy());
 
 // Health check
 app.get("/health", (c) => {
@@ -115,6 +116,7 @@ const recoveredQaRuns = resetStaleQaRuns();
 if (recoveredQaRuns > 0) {
   log.warn({ recoveredQaRuns }, "Reset stale running QA runs to error after restart");
 }
+const pilotMode = getEnv().AIF_KERRY_PILOT_MODE;
 const codexIndexService = createCodexIndexService();
 
 const server = startServer({
@@ -123,7 +125,7 @@ const server = startServer({
   webSocketServer,
   injectWebSocket,
   onStarted() {
-    void codexIndexService.start();
+    if (!pilotMode) void codexIndexService.start();
   },
   logger: log,
 });

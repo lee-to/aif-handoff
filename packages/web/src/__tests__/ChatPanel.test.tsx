@@ -136,6 +136,7 @@ function renderPanel(
     projectName: string | null;
     taskId: string | null;
     embedded: boolean;
+    kerryPilotMode: boolean;
   }> = {},
 ) {
   return render(
@@ -183,6 +184,12 @@ describe("ChatPanel", () => {
     mockUnlinkTask.mockClear();
     mockUpdateThreadStatus.mockClear();
     mockOnClose.mockClear();
+  });
+
+  it("disables chat execution in Kerry pilot mode", () => {
+    renderPanel({ kerryPilotMode: true });
+    expect(screen.getByPlaceholderText("Execution is disabled in pilot mode")).toBeDisabled();
+    expect(screen.getByLabelText("Send message")).toBeDisabled();
   });
 
   it("shows active chat runtime profile and model", () => {

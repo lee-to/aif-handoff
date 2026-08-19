@@ -4,6 +4,7 @@ import type { RateLimiter } from "../middleware/rateLimit.js";
 
 export interface ToolContext {
   rateLimiter: RateLimiter;
+  kerryPilotMode?: boolean;
 }
 
 type LooseToolCallback = (args: unknown) => Promise<unknown> | unknown;

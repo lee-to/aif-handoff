@@ -60,6 +60,7 @@ interface ChatPanelProps {
   onClose: () => void;
   onOpenTask?: (taskId: string) => void;
   embedded?: boolean;
+  kerryPilotMode?: boolean;
 }
 
 export function ChatPanel({
@@ -70,6 +71,7 @@ export function ChatPanel({
   onClose,
   onOpenTask,
   embedded = false,
+  kerryPilotMode = false,
 }: ChatPanelProps) {
   const [showSessions, setShowSessions] = useState(embedded);
 
@@ -799,7 +801,7 @@ export function ChatPanel({
             variant="ghost"
             size="icon"
             onClick={() => fileInputRef.current?.click()}
-            disabled={isStreaming || pendingFiles.length >= MAX_CHAT_ATTACHMENTS}
+            disabled={kerryPilotMode || isStreaming || pendingFiles.length >= MAX_CHAT_ATTACHMENTS}
             className="h-9 w-9 shrink-0 border-0 text-muted-foreground"
             aria-label="Attach file"
           >
@@ -810,7 +812,10 @@ export function ChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a question..."
+            placeholder={
+              kerryPilotMode ? "Execution is disabled in pilot mode" : "Ask a question..."
+            }
+            disabled={kerryPilotMode}
             rows={1}
             containerClassName="flex-1"
             className="max-h-32 min-h-[2.25rem] resize-none bg-secondary/50"
@@ -827,7 +832,7 @@ export function ChatPanel({
           ) : (
             <Button
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={kerryPilotMode || !input.trim()}
               aria-label="Send message"
               className="h-auto self-stretch w-9 shrink-0 rounded px-0"
             >

@@ -795,6 +795,14 @@ chatRouter.get("/sessions", async (c) => {
   const dbRows = listChatSessions(projectId);
   const dbSessions = dbRows.map(toChatSessionResponse);
 
+  if (getEnv().AIF_KERRY_PILOT_MODE) {
+    return c.json(
+      dbSessions
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .slice(0, 20),
+    );
+  }
+
   // Collect linked external runtime session IDs to avoid duplicates
   const linkedRuntimeSessionIds = new Set(
     dbRows.map((r) => r.runtimeSessionId ?? r.agentSessionId).filter(Boolean) as string[],

@@ -16,6 +16,7 @@ import { useEffectiveChatRuntime } from "@/hooks/useRuntimeProfiles";
 import { useUsageLimitsEnabled, useWarmupEnabled } from "@/hooks/useSettings";
 import { useProjectWarmup } from "@/hooks/useProjectWarmup";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ProjectSelector } from "@/components/project/ProjectSelector";
 import { WarmupDialog } from "@/components/project/WarmupDialog";
@@ -56,6 +57,7 @@ interface Props {
   isLoggingOut?: boolean;
   onChangePassword?: (input: { currentPassword: string; newPassword: string }) => Promise<unknown>;
   isChangingPassword?: boolean;
+  kerryPilotMode?: boolean;
 }
 
 export function Header({
@@ -79,6 +81,7 @@ export function Header({
   isLoggingOut = false,
   onChangePassword = async () => undefined,
   isChangingPassword = false,
+  kerryPilotMode = false,
 }: Props) {
   const { theme, toggleTheme } = useTheme();
   const headerRef = useRef<HTMLElement>(null);
@@ -165,6 +168,7 @@ export function Header({
             onDeselect={onDeselectProject}
             canManage={canManageConfiguration}
           />
+          {kerryPilotMode && <Badge variant="secondary">PILOT · EXECUTION OFF</Badge>}
         </div>
 
         <div className="ml-auto flex items-center gap-2.5">
@@ -222,7 +226,7 @@ export function Header({
             variant="outline"
             size="sm"
             onClick={() => setRoadmapOpen((v) => !v)}
-            disabled={!selectedProject}
+            disabled={!selectedProject || kerryPilotMode}
             className="gap-1 font-mono text-3xs"
             aria-label="Generate roadmap tasks"
           >

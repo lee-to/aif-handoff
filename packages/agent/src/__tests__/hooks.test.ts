@@ -39,6 +39,7 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
     OPENAI_BASE_URL: undefined,
     CODEX_CLI_PATH: undefined,
     AIF_RUNTIME_MODULES: [],
+    AIF_KERRY_PILOT_MODE: false,
     AIF_DEFAULT_RUNTIME_ID: "claude",
     AIF_DEFAULT_PROVIDER_ID: "anthropic",
     PORT: 3009,

@@ -611,7 +611,32 @@ describe("AddTaskForm", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
       expect(mutateCreateTask).toHaveBeenCalledWith(
-        expect.objectContaining({ autoQa: false }),
+        expect.objectContaining({ autoQa: false, autoQaCheck: false }),
+        expect.any(Object),
+      );
+    });
+
+    it("submits the separate QA Check opt-in after auto QA is enabled", () => {
+      render(<AddTaskForm projectId="p-1" />);
+
+      fireEvent.click(screen.getByText("Add task"));
+      const checkboxes = screen.getAllByRole("checkbox");
+      const autoQa = checkboxes.find((checkbox) =>
+        checkbox.closest("label")?.textContent?.includes("Run QA after done"),
+      )!;
+      const autoQaCheck = checkboxes.find((checkbox) =>
+        checkbox.closest("label")?.textContent?.includes("Run QA Check after QA"),
+      )!;
+      expect(autoQaCheck).toBeDisabled();
+      fireEvent.click(autoQa);
+      fireEvent.click(autoQaCheck);
+      fireEvent.change(screen.getByPlaceholderText("Task title"), {
+        target: { value: "Task with automatic QA Check" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(mutateCreateTask).toHaveBeenCalledWith(
+        expect.objectContaining({ autoQa: true, autoQaCheck: true }),
         expect.any(Object),
       );
     });

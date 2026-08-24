@@ -339,10 +339,14 @@ export interface Task {
   runPlanImprove: boolean;
   runPostVerify: boolean;
   autoQa: boolean;
+  autoQaCheck: boolean;
   qaChangeSummary: string | null;
   qaTestPlan: string | null;
   qaTestCases: string | null;
   qaStatus: "idle" | "running" | "done" | "error";
+  qaCheckReport: string | null;
+  qaCheckStatus: "idle" | "running" | "done" | "error";
+  qaCheckPlaywrightConfigured: boolean | null;
   status: TaskStatus;
   priority: number;
   position: number;
@@ -504,6 +508,7 @@ export interface CreateTaskInput {
   runPlanImprove?: boolean;
   runPostVerify?: boolean;
   autoQa?: boolean;
+  autoQaCheck?: boolean;
   maxReviewIterations?: number;
   paused?: boolean;
   runtimeProfileId?: string | null;
@@ -531,10 +536,14 @@ export interface UpdateTaskInput {
   runPlanImprove?: boolean;
   runPostVerify?: boolean;
   autoQa?: boolean;
+  autoQaCheck?: boolean;
   qaChangeSummary?: string | null;
   qaTestPlan?: string | null;
   qaTestCases?: string | null;
   qaStatus?: "idle" | "running" | "done" | "error";
+  qaCheckReport?: string | null;
+  qaCheckStatus?: "idle" | "running" | "done" | "error";
+  qaCheckPlaywrightConfigured?: boolean | null;
   plan?: string | null;
   implementationLog?: string | null;
   reviewComments?: string | null;

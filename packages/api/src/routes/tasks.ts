@@ -52,6 +52,7 @@ import {
   releaseTaskClaim,
   updateTaskPositionOnly,
   tryStartQaRun,
+  tryStartQaCheckRun,
   findParticipantById,
   getTaskOwnership,
   handoffTaskExecution,
@@ -64,7 +65,8 @@ import { validateProjectScopedRuntimeProfileSelections } from "../services/runti
 import { getParticipantAuth, type ParticipantApiEnv } from "../middleware/participantAuth.js";
 
 const log = logger("tasks-route");
-const QA_LOCK_DURATION_MS = Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) + 5 * 60 * 1000;
+const QA_LOCK_DURATION_MS =
+  Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000) * 2 + 5 * 60 * 1000;
 
 export const tasksRouter = new Hono<ParticipantApiEnv>();
 
@@ -163,6 +165,33 @@ function parseTaskOwnershipFilters(
   };
 }
 
+async function runClaimedQaCheck(
+  projectId: string,
+  taskId: string,
+  executionRoot: string,
+): Promise<void> {
+  try {
+    const { runQaCheckQuery } = await import("../services/qaCheckRunner.js");
+    const result = await runQaCheckQuery({ projectId, taskId, executionRoot });
+    if (result.ok) {
+      log.info({ taskId, projectId }, "QA Check dispatch completed");
+    } else {
+      log.error({ taskId, projectId, error: result.error }, "QA Check dispatch failed");
+    }
+  } catch (error) {
+    log.error({ taskId, projectId, error }, "QA Check dispatch failed before runner completed");
+    try {
+      updateTask(taskId, { qaCheckStatus: "error" });
+      const failedTask = findTaskById(taskId);
+      if (failedTask) {
+        broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(failedTask) });
+      }
+    } catch (persistError) {
+      log.error({ persistError, taskId }, "Failed to persist QA Check dispatch error");
+    }
+  }
+}
+
 /**
  * Fire-and-forget QA dispatch shared by the manual `run-qa` endpoint and the
  * auto-trigger on `approve_done`. The caller broadcasts `task:qa_started`
@@ -190,6 +219,19 @@ function dispatchQaRun(
               payload: { taskId, projectId, status: "failed", error: result.error },
             },
       );
+      const refreshedTask = result.ok ? findTaskById(taskId) : undefined;
+      if (refreshedTask?.autoQaCheck) {
+        if (tryStartQaCheckRun(taskId)) {
+          const runningTask = findTaskById(taskId);
+          if (runningTask) {
+            broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(runningTask) });
+          }
+          log.info({ taskId, projectId }, "QA Check chained after successful QA run");
+          await runClaimedQaCheck(projectId, taskId, executionRoot);
+        } else {
+          log.warn({ taskId, projectId }, "QA Check chain skipped because it is already running");
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.error({ taskId, projectId, error }, "QA dispatch failed before runner completed");
@@ -259,6 +301,52 @@ function startQaRun(
   }
   broadcast({ type: "task:qa_started", payload: { taskId, projectId, status: "started" } });
   dispatchQaRun(projectId, taskId, executionRoot, lockId);
+  return { started: true };
+}
+
+function dispatchQaCheckRun(
+  projectId: string,
+  taskId: string,
+  executionRoot: string,
+  lockId: string,
+): void {
+  void (async () => {
+    try {
+      await runClaimedQaCheck(projectId, taskId, executionRoot);
+    } finally {
+      releaseTaskClaim(taskId, lockId);
+    }
+  })();
+}
+
+function startQaCheckRun(
+  projectId: string,
+  taskId: string,
+  executionRoot: string,
+):
+  | { started: true }
+  | { started: false; code: "ai_handoff_required" | "task_locked" | "already_running" } {
+  const task = findTaskById(taskId);
+  if (task?.executionOwner !== "ai") {
+    return { started: false, code: "ai_handoff_required" };
+  }
+  const lockId = `qa-check:${crypto.randomUUID()}`;
+  if (!claimTask(taskId, lockId, QA_LOCK_DURATION_MS)) {
+    const current = findTaskById(taskId);
+    return {
+      started: false,
+      code: current?.executionOwner === "human" ? "ai_handoff_required" : "task_locked",
+    };
+  }
+  if (!tryStartQaCheckRun(taskId)) {
+    releaseTaskClaim(taskId, lockId);
+    return { started: false, code: "already_running" };
+  }
+  const runningTask = findTaskById(taskId);
+  if (runningTask) {
+    broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(runningTask) });
+  }
+  dispatchQaCheckRun(projectId, taskId, executionRoot, lockId);
   return { started: true };
 }
 
@@ -460,6 +548,7 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     runPlanImprove: resolvedRunPlanImprove,
     runPostVerify: resolvedRunPostVerify,
     autoQa: body.autoQa,
+    autoQaCheck: body.autoQaCheck,
     maxReviewIterations: body.maxReviewIterations,
     paused: body.paused,
     runtimeProfileId: body.runtimeProfileId,
@@ -1066,6 +1155,58 @@ tasksRouter.post("/:id/run-qa", (c) => {
           startResult.code === "task_locked"
             ? "Task is locked by another runtime operation"
             : "QA already running",
+        code: startResult.code,
+      },
+      409,
+    );
+  }
+
+  return c.json({ status: "accepted" }, 202);
+});
+
+// POST /tasks/:id/run-qa-check — execute test cases produced by aif-qa.
+tasksRouter.post("/:id/run-qa-check", (c) => {
+  const { id } = c.req.param();
+  const task = findTaskById(id);
+  if (!task) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+  if (!canMutateTask(c, id)) {
+    return c.json({ error: "Task assignment or admin role required", code: "forbidden" }, 403);
+  }
+  if (!getEnv().AIF_QA_PIPELINE_ENABLED) {
+    return c.json({ error: "QA pipeline is disabled", code: "feature_disabled" }, 403);
+  }
+  if (!task.qaTestCases?.trim()) {
+    return c.json(
+      { error: "Run QA first to generate test cases", code: "qa_test_cases_required" },
+      409,
+    );
+  }
+  const project = findProjectById(task.projectId);
+  if (!project) {
+    return c.json({ error: "Project not found" }, 404);
+  }
+
+  const executionRoot = task.worktreePath ?? project.rootPath;
+  log.info({ taskId: id, branchName: task.branchName }, "run-qa-check requested for task");
+  const startResult = startQaCheckRun(task.projectId, id, executionRoot);
+  if (!startResult.started) {
+    if (startResult.code === "ai_handoff_required") {
+      return c.json(
+        {
+          error: "The task must be handed to AI before QA Check can run",
+          code: "ai_handoff_required",
+        },
+        409,
+      );
+    }
+    return c.json(
+      {
+        error:
+          startResult.code === "task_locked"
+            ? "Task is locked by another runtime operation"
+            : "QA Check already running",
         code: startResult.code,
       },
       409,

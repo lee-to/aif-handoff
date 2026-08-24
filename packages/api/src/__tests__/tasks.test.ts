@@ -535,12 +535,14 @@ describe("tasks API", () => {
           title: "Task with auto QA",
           projectId: "test-project",
           autoQa: true,
+          autoQaCheck: true,
         }),
       });
 
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.autoQa).toBe(true);
+      expect(body.autoQaCheck).toBe(true);
     });
 
     it("should default autoQa to false when omitted on create", async () => {
@@ -556,6 +558,7 @@ describe("tasks API", () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.autoQa).toBe(false);
+      expect(body.autoQaCheck).toBe(false);
     });
 
     it("should default useSubagents to AGENT_USE_SUBAGENTS env value", async () => {

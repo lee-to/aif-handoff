@@ -23,7 +23,9 @@ const {
   createTask,
   updateTask,
   tryStartQaRun,
+  tryStartQaCheckRun,
   resetStaleQaRuns,
+  resetStaleQaCheckRuns,
   setTaskFields,
   deleteTask,
   findTaskById,
@@ -413,6 +415,30 @@ describe("data layer", () => {
       resetStaleQaRuns();
       // Stale "running" released — the compare-and-set can win again.
       expect(tryStartQaRun(t!.id)).toBe(true);
+    });
+  });
+
+  describe("QA Check run lifecycle", () => {
+    it("atomically claims and reclaims the QA Check running slot", () => {
+      const task = createTask({ projectId: "proj-1", title: "T", description: "D" });
+
+      expect(tryStartQaCheckRun(task!.id)).toBe(true);
+      expect(tryStartQaCheckRun(task!.id)).toBe(false);
+      expect(findTaskById(task!.id)!.qaCheckStatus).toBe("running");
+
+      updateTask(task!.id, { qaCheckStatus: "done" });
+      expect(tryStartQaCheckRun(task!.id)).toBe(true);
+    });
+
+    it("recovers stale QA Check runs and leaves completed runs untouched", () => {
+      const stale = createTask({ projectId: "proj-1", title: "Stale", description: "D" });
+      const done = createTask({ projectId: "proj-1", title: "Done", description: "D" });
+      expect(tryStartQaCheckRun(stale!.id)).toBe(true);
+      updateTask(done!.id, { qaCheckStatus: "done" });
+
+      expect(resetStaleQaCheckRuns()).toBe(1);
+      expect(findTaskById(stale!.id)!.qaCheckStatus).toBe("error");
+      expect(findTaskById(done!.id)!.qaCheckStatus).toBe("done");
     });
   });
 

@@ -719,6 +719,10 @@ export const api = {
     await request<void>(`${API_BASE}/${id}/run-qa`, { method: "POST" });
   },
 
+  async runQaCheck(id: string): Promise<void> {
+    await request<void>(`${API_BASE}/${id}/run-qa-check`, { method: "POST" });
+  },
+
   checkRoadmapStatus(projectId: string): Promise<{ exists: boolean }> {
     return request<{ exists: boolean }>(`/projects/${projectId}/roadmap/status`);
   },

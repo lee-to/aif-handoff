@@ -80,6 +80,17 @@ export function resolveQaBranch(persistedBranch: string | null, executionRoot: s
   }
 }
 
+/** Resolve the shared branch-scoped directory used by aif-qa and aif-qa-check. */
+export function resolveQaArtifactDir(
+  persistedBranch: string | null,
+  executionRoot: string,
+): { artifactDir: string; branch: string; branchSlug: string; qaRoot: string } {
+  const branch = resolveQaBranch(persistedBranch, executionRoot);
+  const qaRoot = join(executionRoot, getProjectConfig(executionRoot).paths.qa);
+  const branchSlug = computeQaBranchSlug(branch, executionRoot);
+  return { artifactDir: join(qaRoot, branchSlug), branch, branchSlug, qaRoot };
+}
+
 /** Build the explicit aif-qa pipeline prompt with absolute artifact paths baked in. */
 export function buildQaPrompt(artifactDir: string): string {
   return [
@@ -180,15 +191,12 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
     // task's persisted branch, or the current git branch as a fallback. This keeps
     // the runner's slug in lockstep with the skill so CLI/API transports agree on
     // the artifact directory even for branchless (fast-mode) tasks.
-    const resolvedBranch = resolveQaBranch(task.branchName, executionRoot);
-
-    // Resolve artifact paths deterministically BEFORE running the runtime so the
-    // exact paths can be baked into the prompt (CLI resolves /aif-qa --all to its
-    // own slug dir, but Codex-API/OpenRouter only execute the spelled-out prompt).
-    const cfg = getProjectConfig(executionRoot);
-    const qaRoot = join(executionRoot, cfg.paths.qa);
-    const branchSlug = computeQaBranchSlug(resolvedBranch, executionRoot);
-    const artifactDir = join(qaRoot, branchSlug);
+    const {
+      artifactDir,
+      branch: resolvedBranch,
+      branchSlug,
+      qaRoot,
+    } = resolveQaArtifactDir(task.branchName, executionRoot);
 
     log.info(
       { taskId, branch: resolvedBranch, branchSource: task.branchName ? "task" : "git" },
@@ -257,6 +265,9 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
       qaChangeSummary,
       qaTestPlan,
       qaTestCases,
+      qaCheckStatus: "idle",
+      qaCheckReport: null,
+      qaCheckPlaywrightConfigured: null,
     });
     const doneTask = findTaskById(taskId);
     if (doneTask) {

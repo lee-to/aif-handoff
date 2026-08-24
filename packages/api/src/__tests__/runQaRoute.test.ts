@@ -229,4 +229,27 @@ describe("POST /tasks/:id/run-qa-check", () => {
       executionRoot: "/tmp/p1",
     });
   });
+
+  it("clears a previous report when a QA Check rerun fails", async () => {
+    seedTask({
+      qaTestCases: "# Test Cases",
+      qaCheckStatus: "done",
+      qaCheckReport: "# Previous QA Check",
+      qaCheckPlaywrightConfigured: true,
+    });
+    mockRunQaCheckQuery.mockRejectedValue(new Error("dispatch boom"));
+
+    const res = await app.request("/tasks/t1/run-qa-check", { method: "POST" });
+    expect(res.status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const row = testDb.current
+      .select()
+      .from(tasks)
+      .all()
+      .find((task) => task.id === "t1");
+    expect(row?.qaCheckStatus).toBe("error");
+    expect(row?.qaCheckReport).toBeNull();
+    expect(row?.qaCheckPlaywrightConfigured).toBeNull();
+  });
 });

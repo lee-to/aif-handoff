@@ -1432,11 +1432,16 @@ export function tryStartQaRun(id: string): boolean {
   return result.changes > 0;
 }
 
-/** Atomically claim the QA Check running slot for an AI-owned task. */
+/** Atomically claim QA Check and clear outputs from the previous run. */
 export function tryStartQaCheckRun(id: string): boolean {
   const result = getDb()
     .update(tasks)
-    .set({ qaCheckStatus: "running", updatedAt: new Date().toISOString() })
+    .set({
+      qaCheckStatus: "running",
+      qaCheckReport: null,
+      qaCheckPlaywrightConfigured: null,
+      updatedAt: new Date().toISOString(),
+    })
     .where(
       and(
         eq(tasks.id, id),
@@ -1446,7 +1451,7 @@ export function tryStartQaCheckRun(id: string): boolean {
     )
     .run();
   const started = result.changes > 0;
-  log.debug({ taskId: id, started }, "QA Check running-slot claim completed");
+  log.debug({ taskId: id, started }, "QA Check running-slot claim and output reset completed");
   return started;
 }
 

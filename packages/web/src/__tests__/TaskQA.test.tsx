@@ -95,14 +95,13 @@ describe("TaskQA", () => {
     expect(screen.getByText(/Browser cases may be Blocked/)).toBeInTheDocument();
   });
 
-  it("shows running state and the persisted QA Check report", () => {
+  it("shows the running state without a previous QA Check report", () => {
     renderTask({
       qaTestCases: "# Test Cases",
       qaCheckStatus: "running",
-      qaCheckReport: "# QA Check\n\nTC-001: Pass",
     });
 
     expect(screen.getByRole("button", { name: /Checking/ })).toBeDisabled();
-    expect(screen.getByText("TC-001: Pass")).toBeInTheDocument();
+    expect(screen.queryByText("TC-001: Pass")).not.toBeInTheDocument();
   });
 });

@@ -248,10 +248,14 @@ export type TaskFieldsUpdate = {
   runPlanImprove?: boolean;
   runPostVerify?: boolean;
   autoQa?: boolean;
+  autoQaCheck?: boolean;
   qaChangeSummary?: string | null;
   qaTestPlan?: string | null;
   qaTestCases?: string | null;
   qaStatus?: "idle" | "running" | "done" | "error";
+  qaCheckReport?: string | null;
+  qaCheckStatus?: "idle" | "running" | "done" | "error";
+  qaCheckPlaywrightConfigured?: boolean | null;
   implementationLog?: string | null;
   reviewComments?: string | null;
   agentActivityLog?: string | null;
@@ -1191,6 +1195,7 @@ export function createTask(input: {
   runPlanImprove?: boolean;
   runPostVerify?: boolean;
   autoQa?: boolean;
+  autoQaCheck?: boolean;
   maxReviewIterations?: number;
   paused?: boolean;
   runtimeProfileId?: string | null;
@@ -1290,6 +1295,7 @@ export function createTask(input: {
       runPlanImprove: input.runPlanImprove,
       runPostVerify: input.runPostVerify,
       autoQa: input.autoQa,
+      autoQaCheck: input.autoQaCheck,
       maxReviewIterations: input.maxReviewIterations,
       paused: input.paused,
       runtimeProfileId: input.runtimeProfileId ?? null,
@@ -1426,6 +1432,24 @@ export function tryStartQaRun(id: string): boolean {
   return result.changes > 0;
 }
 
+/** Atomically claim the QA Check running slot for an AI-owned task. */
+export function tryStartQaCheckRun(id: string): boolean {
+  const result = getDb()
+    .update(tasks)
+    .set({ qaCheckStatus: "running", updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(tasks.id, id),
+        eq(tasks.executionOwner, "ai"),
+        ne(tasks.qaCheckStatus, "running"),
+      ),
+    )
+    .run();
+  const started = result.changes > 0;
+  log.debug({ taskId: id, started }, "QA Check running-slot claim completed");
+  return started;
+}
+
 /**
  * Recover tasks orphaned in qaStatus:"running" — a crash/restart mid-run or a
  * dispatch failure that never finalized leaves the row in "running", and since
@@ -1439,6 +1463,19 @@ export function resetStaleQaRuns(): number {
     .set({ qaStatus: "error", updatedAt: new Date().toISOString() })
     .where(eq(tasks.qaStatus, "running"))
     .run();
+  return result.changes;
+}
+
+/** Recover QA Check runs orphaned in the running state after an API restart. */
+export function resetStaleQaCheckRuns(): number {
+  const result = getDb()
+    .update(tasks)
+    .set({ qaCheckStatus: "error", updatedAt: new Date().toISOString() })
+    .where(eq(tasks.qaCheckStatus, "running"))
+    .run();
+  if (result.changes > 0) {
+    log.warn({ recoveredRuns: result.changes }, "Recovered stale QA Check runs");
+  }
   return result.changes;
 }
 

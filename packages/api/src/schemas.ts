@@ -167,6 +167,7 @@ export const createTaskSchema = z.object({
   runPlanImprove: z.boolean().default(false),
   runPostVerify: z.boolean().default(false),
   autoQa: z.boolean().optional(),
+  autoQaCheck: z.boolean().optional(),
   maxReviewIterations: z
     .number()
     .int()
@@ -198,6 +199,7 @@ export const updateTaskSchema = z.object({
   runPlanImprove: z.boolean().optional(),
   runPostVerify: z.boolean().optional(),
   autoQa: z.boolean().optional(),
+  autoQaCheck: z.boolean().optional(),
   maxReviewIterations: z.number().int().min(1).max(50).optional(),
   plan: z.string().nullable().optional(),
   implementationLog: z.string().nullable().optional(),

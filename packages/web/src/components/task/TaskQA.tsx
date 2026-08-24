@@ -20,7 +20,9 @@ import { Section } from "./Section";
 interface TaskQAProps {
   task: Task;
   onRunQa: () => void;
+  onRunQaCheck: () => void;
   isRunning: boolean;
+  isQaCheckRunning: boolean;
 }
 
 const STATUS_LABEL: Record<Task["qaStatus"], string> = {
@@ -56,16 +58,21 @@ interface QaArtifactSpec {
   content: string | null;
 }
 
-export function TaskQA({ task, onRunQa, isRunning }: TaskQAProps) {
+export function TaskQA({ task, onRunQa, onRunQaCheck, isRunning, isQaCheckRunning }: TaskQAProps) {
   const canRun = task.status === "done" || task.status === "verified";
-  const disabled = isRunning || !canRun;
+  const anyRunning = isRunning || isQaCheckRunning;
+  const disabled = anyRunning || !canRun;
+  const hasTestCases = Boolean(task.qaTestCases?.trim());
+  const checkDisabled = anyRunning || !canRun || !hasTestCases;
   const [expanded, setExpanded] = useState<QaArtifactSpec | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [checkConfirmOpen, setCheckConfirmOpen] = useState(false);
 
   const artifacts: QaArtifactSpec[] = [
     { title: "Change Summary", content: task.qaChangeSummary },
     { title: "Test Plan", content: task.qaTestPlan },
     { title: "Test Cases", content: task.qaTestCases },
+    { title: "QA Check", content: task.qaCheckReport },
   ];
 
   // Re-running overwrites existing artifacts, so confirm first when any exist.
@@ -75,6 +82,13 @@ export function TaskQA({ task, onRunQa, isRunning }: TaskQAProps) {
       setConfirmOpen(true);
     } else {
       onRunQa();
+    }
+  };
+  const handleRunCheckClick = () => {
+    if (task.qaCheckReport?.trim()) {
+      setCheckConfirmOpen(true);
+    } else {
+      onRunQaCheck();
     }
   };
 
@@ -91,20 +105,58 @@ export function TaskQA({ task, onRunQa, isRunning }: TaskQAProps) {
               "Run QA"
             )}
           </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={handleRunCheckClick}
+            disabled={checkDisabled}
+            className="gap-1.5"
+          >
+            {isQaCheckRunning ? (
+              <>
+                <Spinner size="sm" /> Checking…
+              </>
+            ) : (
+              "Run QA Check"
+            )}
+          </Button>
           {!canRun && (
             <span className="text-xs text-muted-foreground">
               QA is available once the task reaches Done or Verified.
             </span>
           )}
+          {canRun && !hasTestCases && (
+            <span className="text-xs text-muted-foreground">Generate test cases first.</span>
+          )}
         </div>
-        <Badge size="sm" variant={STATUS_VARIANT[task.qaStatus]}>
-          {STATUS_LABEL[task.qaStatus]}
-        </Badge>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>QA</span>
+          <Badge size="sm" variant={STATUS_VARIANT[task.qaStatus]}>
+            {STATUS_LABEL[task.qaStatus]}
+          </Badge>
+          <span>Check</span>
+          <Badge size="sm" variant={STATUS_VARIANT[task.qaCheckStatus]}>
+            {STATUS_LABEL[task.qaCheckStatus]}
+          </Badge>
+        </div>
       </div>
 
       {task.qaStatus === "error" && (
         <AlertBox variant="error" className="text-xs">
           The QA run failed. Check the agent logs and try running QA again.
+        </AlertBox>
+      )}
+
+      {task.qaCheckStatus === "error" && (
+        <AlertBox variant="error" className="text-xs">
+          The QA Check run failed. Check the agent logs and try again.
+        </AlertBox>
+      )}
+
+      {task.qaCheckPlaywrightConfigured === false && (
+        <AlertBox variant="warning" className="text-xs">
+          Playwright MCP was not configured for the last QA Check. Browser cases may be Blocked;
+          non-browser checks still run.
         </AlertBox>
       )}
 
@@ -148,12 +200,25 @@ export function TaskQA({ task, onRunQa, isRunning }: TaskQAProps) {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Re-run QA?"
-        description="This overwrites the existing QA artifacts (change summary, test plan, test cases) for this task."
+        description="This overwrites the QA planning artifacts and clears the previous QA Check report for this task."
         confirmLabel="Re-run QA"
         variant="destructive"
         onConfirm={() => {
           setConfirmOpen(false);
           onRunQa();
+        }}
+      />
+
+      <ConfirmDialog
+        open={checkConfirmOpen}
+        onOpenChange={setCheckConfirmOpen}
+        title="Re-run QA Check?"
+        description="This overwrites the existing QA Check report for this task."
+        confirmLabel="Re-run QA Check"
+        variant="destructive"
+        onConfirm={() => {
+          setCheckConfirmOpen(false);
+          onRunQaCheck();
         }}
       />
     </div>

@@ -291,18 +291,20 @@ Flag interaction table:
 
 ### QA Pipeline
 
-Tasks carry a separate QA workflow that runs the `/aif-qa --all` pipeline (change-summary → test-plan → test-cases). It is driven by the API service `packages/api/src/services/qaRunner.ts` (modeled on `commitGeneration.ts` — fire-and-forget, returns a structured `{ ok, error }` result and never throws), which executes the prompt through `runApiRuntimeOneShot` and writes three markdown artifacts to `<paths.qa>/<branch-slug>/` (`change-summary.md`, `test-plan.md`, `test-cases.md`). The artifacts are persisted onto the task (`qaChangeSummary`, `qaTestPlan`, `qaTestCases`) and surfaced in the **QA** tab of the task detail view.
+Tasks carry a separate QA workflow. `packages/api/src/services/qaRunner.ts` runs `/aif-qa --all` (change-summary → test-plan → test-cases), while `qaCheckRunner.ts` executes the ready cases through `/aif-qa-check agent`. Both use `runApiRuntimeOneShot` and the same `<paths.qa>/<branch-slug>/` directory. Planning artifacts and `qa-check.md` are persisted onto the task and surfaced in the **QA** tab.
 
 The branch-slug is computed deterministically (`<safe-slug>-<git-hash-object-prefix>`) as a hard contract with `.claude/skills/aif-qa/SKILL.md`, so the runner reads from the same directory the skill writes to. QA runs in the task's worktree root (`worktreePath`) when present, otherwise the project root.
 
 Two trigger paths exist:
 
 - **Manual** — `POST /tasks/:id/run-qa` (available in the UI once the task reaches `done` or `verified`).
+- **Manual check** — `POST /tasks/:id/run-qa-check` once test cases exist.
 - **Automatic** — the `autoQa` flag (default `false`). When `true`, the QA pipeline starts after `approve_done` (`done → verified`).
+- **Automatic check** — the separate `autoQaCheck` opt-in (default `false`) chains QA Check after any successful QA generation run.
 
-Progress is reported via `qaStatus` (`idle` → `running` → `done`/`error`) and the `task:qa_started` / `task:qa_done` / `task:qa_failed` WebSocket events.
+Generation uses `qaStatus`; execution uses `qaCheckStatus`. QA Check first probes the effective adapter's configured `playwright` MCP entry, then requires the executing skill to inspect live tools. The probe is advisory: missing browser automation blocks only browser-dependent cases, and Codex app-server alone is never considered a browser. Lifecycle/report updates use the existing `task:updated` broadcast.
 
-Concurrent starts are serialized by an atomic DB claim (`tryStartQaRun` — a conditional `UPDATE` to `running`), so a duplicate manual POST or a manual+auto race never spawns two runtime runs. Every failure path releases the claim with a terminal `qaStatus: "error"`, and on API startup any task left in `running` (e.g. a crash or restart mid-run) is reset to `error` (`resetStaleQaRuns`) so a stuck claim can never block future QA starts.
+Concurrent starts are serialized by the task lock plus separate atomic claims (`tryStartQaRun`, `tryStartQaCheckRun`). A chained run keeps the task lock across both sequential runtime calls. Startup recovery resets orphaned running states through `resetStaleQaRuns` and `resetStaleQaCheckRuns`.
 
 ### Pause / Resume
 

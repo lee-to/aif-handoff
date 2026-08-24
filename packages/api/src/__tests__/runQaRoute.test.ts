@@ -29,6 +29,10 @@ const mockRunQaQuery = vi.fn();
 vi.mock("../services/qaRunner.js", () => ({
   runQaQuery: (...args: unknown[]) => mockRunQaQuery(...args),
 }));
+const mockRunQaCheckQuery = vi.fn();
+vi.mock("../services/qaCheckRunner.js", () => ({
+  runQaCheckQuery: (...args: unknown[]) => mockRunQaCheckQuery(...args),
+}));
 
 const { tasksRouter } = await import("../routes/tasks.js");
 
@@ -61,6 +65,8 @@ describe("POST /tasks/:id/run-qa", () => {
     app = createApp();
     mockRunQaQuery.mockReset();
     mockRunQaQuery.mockResolvedValue({ ok: true });
+    mockRunQaCheckQuery.mockReset();
+    mockRunQaCheckQuery.mockResolvedValue({ ok: true });
   });
 
   it("returns 404 when task not found", async () => {
@@ -156,6 +162,19 @@ describe("POST /tasks/:id/run-qa", () => {
     });
   });
 
+  it("chains QA Check after a successful QA run when autoQaCheck is enabled", async () => {
+    seedTask({ autoQaCheck: true, qaTestCases: "# Test Cases" });
+    const res = await app.request("/tasks/t1/run-qa", { method: "POST" });
+    expect(res.status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockRunQaCheckQuery).toHaveBeenCalledWith({
+      projectId: "p1",
+      taskId: "t1",
+      executionRoot: "/tmp/p1",
+    });
+  });
+
   it("returns 403 with feature_disabled when AIF_QA_PIPELINE_ENABLED is off", async () => {
     seedTask();
     process.env.AIF_QA_PIPELINE_ENABLED = "false";
@@ -170,5 +189,44 @@ describe("POST /tasks/:id/run-qa", () => {
       process.env.AIF_QA_PIPELINE_ENABLED = "true";
       resetEnvCache();
     }
+  });
+});
+
+describe("POST /tasks/:id/run-qa-check", () => {
+  let app: ReturnType<typeof createApp>;
+
+  beforeEach(() => {
+    testDb.current = createTestDb();
+    app = createApp();
+    mockRunQaQuery.mockReset();
+    mockRunQaQuery.mockResolvedValue({ ok: true });
+    mockRunQaCheckQuery.mockReset();
+    mockRunQaCheckQuery.mockResolvedValue({ ok: true });
+  });
+
+  it("requires test cases produced by QA", async () => {
+    seedTask({ qaTestCases: null });
+
+    const res = await app.request("/tasks/t1/run-qa-check", { method: "POST" });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "qa_test_cases_required" });
+    expect(mockRunQaCheckQuery).not.toHaveBeenCalled();
+  });
+
+  it("atomically starts an independent QA Check run", async () => {
+    seedTask({ qaTestCases: "# Test Cases" });
+
+    const first = await app.request("/tasks/t1/run-qa-check", { method: "POST" });
+    const second = await app.request("/tasks/t1/run-qa-check", { method: "POST" });
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(409);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockRunQaCheckQuery).toHaveBeenCalledWith({
+      projectId: "p1",
+      taskId: "t1",
+      executionRoot: "/tmp/p1",
+    });
   });
 });

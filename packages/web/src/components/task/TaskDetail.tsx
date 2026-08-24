@@ -4,7 +4,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useTask, useRunQa } from "@/hooks/useTasks";
+import { useTask, useRunQa, useRunQaCheck } from "@/hooks/useTasks";
 import { useQaPipelineEnabled } from "@/hooks/useSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { TaskDescription } from "./TaskDescription";
@@ -36,6 +36,7 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
   const [showHandoffDialog, setShowHandoffDialog] = useState(false);
   const actions = useTaskDetailActions(task, onClose);
   const runQaMutation = useRunQa(taskId ?? "");
+  const runQaCheckMutation = useRunQaCheck(taskId ?? "");
   const qaPipelineEnabled = useQaPipelineEnabled();
   const defaultTab: TaskDetailTab = (() => {
     if (!task) return "implementation";
@@ -216,7 +217,9 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                     <TaskQA
                       task={task}
                       onRunQa={() => runQaMutation.mutate()}
+                      onRunQaCheck={() => runQaCheckMutation.mutate()}
                       isRunning={task.qaStatus === "running"}
+                      isQaCheckRunning={task.qaCheckStatus === "running"}
                     />
                   )}
                   {activeTab === "activity" && (

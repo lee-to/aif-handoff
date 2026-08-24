@@ -909,6 +909,7 @@ POST /tasks
 | `runPlanImprove` | boolean | no | `false` | Skills-mode only (`useSubagents=false`): run optional `/aif-improve` after planning and before `plan_ready`. Ignored and stored as `false` for subagent tasks |
 | `runPostVerify` | boolean | no | `false` | Skills-mode only (`useSubagents=false`): run optional `/aif-verify` after implementation and before review. With `skipReview=true`, verification moves directly to `done`. Ignored and stored as `false` for subagent tasks |
 | `autoQa` | boolean | no | `false` | Automatically run the QA pipeline (`/aif-qa --all`) when the task is approved (`approve_done`: `done → verified`) |
+| `autoQaCheck` | boolean | no | `false` | After a successful QA generation run, execute the generated cases through `/aif-qa-check agent` |
 | `runtimeProfileId` | string \| null | no | `null` | Task-specific runtime override. When absent, resolution falls back to project default, then app default, then environment fallback |
 | `roadmapAlias` | string | no | `null` | Roadmap alias for grouping (e.g., `v1.0`) |
 | `tags` | string[] | no | `[]` | Tags for filtering/categorization (max 50, each max 100 chars) |
@@ -945,21 +946,25 @@ runtime options, auto-review state, and QA detail text when present.
 
 Notable task fields in the response:
 
-| Field                   | Type          | Description                                                                                                      |
-| ----------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `manualReviewRequired`  | boolean       | `true` when auto-review stopped and explicit human review is required while the task remains in `done`           |
-| `autoReviewState`       | object\|null  | Latest persisted blocking-findings snapshot used by the auto-review loop (`strategy`, `iteration`, `findings[]`) |
-| `runtimeLimitSnapshot`  | object\|null  | Persisted runtime-limit snapshot copied onto the task when quota gating or quota failure blocks execution        |
-| `runtimeLimitUpdatedAt` | string\|null  | ISO timestamp for the last task-level runtime-limit snapshot write                                               |
-| `autoQa`                | boolean       | When `true`, the QA pipeline runs automatically once the task is approved (`approve_done`)                       |
-| `qaStatus`              | string        | QA run lifecycle: `idle`, `running`, `done`, or `error`                                                          |
-| `qaChangeSummary`       | string\|null  | Markdown change-summary artifact from the latest QA run (`null` until generated)                                 |
-| `qaTestPlan`            | string\|null  | Markdown test-plan artifact from the latest QA run (`null` until generated)                                      |
-| `qaTestCases`           | string\|null  | Markdown test-cases artifact from the latest QA run (`null` until generated)                                     |
-| `executionOwner`        | `ai`\|`human` | Executor responsible for the task; independent from `autoMode`                                                   |
-| `ownershipRevision`     | integer       | Monotonic optimistic-concurrency revision for assignments/handoffs                                               |
-| `assignees`             | array         | Immutable participant summaries for current Human assignees                                                      |
-| `permissions`           | object        | Server-derived `canAssign`, `canHandoff`, `canSelfAssign`, `canAct`, `canComment`, and `permittedActions`        |
+| Field                         | Type          | Description                                                                                                      |
+| ----------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `manualReviewRequired`        | boolean       | `true` when auto-review stopped and explicit human review is required while the task remains in `done`           |
+| `autoReviewState`             | object\|null  | Latest persisted blocking-findings snapshot used by the auto-review loop (`strategy`, `iteration`, `findings[]`) |
+| `runtimeLimitSnapshot`        | object\|null  | Persisted runtime-limit snapshot copied onto the task when quota gating or quota failure blocks execution        |
+| `runtimeLimitUpdatedAt`       | string\|null  | ISO timestamp for the last task-level runtime-limit snapshot write                                               |
+| `autoQa`                      | boolean       | When `true`, the QA pipeline runs automatically once the task is approved (`approve_done`)                       |
+| `autoQaCheck`                 | boolean       | When `true`, a successful QA generation run continues into automated QA Check                                    |
+| `qaStatus`                    | string        | QA run lifecycle: `idle`, `running`, `done`, or `error`                                                          |
+| `qaChangeSummary`             | string\|null  | Markdown change-summary artifact from the latest QA run (`null` until generated)                                 |
+| `qaTestPlan`                  | string\|null  | Markdown test-plan artifact from the latest QA run (`null` until generated)                                      |
+| `qaTestCases`                 | string\|null  | Markdown test-cases artifact from the latest QA run (`null` until generated)                                     |
+| `qaCheckStatus`               | string        | QA Check lifecycle: `idle`, `running`, `done`, or `error`                                                        |
+| `qaCheckReport`               | string\|null  | Markdown `qa-check.md` report from the latest automated case execution                                           |
+| `qaCheckPlaywrightConfigured` | boolean\|null | Whether the effective runtime reported a configured `playwright` MCP server at the latest check; advisory only   |
+| `executionOwner`              | `ai`\|`human` | Executor responsible for the task; independent from `autoMode`                                                   |
+| `ownershipRevision`           | integer       | Monotonic optimistic-concurrency revision for assignments/handoffs                                               |
+| `assignees`                   | array         | Immutable participant summaries for current Human assignees                                                      |
+| `permissions`                 | object        | Server-derived `canAssign`, `canHandoff`, `canSelfAssign`, `canAct`, `canComment`, and `permittedActions`        |
 
 ### Handoff Task Ownership
 
@@ -1048,6 +1053,7 @@ PUT /tasks/:id
 | `runPlanImprove` | boolean | Skills-mode only: run optional `/aif-improve` after planning and before `plan_ready` |
 | `runPostVerify` | boolean | Skills-mode only: run optional `/aif-verify` after implementation and before review. With `skipReview=true`, verification moves directly to `done` |
 | `autoQa` | boolean | Auto-run the QA pipeline when the task is approved (`done → verified`) |
+| `autoQaCheck` | boolean | Continue a successful QA generation run into automated QA Check |
 | `paused` | boolean | Pause/resume agent processing for this task |
 | `runtimeProfileId` | string\|null | Task-specific runtime override |
 | `isFix` | boolean | Marks task as fix-flow |
@@ -1166,7 +1172,9 @@ runner generates three markdown artifacts under `<paths.qa>/<branch-slug>/`
 uses the task's worktree root when present (`worktreePath`), otherwise the project
 root. Artifact slugs use the task's persisted `branchName` when present; branchless
 tasks fall back to the current git branch in the execution root. The same pipeline
-runs automatically after `approve_done` when `autoQa = true`.
+runs automatically after `approve_done` when `autoQa = true`. When
+`autoQaCheck = true`, every successful QA generation run (manual or automatic)
+continues sequentially into QA Check.
 
 **Response:** `202 Accepted`
 
@@ -1185,6 +1193,33 @@ runs automatically after `approve_done` when `autoQa = true`.
 **WebSocket events:** `task:qa_started` immediately, then `task:qa_done` or
 `task:qa_failed` when the run finishes. The runner also broadcasts `task:updated`
 as it writes `qaStatus` and the artifacts.
+
+### Run QA Check
+
+```
+POST /tasks/:id/run-qa-check
+```
+
+Executes the ready `test-cases.md` through `/aif-qa-check agent` without
+regenerating the QA plan. Before execution, the API asks the effective task
+runtime whether a `playwright` MCP server is configured and passes that advisory
+result to the skill. The executing runtime still inspects its live tools. Missing
+browser automation blocks only browser-dependent cases; CLI, backend-test, API,
+file/document, and database-read cases continue. Codex `app-server` transport is
+not treated as a built-in browser.
+
+The report is written to `<paths.qa>/<branch-slug>/qa-check.md`, persisted as
+`qaCheckReport`, and tracked by `qaCheckStatus`. Runs are non-interactive: missing
+case-specific context or authorization is recorded as Blocked evidence instead
+of pausing the Handoff workflow.
+
+**Response:** `202 Accepted`
+
+**Errors:** `403` when the QA feature is disabled or mutation is forbidden;
+`404` for a missing task/project; `409` with `qa_test_cases_required`,
+`ai_handoff_required`, `task_locked`, or `already_running`.
+
+The route broadcasts `task:updated` for lifecycle and report changes.
 
 ### Reorder Task
 

@@ -1045,6 +1045,42 @@ export function processAutoQueueAdvance(): number {
 let activePollPromise: Promise<void> | null = null;
 let followUpPollRequested = false;
 
+/** Caller-scoped (per cycle or per admission pass) concurrency resolution cache. */
+type ProjectConcurrencyCache = Map<string, { parallel: boolean; max: number }>;
+
+/**
+ * Resolve a project's effective concurrency. Legacy branch-bound tasks
+ * without worktreePath still mutate one shared projectRoot, so those projects
+ * stay serial until the legacy task drains.
+ */
+function resolveProjectConcurrencyCached(
+  projectId: string,
+  cache: ProjectConcurrencyCache,
+): { parallel: boolean; max: number } {
+  let cached = cache.get(projectId);
+  if (cached === undefined) {
+    const project = findProjectById(projectId);
+    const configuredParallel = project?.parallelEnabled ?? false;
+    // Mirror processAutoQueueAdvance: config OR task-state forces serial.
+    const requiresSerialExecution = project ? projectRequiresSerialExecution(project) : false;
+    cached = {
+      parallel: configuredParallel && !requiresSerialExecution,
+      max:
+        configuredParallel && !requiresSerialExecution
+          ? env.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT
+          : 1,
+    };
+    if (configuredParallel && requiresSerialExecution) {
+      log.warn(
+        { projectId, projectRoot: project?.rootPath },
+        "Project parallel execution forced to serial while tasks share one Git working tree",
+      );
+    }
+    cache.set(projectId, cached);
+  }
+  return cached;
+}
+
 async function runPollCycle(): Promise<void> {
   log.debug("Starting poll cycle");
 
@@ -1066,35 +1102,7 @@ async function runPollCycle(): Promise<void> {
 
   // Track tasks that failed in this cycle — prevent re-picking in downstream stages
   const failedInCycle = new Set<string>();
-
-  // Cache effective project concurrency settings to avoid repeated lookups.
-  // Legacy branch-bound tasks without worktreePath still mutate one shared
-  // projectRoot, so those projects stay serial until the legacy task drains.
-  const projectConcurrencyCache = new Map<string, { parallel: boolean; max: number }>();
-  function resolveProjectConcurrency(projectId: string): { parallel: boolean; max: number } {
-    let cached = projectConcurrencyCache.get(projectId);
-    if (cached === undefined) {
-      const project = findProjectById(projectId);
-      const configuredParallel = project?.parallelEnabled ?? false;
-      // Mirror processAutoQueueAdvance: config OR task-state forces serial.
-      const requiresSerialExecution = project ? projectRequiresSerialExecution(project) : false;
-      cached = {
-        parallel: configuredParallel && !requiresSerialExecution,
-        max:
-          configuredParallel && !requiresSerialExecution
-            ? env.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT
-            : 1,
-      };
-      if (configuredParallel && requiresSerialExecution) {
-        log.warn(
-          { projectId, projectRoot: project?.rootPath },
-          "Project parallel execution forced to serial while tasks share one Git working tree",
-        );
-      }
-      projectConcurrencyCache.set(projectId, cached);
-    }
-    return cached;
-  }
+  const projectConcurrencyCache: ProjectConcurrencyCache = new Map();
 
   const projectIds = listCoordinatorActionableProjectIds(maxProjectLanes);
   if (projectIds.length === 0) {
@@ -1112,173 +1120,10 @@ async function runPollCycle(): Promise<void> {
     "Coordinator project lanes selected",
   );
 
-  async function processProjectLane(projectId: string): Promise<void> {
-    for (const stage of PIPELINE) {
-      const concurrency = resolveProjectConcurrency(projectId);
-      const parallel = concurrency.parallel;
-      const projectMax = concurrency.max;
-      const stageKey = `${projectId}:${stage.label}`;
-
-      const candidateWindow = Math.min(Math.max(projectMax * 5, projectMax), 50);
-      const candidates = findCoordinatorTaskCandidatesForProject(
-        projectId,
-        stage.label,
-        candidateWindow,
-      ).filter((t) => !failedInCycle.has(t.id));
-
-      if (candidates.length === 0) {
-        log.debug({ stage: stage.label, projectId }, "No tasks to process in project lane");
-        continue;
-      }
-
-      log.debug(
-        {
-          stage: stage.label,
-          projectId,
-          candidateCount: candidates.length,
-          candidateWindow,
-          projectMax,
-          globalMaxTasks,
-        },
-        "Project lane task candidates selected",
-      );
-
-      const spawned: Promise<void>[] = [];
-
-      try {
-        for (const task of candidates) {
-          // Per-project concurrency: non-parallel projects limited to 1 task at a time
-          if (spawned.length >= projectMax) {
-            log.debug(
-              { taskId: task.id, projectId: task.projectId, projectMax },
-              "Project at capacity, skipping task",
-            );
-            continue;
-          }
-
-          // Cross-cycle guard: for non-parallel projects, check DB for any active lock
-          // (another concurrent poll cycle may have already claimed a task for this project)
-          if (!parallel && hasActiveLockedTaskForProject(task.projectId)) {
-            log.debug(
-              { taskId: task.id, projectId: task.projectId },
-              "Non-parallel project has active lock from another cycle, skipping",
-            );
-            continue;
-          }
-
-          if (blockCandidateIfRuntimeLimited(task, stage)) {
-            continue;
-          }
-
-          await stageSemaphore.acquire(stageKey, projectMax, globalMaxTasks);
-          let claimedTask: TaskRow | undefined;
-          let claimOutcomeUncertain = false;
-          let cleanupOwnedByTaskPromise = false;
-
-          const releaseOwnedResources = (): void => {
-            try {
-              const taskIdToRelease =
-                claimedTask?.id ?? (claimOutcomeUncertain ? task.id : undefined);
-              if (taskIdToRelease) {
-                releaseTaskClaim(taskIdToRelease, COORDINATOR_ID);
-              }
-            } catch (err) {
-              log.error(
-                { taskId: claimedTask?.id ?? task.id, stage: stage.label, err },
-                "[FIX:149] Failed to release coordinator task claim",
-              );
-            } finally {
-              stageSemaphore.release(stageKey);
-            }
-          };
-
-          try {
-            log.debug(
-              { taskId: task.id, projectId: task.projectId, stage: stage.label },
-              "[FIX:149] Revalidating task candidate after coordinator permit",
-            );
-
-            if (!parallel && hasActiveLockedTaskForProject(task.projectId)) {
-              log.debug(
-                { taskId: task.id, projectId: task.projectId },
-                "Non-parallel project became active while waiting for permit, skipping",
-              );
-              continue;
-            }
-
-            if (blockCandidateIfRuntimeLimited(task, stage)) {
-              continue;
-            }
-
-            claimOutcomeUncertain = true;
-            claimedTask = claimCoordinatorTaskIfEligible({
-              taskId: task.id,
-              expectedProjectId: task.projectId,
-              expectedStatus: task.status,
-              expectedAutoMode: task.status === "plan_ready" ? task.autoMode : undefined,
-              coordinatorId: COORDINATOR_ID,
-              lockDurationMs: CLAIM_LOCK_DURATION_MS,
-            });
-            claimOutcomeUncertain = false;
-            if (!claimedTask) {
-              log.debug(
-                { taskId: task.id, stage: stage.label, expectedStatus: task.status },
-                "[FIX:149] Task candidate changed while waiting for permit, skipping",
-              );
-              continue;
-            }
-            const executionTask = claimedTask;
-
-            log.debug(
-              {
-                stage: stage.label,
-                taskId: executionTask.id,
-                candidateStatus: executionTask.status,
-                parallel,
-              },
-              "[FIX:149] Task revalidated and claimed for processing",
-            );
-
-            const taskPromise = processOneTask(executionTask, stage)
-              .then((success) => {
-                if (!success) failedInCycle.add(executionTask.id);
-              })
-              .catch((err) => {
-                failedInCycle.add(executionTask.id);
-                log.error(
-                  { taskId: executionTask.id, stage: stage.label, err },
-                  "Unexpected error in task processing",
-                );
-              })
-              .finally(releaseOwnedResources);
-
-            spawned.push(taskPromise);
-            cleanupOwnedByTaskPromise = true;
-          } finally {
-            if (!cleanupOwnedByTaskPromise) {
-              releaseOwnedResources();
-            }
-          }
-        }
-      } finally {
-        // Preserve stage ordering even when setup for a later candidate rejects the lane.
-        if (spawned.length > 0) {
-          log.debug(
-            { projectId, stage: stage.label, taskCount: spawned.length },
-            "[FIX:149] Draining started stage tasks before lane exit",
-          );
-          await Promise.allSettled(spawned);
-          log.debug(
-            { projectId, stage: stage.label, taskCount: spawned.length },
-            "[FIX:149] Started stage tasks drained",
-          );
-        }
-      }
-    }
-  }
-
   const laneResults = await Promise.allSettled(
-    projectIds.map((projectId) => processProjectLane(projectId)),
+    projectIds.map((projectId) =>
+      runProjectLane(projectId, failedInCycle, projectConcurrencyCache),
+    ),
   );
   laneResults.forEach((result, index) => {
     if (result.status === "rejected") {
@@ -1292,10 +1137,285 @@ async function runPollCycle(): Promise<void> {
   log.debug("Poll cycle complete");
 }
 
+/**
+ * Process one project's stage lane: walk the pipeline stages in order, claim
+ * eligible candidates, and run them under the shared stage semaphore.
+ *
+ * Called from two places: the serialized poll cycle (`runPollCycle`) and the
+ * mid-cycle admission pass (`runMidCycleAdmissionPass`). Both may run a lane
+ * for the same project concurrently — safe by construction: the semaphore's
+ * synchronous `tryAcquire` hands out at most `max` permits per project-stage
+ * key, `claimCoordinatorTaskIfEligible` CAS-claims each task row exactly
+ * once, and the non-parallel cross-cycle lock checks below block a second
+ * concurrent task on sequential projects. `failedInCycle` and
+ * `projectConcurrencyCache` are caller-scoped (per cycle / per pass).
+ */
+async function runProjectLane(
+  projectId: string,
+  failedInCycle: Set<string>,
+  projectConcurrencyCache: ProjectConcurrencyCache,
+): Promise<void> {
+  for (const stage of PIPELINE) {
+    const concurrency = resolveProjectConcurrencyCached(projectId, projectConcurrencyCache);
+    const parallel = concurrency.parallel;
+    const projectMax = concurrency.max;
+    const stageKey = `${projectId}:${stage.label}`;
+
+    const candidateWindow = Math.min(Math.max(projectMax * 5, projectMax), 50);
+    const candidates = findCoordinatorTaskCandidatesForProject(
+      projectId,
+      stage.label,
+      candidateWindow,
+    ).filter((t) => !failedInCycle.has(t.id));
+
+    if (candidates.length === 0) {
+      log.debug({ stage: stage.label, projectId }, "No tasks to process in project lane");
+      continue;
+    }
+
+    log.debug(
+      {
+        stage: stage.label,
+        projectId,
+        candidateCount: candidates.length,
+        candidateWindow,
+        projectMax,
+        globalMaxTasks: env.COORDINATOR_MAX_CONCURRENT_TASKS,
+      },
+      "Project lane task candidates selected",
+    );
+
+    const spawned: Promise<void>[] = [];
+
+    try {
+      for (const task of candidates) {
+        // Per-project concurrency: non-parallel projects limited to 1 task at a time
+        if (spawned.length >= projectMax) {
+          log.debug(
+            { taskId: task.id, projectId: task.projectId, projectMax },
+            "Project at capacity, skipping task",
+          );
+          continue;
+        }
+
+        // Cross-cycle guard: for non-parallel projects, check DB for any active lock
+        // (another concurrent poll cycle may have already claimed a task for this project)
+        if (!parallel && hasActiveLockedTaskForProject(task.projectId)) {
+          log.debug(
+            { taskId: task.id, projectId: task.projectId },
+            "Non-parallel project has active lock from another cycle, skipping",
+          );
+          continue;
+        }
+
+        if (blockCandidateIfRuntimeLimited(task, stage)) {
+          continue;
+        }
+
+        await stageSemaphore.acquire(stageKey, projectMax, env.COORDINATOR_MAX_CONCURRENT_TASKS);
+        let claimedTask: TaskRow | undefined;
+        let claimOutcomeUncertain = false;
+        let cleanupOwnedByTaskPromise = false;
+
+        const releaseOwnedResources = (): void => {
+          try {
+            const taskIdToRelease =
+              claimedTask?.id ?? (claimOutcomeUncertain ? task.id : undefined);
+            if (taskIdToRelease) {
+              releaseTaskClaim(taskIdToRelease, COORDINATOR_ID);
+            }
+          } catch (err) {
+            log.error(
+              { taskId: claimedTask?.id ?? task.id, stage: stage.label, err },
+              "[FIX:149] Failed to release coordinator task claim",
+            );
+          } finally {
+            stageSemaphore.release(stageKey);
+          }
+        };
+
+        try {
+          log.debug(
+            { taskId: task.id, projectId: task.projectId, stage: stage.label },
+            "[FIX:149] Revalidating task candidate after coordinator permit",
+          );
+
+          if (!parallel && hasActiveLockedTaskForProject(task.projectId)) {
+            log.debug(
+              { taskId: task.id, projectId: task.projectId },
+              "Non-parallel project became active while waiting for permit, skipping",
+            );
+            continue;
+          }
+
+          if (blockCandidateIfRuntimeLimited(task, stage)) {
+            continue;
+          }
+
+          claimOutcomeUncertain = true;
+          claimedTask = claimCoordinatorTaskIfEligible({
+            taskId: task.id,
+            expectedProjectId: task.projectId,
+            expectedStatus: task.status,
+            expectedAutoMode: task.status === "plan_ready" ? task.autoMode : undefined,
+            coordinatorId: COORDINATOR_ID,
+            lockDurationMs: CLAIM_LOCK_DURATION_MS,
+          });
+          claimOutcomeUncertain = false;
+          if (!claimedTask) {
+            log.debug(
+              { taskId: task.id, stage: stage.label, expectedStatus: task.status },
+              "[FIX:149] Task candidate changed while waiting for permit, skipping",
+            );
+            continue;
+          }
+          const executionTask = claimedTask;
+
+          log.debug(
+            {
+              stage: stage.label,
+              taskId: executionTask.id,
+              candidateStatus: executionTask.status,
+              parallel,
+            },
+            "[FIX:149] Task revalidated and claimed for processing",
+          );
+
+          const taskPromise = processOneTask(executionTask, stage)
+            .then((success) => {
+              if (!success) failedInCycle.add(executionTask.id);
+            })
+            .catch((err) => {
+              failedInCycle.add(executionTask.id);
+              log.error(
+                { taskId: executionTask.id, stage: stage.label, err },
+                "Unexpected error in task processing",
+              );
+            })
+            .finally(releaseOwnedResources);
+
+          spawned.push(taskPromise);
+          cleanupOwnedByTaskPromise = true;
+        } finally {
+          if (!cleanupOwnedByTaskPromise) {
+            releaseOwnedResources();
+          }
+        }
+      }
+    } finally {
+      // Preserve stage ordering even when setup for a later candidate rejects the lane.
+      if (spawned.length > 0) {
+        log.debug(
+          { projectId, stage: stage.label, taskCount: spawned.length },
+          "[FIX:149] Draining started stage tasks before lane exit",
+        );
+        await Promise.allSettled(spawned);
+        log.debug(
+          { projectId, stage: stage.label, taskCount: spawned.length },
+          "[FIX:149] Started stage tasks drained",
+        );
+      }
+    }
+  }
+}
+
+// ── Mid-cycle admission ──────────────────────────────────────
+
+let midCycleAdmissionPromise: Promise<void> | null = null;
+
+/**
+ * One admission pass for triggers that arrive while a poll cycle is active.
+ *
+ * A poll cycle admits work only at its own start and stays open until every
+ * project lane drains, so a task that becomes eligible mid-cycle used to wait
+ * out the longest in-flight lane (measured 90+ minutes in production) even
+ * when its own project had every slot free. This pass closes that gap:
+ *
+ * 1. `processAutoQueueAdvance()` — the same synchronous CAS-protected
+ *    backlog→planning lift used at cycle start. Safe to run concurrently
+ *    with cycle lanes: the claim is one atomic conditional write.
+ * 2. Lanes for parallel-capable projects only. Sequential projects keep
+ *    exact cycle-boundary semantics: their one-task-at-a-time invariant is
+ *    owned by the cycle lanes, and a mid-cycle lane could otherwise claim a
+ *    task in the brief lock gap between a sequential task's stages.
+ *
+ * Cap semantics are unchanged: the lanes share `stageSemaphore` (per-project-
+ * stage and global limits), the `[FIX:149]` revalidation, and the CAS claims
+ * with cycle lanes. `COORDINATOR_MAX_CONCURRENT_PROJECTS` bounds this pass's
+ * lane batch too, so the knob's per-batch contract holds for both callers.
+ * Note what the per-stage key means once two lanes exist for one project: a
+ * cycle lane mid-`implementing` and an admission lane starting `planning` hold
+ * permits under different keys, so a parallel project's in-flight task count
+ * can exceed what one stage-sequential lane used to allow (measured: 2 tasks
+ * with `COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT=1`). The per-stage
+ * allowance and `COORDINATOR_MAX_CONCURRENT_TASKS` still bound it.
+ */
+async function runMidCycleAdmissionPass(): Promise<void> {
+  processAutoQueueAdvance();
+
+  const projectConcurrencyCache: ProjectConcurrencyCache = new Map();
+  const failedInPass = new Set<string>();
+  const projectIds = listCoordinatorActionableProjectIds(
+    env.COORDINATOR_MAX_CONCURRENT_PROJECTS,
+  ).filter(
+    (projectId) => resolveProjectConcurrencyCached(projectId, projectConcurrencyCache).parallel,
+  );
+
+  if (projectIds.length === 0) {
+    log.debug("Mid-cycle admission pass: no parallel-capable project lanes");
+    return;
+  }
+
+  log.debug(
+    { projectIds, activeTasks: stageSemaphore.totalActive() },
+    "Mid-cycle admission pass starting project lanes",
+  );
+
+  const laneResults = await Promise.allSettled(
+    projectIds.map((projectId) => runProjectLane(projectId, failedInPass, projectConcurrencyCache)),
+  );
+  laneResults.forEach((result, index) => {
+    if (result.status === "rejected") {
+      log.error(
+        { projectId: projectIds[index], err: result.reason },
+        "Mid-cycle admission lane failed",
+      );
+    }
+  });
+
+  log.debug("Mid-cycle admission pass complete");
+}
+
+/**
+ * Fire a single-flight admission pass when a trigger (scheduler tick or wake
+ * event) lands while a poll cycle is active. Detached on purpose: the
+ * trigger still queues exactly one follow-up cycle, and the pass must not
+ * extend the returned cycle promise — otherwise admission would serialize
+ * again behind the lane drain it exists to bypass. Triggers arriving while a
+ * pass is already running are covered by that pass plus the queued follow-up.
+ */
+function triggerMidCycleAdmission(): void {
+  if (!getEnv().AGENT_MID_CYCLE_ADMISSION_ENABLED) {
+    return;
+  }
+  if (midCycleAdmissionPromise) {
+    log.debug("Mid-cycle admission pass already active; skipping");
+    return;
+  }
+  midCycleAdmissionPromise = runMidCycleAdmissionPass()
+    .catch((err) => {
+      log.error({ err }, "Mid-cycle admission pass failed");
+    })
+    .finally(() => {
+      midCycleAdmissionPromise = null;
+    });
+}
+
 export function pollAndProcess(): Promise<void> {
   if (activePollPromise) {
     followUpPollRequested = true;
     log.debug("Poll cycle already active; queued one follow-up cycle");
+    triggerMidCycleAdmission();
     return activePollPromise;
   }
 

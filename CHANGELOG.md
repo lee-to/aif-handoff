@@ -48,6 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Mid-cycle admission latency** — a backlog task on a parallel-enabled project with free slots now starts processing within one poll interval of becoming eligible, even while another project's lane is mid-pass; previously admission waited for the active poll cycle's longest lane to drain (multi-hour waits observed). Poll ticks / wake events during an active cycle now fire a single-flight admission pass (auto-queue advance + parallel-project lanes via the existing semaphore/CAS claim path). Sequential projects keep exact cycle-boundary semantics. Cap semantics are unchanged (`COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT` has always been per project _per stage_, `COORDINATOR_MAX_CONCURRENT_TASKS` stays the global ceiling), but a parallel project can now reach that per-stage allowance in more than one stage at once: a cycle lane and an admission lane may run the same project concurrently, so its in-flight task count can exceed what a single stage-sequential lane used to allow. The global cap still bounds the total. Rollout flag: `AGENT_MID_CYCLE_ADMISSION_ENABLED` (default `true`; `false` restores cycle-boundary-only admission)
 - Sheet portal rendering and dialog overflow on small viewports
 - Auto-focus chat input on new session creation
 - Hide empty message bubble when response is only an action block

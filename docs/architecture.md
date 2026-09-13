@@ -104,7 +104,7 @@ Short-lived in-memory caches exist only for dedupe/throttling repeated identical
 
 ## Agent Pipeline
 
-The coordinator (`packages/agent/src/coordinator.ts`) uses a dual-trigger model: it polls via `node-cron` every 30 seconds as a fallback and also reacts to real-time events from the API WebSocket (task creation, moves, and explicit `agent:wake` signals). Duplicate wakes are debounced, and both trigger sources share a single-flight poll loop; a trigger received during an active cycle requests one coalesced follow-up cycle. If the WebSocket is unavailable, the coordinator falls back to polling-only mode.
+The coordinator (`packages/agent/src/coordinator.ts`) uses a dual-trigger model: it polls via `node-cron` every 30 seconds as a fallback and also reacts to real-time events from the API WebSocket (task creation, moves, and explicit `agent:wake` signals). Duplicate wakes are debounced, and both trigger sources share a single-flight poll loop; a trigger received during an active cycle requests one coalesced follow-up cycle and, when `AGENT_MID_CYCLE_ADMISSION_ENABLED=true` (default), also fires a mid-cycle admission pass so eligible parallel-project work starts without waiting for the active cycle's lanes to drain (see [Mid-Cycle Admission](#mid-cycle-admission)). If the WebSocket is unavailable, the coordinator falls back to polling-only mode.
 
 The coordinator supports **parallel task execution** (experimental, per-project). It first selects up to `COORDINATOR_MAX_CONCURRENT_PROJECTS` (default 4) independent project lanes and runs those lanes concurrently, while `COORDINATOR_MAX_CONCURRENT_TASKS` (default 12) remains a global safety ceiling across all lanes. A FIFO permit governor distributes global capacity across runnable lanes and waits for released slots instead of dropping later selected lanes. Within one lane, pipeline stages still drain sequentially to preserve project-local ordering. When a project has "Parallel Execution" enabled in settings, up to `COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT` (default 3) tasks per stage run concurrently via `Promise.allSettled`; non-parallel projects always process 1 task at a time. Tasks are atomically claimed (`lockedBy`/`lockedUntil` columns) with lock duration tied to the stage timeout; heartbeats renew the lock periodically. Stale claims (expired TTL or dead heartbeat) are auto-released. On shutdown, active locks are released immediately.
 
@@ -419,6 +419,44 @@ in-flight and reduces how many slots auto-queue still needs to fill. Both
 passes use the same atomic `claimBacklogTaskForAdvance` write so a row is moved
 out of `backlog` exactly once even when both passes target the same task in the
 same cycle.
+
+### Mid-Cycle Admission
+
+A poll cycle admits work only at its own start and stays open until every
+selected project lane drains. Before mid-cycle admission, a task that became
+eligible while any lane was still mid-pass (for example a long implementer or
+review stage on another project) waited out that lane's full remaining
+runtime before admission — even when its own project had every slot free.
+
+When `AGENT_MID_CYCLE_ADMISSION_ENABLED=true` (the default), a trigger (poll
+tick or wake event) that arrives during an active cycle additionally fires a
+single-flight admission pass:
+
+1. It runs the same CAS-protected `processAutoQueueAdvance()` lift used at
+   cycle start, so eligible backlog tasks move into the pipeline immediately.
+2. It starts project lanes for **parallel-capable projects only**, reusing the
+   exact cycle lane path — shared stage semaphore (per-project-stage and
+   global caps), `[FIX:149]` post-permit revalidation, and atomic task
+   claims. Sequential projects are excluded on purpose: their
+   one-task-at-a-time invariant stays owned by the serialized cycle, with no
+   new lock-gap windows.
+
+The pass is single-flight, and it stays alive until the work it admitted
+drains — so a busy cycle sees at most one admission wave: triggers arriving
+while a pass is still running are covered only by the coalesced follow-up
+cycle, i.e. they wait for the cycle boundary as before. A project can also be
+served by a cycle lane and an admission lane at the same time; both hold
+permits under per-project-_stage_ keys, so its in-flight task count can exceed
+what one stage-sequential lane allowed, bounded by the per-stage allowance and
+`COORDINATOR_MAX_CONCURRENT_TASKS`.
+
+The pass does not extend the active cycle's promise, does not run the
+cycle-start recovery jobs (stale-claim release, watchdog, GitHub sync), and is
+bounded by `COORDINATOR_MAX_CONCURRENT_PROJECTS` exactly like a cycle-start
+lane batch. Idle factories are unaffected: with no active cycle there is no
+busy-trigger branch and admission remains effectively immediate via the
+normal cycle. Set the flag to `false` to restore pure cycle-boundary
+admission.
 
 ## Roadmap Import
 

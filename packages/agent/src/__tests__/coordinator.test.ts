@@ -2365,6 +2365,13 @@ describe("coordinator", () => {
     let releasePlanner: (() => void) | undefined;
     let pollPromise: Promise<void> | undefined;
 
+    // This test asserts the cycle-boundary coalescing contract (an overlapping
+    // poll request starts no new work), which now holds when mid-cycle
+    // admission is disabled. The default-on admission path is covered by
+    // midCycleAdmission.test.ts.
+    vi.stubEnv("AGENT_MID_CYCLE_ADMISSION_ENABLED", "false");
+    resetEnvCache();
+
     Object.assign(coordinatorEnv, {
       COORDINATOR_MAX_CONCURRENT_TASKS: 2,
       COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT: 2,
@@ -2443,6 +2450,8 @@ describe("coordinator", () => {
       releasePlanner?.();
       if (pollPromise) await pollPromise;
       Object.assign(coordinatorEnv, previousLimits);
+      vi.unstubAllEnvs();
+      resetEnvCache();
     }
   });
 

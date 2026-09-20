@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
@@ -91,6 +92,28 @@ function loadRootEnv() {
   }
 }
 
+// `internalBroadcastAuth` authorizes a caller only with a request token matching
+// `INTERNAL_BROADCAST_TOKEN`, or — with no token configured — while
+// `NODE_ENV=test`. `npm run dev` is neither, so with the token unset every
+// agent/MCP broadcast is answered with 401: the board stops live-updating and
+// the coordinator's wake channel never fires on agent-side transitions.
+//
+// Mint an ephemeral per-run token instead of shipping a shared placeholder in
+// `.env.example` — a copied placeholder is a publicly known credential in any
+// deployment that follows the documented setup. Nothing is written to disk; the
+// value lives for this dev run only.
+//
+// Processes launched outside this script (an MCP client spawning the stdio
+// server itself) do not inherit it and still need an explicit shared token.
+function ensureInternalBroadcastToken() {
+  if (process.env.INTERNAL_BROADCAST_TOKEN?.trim()) return;
+
+  process.env.INTERNAL_BROADCAST_TOKEN = randomBytes(32).toString("hex");
+  console.log(
+    "[dev] INTERNAL_BROADCAST_TOKEN is unset — generated an ephemeral token for this run.",
+  );
+}
+
 // MCP HTTP is optional in the root dev launcher, so invalid values disable the
 // extra HTTP process instead of aborting the whole dev stack.
 function resolveMcpPort(value) {
@@ -104,6 +127,7 @@ function resolveMcpPort(value) {
 }
 
 loadRootEnv();
+ensureInternalBroadcastToken();
 assertNodeVersion();
 assertNativeModulesUsable();
 assertWorkspacePackagesResolveToSource();

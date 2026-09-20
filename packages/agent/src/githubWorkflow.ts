@@ -5,9 +5,8 @@ import {
   findTaskById,
   listEnabledGitHubRepositories,
 } from "@aif/data";
-import { getEnv, logger } from "@aif/shared";
+import { getEnv, internalBroadcastHeaders, logger } from "@aif/shared";
 import { ensureAutoQueueTaskCommit } from "./autoQueueCommit.js";
-import { internalApiHeaders } from "./notifier.js";
 import { StageManualBlockError } from "./stageErrorHandler.js";
 
 const log = logger("github-workflow");
@@ -50,7 +49,7 @@ export async function synchronizeGitHubProjects(now = Date.now()): Promise<void>
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: internalApiHeaders(),
+        headers: internalBroadcastHeaders(getEnv().INTERNAL_BROADCAST_TOKEN),
         body: "{}",
         signal: AbortSignal.timeout(30_000),
       });
@@ -112,7 +111,7 @@ export async function publishGitHubTask(taskId: string, projectRoot: string): Pr
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: internalApiHeaders(),
+      headers: internalBroadcastHeaders(getEnv().INTERNAL_BROADCAST_TOKEN),
       body: JSON.stringify({
         branch: task.branchName,
         commitSha: commit.commitSha,

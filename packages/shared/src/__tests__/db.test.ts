@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { chatSessions } from "../schema.js";
 import { closeDb, createTestDb, getDb } from "../db.js";
 
-const CURRENT_SCHEMA_VERSION = 28;
+const CURRENT_SCHEMA_VERSION = 29;
 
 function removeSqliteArtifacts(dbPath: string): void {
   for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
@@ -23,6 +23,31 @@ describe("db", () => {
   it("createTestDb returns a working database with indexes", () => {
     const db = createTestDb();
     expect(db).toBeDefined();
+  });
+
+  it("creates persisted QA Check task columns", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-shared-qa-check-${Date.now()}-${Math.random()}.sqlite`);
+
+    try {
+      getDb(dbPath);
+      closeDb();
+      const sqlite = new Database(dbPath, { readonly: true });
+      const columns = sqlite.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+      sqlite.close();
+
+      expect(columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          "auto_qa_check",
+          "qa_check_report",
+          "qa_check_status",
+          "qa_check_playwright_configured",
+        ]),
+      );
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
   });
 
   it("creates restart-safe GitHub linkage tables", () => {

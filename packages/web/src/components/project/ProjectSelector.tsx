@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Collapsible } from "@/components/ui/collapsible";
 import { ListButton } from "@/components/ui/list-button";
 import { ScrollableContainer } from "@/components/ui/scrollable-container";
 import { Select } from "@/components/ui/select";
@@ -80,6 +81,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
   };
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("create");
+  const [budgetsOpen, setBudgetsOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
@@ -203,6 +205,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
   const openCreate = () => {
     if (!canManage) return;
     setDialogMode("create");
+    setBudgetsOpen(false);
     setEditingId(null);
     setName("");
     setRootPath("");
@@ -228,6 +231,7 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
     e.stopPropagation();
     if (!canManage) return;
     setDialogMode("edit");
+    setBudgetsOpen(false);
     setEditingId(p.id);
     setName(p.name);
     setRootPath(p.rootPath);
@@ -809,53 +813,57 @@ export function ProjectSelector({ selectedId, onSelect, onDeselect, canManage = 
                 </p>
               </div>
             )}
-            <div>
-              <label className="text-sm font-medium">Planner Budget (USD)</label>
-              <Input
-                type="number"
-                min="0.01"
-                step="0.1"
-                placeholder="Leave empty for unlimited"
-                value={plannerMaxBudgetUsd}
-                onChange={(e) => setPlannerMaxBudgetUsd(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Plan Checker Budget (USD)</label>
-              <Input
-                type="number"
-                min="0.01"
-                step="0.1"
-                placeholder="Leave empty for unlimited"
-                value={planCheckerMaxBudgetUsd}
-                onChange={(e) => setPlanCheckerMaxBudgetUsd(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Implementer Budget (USD)</label>
-              <Input
-                type="number"
-                min="0.01"
-                step="0.1"
-                placeholder="Leave empty for unlimited"
-                value={implementerMaxBudgetUsd}
-                onChange={(e) => setImplementerMaxBudgetUsd(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Review Sidecar Budget (USD)</label>
-              <Input
-                type="number"
-                min="0.01"
-                step="0.1"
-                placeholder="Leave empty for unlimited"
-                value={reviewSidecarMaxBudgetUsd}
-                onChange={(e) => setReviewSidecarMaxBudgetUsd(e.target.value)}
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Per-sidecar budget for review and security agents. Empty means unlimited.
-              </p>
-            </div>
+            <Collapsible open={budgetsOpen} onOpenChange={setBudgetsOpen} trigger="Agent budgets">
+              <div className="mt-3 space-y-4">
+                <div>
+                  <label className="text-sm font-medium">Planner Budget (USD)</label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.1"
+                    placeholder="Leave empty for unlimited"
+                    value={plannerMaxBudgetUsd}
+                    onChange={(e) => setPlannerMaxBudgetUsd(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Plan Checker Budget (USD)</label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.1"
+                    placeholder="Leave empty for unlimited"
+                    value={planCheckerMaxBudgetUsd}
+                    onChange={(e) => setPlanCheckerMaxBudgetUsd(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Implementer Budget (USD)</label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.1"
+                    placeholder="Leave empty for unlimited"
+                    value={implementerMaxBudgetUsd}
+                    onChange={(e) => setImplementerMaxBudgetUsd(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Review Sidecar Budget (USD)</label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.1"
+                    placeholder="Leave empty for unlimited"
+                    value={reviewSidecarMaxBudgetUsd}
+                    onChange={(e) => setReviewSidecarMaxBudgetUsd(e.target.value)}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Per-sidecar budget for review and security agents. Empty means unlimited.
+                  </p>
+                </div>
+              </div>
+            </Collapsible>
             <div className="flex items-center justify-between border border-border bg-card/50 p-3">
               <div>
                 <label className="text-sm font-medium">Parallel Execution</label>

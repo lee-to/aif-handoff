@@ -121,6 +121,7 @@ export const tasks = sqliteTable("tasks", {
   runPlanImprove: integer("run_plan_improve", { mode: "boolean" }).notNull().default(false),
   runPostVerify: integer("run_post_verify", { mode: "boolean" }).notNull().default(false),
   autoQa: integer("auto_qa", { mode: "boolean" }).notNull().default(false),
+  autoQaCheck: integer("auto_qa_check", { mode: "boolean" }).notNull().default(false),
   qaChangeSummary: text("qa_change_summary"),
   qaTestPlan: text("qa_test_plan"),
   qaTestCases: text("qa_test_cases"),
@@ -128,6 +129,12 @@ export const tasks = sqliteTable("tasks", {
     .$type<"idle" | "running" | "done" | "error">()
     .notNull()
     .default("idle"),
+  qaCheckReport: text("qa_check_report"),
+  qaCheckStatus: text("qa_check_status")
+    .$type<"idle" | "running" | "done" | "error">()
+    .notNull()
+    .default("idle"),
+  qaCheckPlaywrightConfigured: integer("qa_check_playwright_configured", { mode: "boolean" }),
   status: text("status").$type<TaskStatus>().notNull().default("backlog"),
   priority: integer("priority").notNull().default(0),
   position: real("position").notNull().default(1000.0),

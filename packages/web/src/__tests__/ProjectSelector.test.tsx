@@ -500,6 +500,29 @@ describe("ProjectSelector", () => {
     expect(screen.queryByText("MCP Servers")).toBeNull();
   });
 
+  it.each(["create", "edit"] as const)(
+    "hides budget inputs in a collapsed section in the %s dialog",
+    (mode) => {
+      mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
+
+      render(<ProjectSelector selectedId="p-1" onSelect={() => {}} onDeselect={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+      fireEvent.click(
+        mode === "create" ? screen.getByText("New project") : screen.getByTitle("Edit"),
+      );
+
+      const budgetsTrigger = screen.getByRole("button", { name: "Agent budgets" });
+      expect(budgetsTrigger).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText("Planner Budget (USD)")).toBeNull();
+
+      fireEvent.click(budgetsTrigger);
+
+      expect(budgetsTrigger).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("Planner Budget (USD)")).toBeInTheDocument();
+      expect(screen.getByText("Review Sidecar Budget (USD)")).toBeInTheDocument();
+    },
+  );
+
   it("shows error toast when project creation fails", () => {
     mockUseQuery.mockReturnValue({ data: undefined, isLoading: false });
 

@@ -145,6 +145,9 @@ describe("runQaQuery", () => {
       qaChangeSummary: "# Change Summary\nstuff",
       qaTestPlan: "# Test Plan\nsteps",
       qaTestCases: "# Test Cases\ncases",
+      qaCheckStatus: "idle",
+      qaCheckReport: null,
+      qaCheckPlaywrightConfigured: null,
     });
   });
 

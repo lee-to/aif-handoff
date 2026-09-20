@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import { getEnv, logger } from "@aif/shared";
-import { listProjects, listStaleInProgressTasks, resetStaleQaRuns } from "@aif/data";
+import {
+  listProjects,
+  listStaleInProgressTasks,
+  resetStaleQaCheckRuns,
+  resetStaleQaRuns,
+} from "@aif/data";
 import { projectsRouter } from "./routes/projects.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { chatRouter } from "./routes/chat.js";
@@ -114,6 +119,10 @@ listProjects();
 const recoveredQaRuns = resetStaleQaRuns();
 if (recoveredQaRuns > 0) {
   log.warn({ recoveredQaRuns }, "Reset stale running QA runs to error after restart");
+}
+const recoveredQaCheckRuns = resetStaleQaCheckRuns();
+if (recoveredQaCheckRuns > 0) {
+  log.warn({ recoveredQaCheckRuns }, "Reset stale running QA Check runs to error after restart");
 }
 const codexIndexService = createCodexIndexService();
 

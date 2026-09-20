@@ -25,6 +25,8 @@ import {
   issueIsEligible,
   latestReviewState,
   reviewFingerprint,
+  resolveGitHubToken,
+  toGitHubErrorResponse,
   toIssueSnapshot,
 } from "../services/github.js";
 import type { ParticipantApiEnv } from "../middleware/participantAuth.js";
@@ -45,45 +47,13 @@ githubRouter.use("*", async (c, next) => {
   await next();
 });
 
-function tokenFor(envVar: string): string {
-  if (!/^GITHUB_[A-Z0-9_]+$/.test(envVar)) {
-    throw new GitHubApiError(
-      "GitHub token environment variable must use the GITHUB_* prefix",
-      400,
-      "authentication",
-    );
-  }
-  const token = process.env[envVar]?.trim();
-  if (!token)
-    throw new GitHubApiError(
-      `GitHub token environment variable ${envVar} is not configured`,
-      400,
-      "authentication",
-    );
-  return token;
-}
-
 function githubErrorResponse(c: Context, error: unknown) {
   if (!(error instanceof GitHubApiError)) {
     log.error({ err: error }, "Unexpected GitHub integration failure");
     return c.json({ error: "GitHub integration failed", code: "github_upstream" }, 502);
   }
-  const body = {
-    error: error.message,
-    code: `github_${error.adapterCode}`,
-    retryAt: error.retryAt,
-  };
-  if (
-    error.httpStatus === 400 ||
-    error.httpStatus === 401 ||
-    error.httpStatus === 403 ||
-    error.httpStatus === 404 ||
-    error.httpStatus === 422 ||
-    error.httpStatus === 429
-  ) {
-    return c.json(body, error.httpStatus);
-  }
-  return c.json(body, 502);
+  const response = toGitHubErrorResponse(error);
+  return c.json(response.body, response.status);
 }
 
 githubRouter.get("/:id/github", (c) => {
@@ -101,7 +71,7 @@ githubRouter.put("/:id/github", jsonValidator(githubConnectSchema), async (c) =>
   const body = c.req.valid("json");
   const [owner, repository] = body.repository.split("/") as [string, string];
   try {
-    const remote = await new GitHubClient(tokenFor(body.tokenEnvVar)).getRepository(
+    const remote = await new GitHubClient(resolveGitHubToken(body.tokenEnvVar)).getRepository(
       owner,
       repository,
     );
@@ -135,7 +105,7 @@ githubRouter.post("/:id/github/sync", jsonValidator(githubSyncSchema), async (c)
     return c.json({ imported: 0, updated: 0, skipped: 0, issues: listGitHubIssues(projectId) });
 
   try {
-    const client = new GitHubClient(tokenFor(connection.tokenEnvVar));
+    const client = new GitHubClient(resolveGitHubToken(connection.tokenEnvVar));
     const remoteIssues = await client.listIssues(connection.owner, connection.name);
     const existingByNumber = new Map(
       listGitHubIssues(projectId).map((issue) => [issue.issueNumber, issue]),
@@ -302,7 +272,7 @@ githubRouter.post(
       "_AIF never merges this pull request; a human owns the final decision._",
     ].join("\n\n");
     try {
-      const client = new GitHubClient(tokenFor(connection.tokenEnvVar));
+      const client = new GitHubClient(resolveGitHubToken(connection.tokenEnvVar));
       let pull = issue.prNumber
         ? await client.getPullRequest(connection.owner, connection.name, issue.prNumber)
         : await client.findPullRequest(connection.owner, connection.name, body.branch);

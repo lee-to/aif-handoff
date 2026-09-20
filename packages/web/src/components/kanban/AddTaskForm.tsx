@@ -43,6 +43,7 @@ export function AddTaskForm({ projectId }: Props) {
   const [runPlanImprove, setRunPlanImprove] = useState(false);
   const [runPostVerify, setRunPostVerify] = useState(false);
   const [autoQa, setAutoQa] = useState(false);
+  const [autoQaCheck, setAutoQaCheck] = useState(false);
   const [maxReviewIterations, setMaxReviewIterations] = useState(3);
   const [runtimeProfileId, setRuntimeProfileId] = useState("");
   const [modelOverride, setModelOverride] = useState("");
@@ -97,6 +98,7 @@ export function AddTaskForm({ projectId }: Props) {
     setRunPlanImprove(false);
     setRunPostVerify(false);
     setAutoQa(false);
+    setAutoQaCheck(false);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setPlanPath(defaultPlanPath);
     setRuntimeProfileId("");
@@ -129,6 +131,7 @@ export function AddTaskForm({ projectId }: Props) {
     setRunPlanImprove(false);
     setRunPostVerify(false);
     setAutoQa(false);
+    setAutoQaCheck(false);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setRuntimeProfileId("");
     setModelOverride("");
@@ -208,6 +211,7 @@ export function AddTaskForm({ projectId }: Props) {
         runPlanImprove: useSubagents ? false : runPlanImprove,
         runPostVerify: useSubagents ? false : runPostVerify,
         autoQa,
+        autoQaCheck,
         maxReviewIterations,
         runtimeProfileId: runtimeProfileId || null,
         modelOverride: modelOverride.trim() || null,
@@ -424,12 +428,33 @@ export function AddTaskForm({ projectId }: Props) {
           <label className="flex items-start gap-2 text-xs text-muted-foreground">
             <Checkbox
               checked={autoQa}
-              onChange={(e) => setAutoQa(e.target.checked)}
+              onChange={(e) => {
+                setAutoQa(e.target.checked);
+                if (!e.target.checked) setAutoQaCheck(false);
+              }}
               className="mt-0.5 h-3.5 w-3.5"
             />
             <span>
               <span className="font-medium text-foreground">Run QA after done</span>
-              {" - Automatically run the QA pipeline when this task is approved (done → verified)."}
+              {
+                " - Automatically generate the QA plan when this task is approved (done → verified)."
+              }
+            </span>
+          </label>
+        )}
+        {qaPipelineEnabled && (
+          <label className="flex items-start gap-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={autoQaCheck}
+              disabled={!autoQa}
+              onChange={(e) => setAutoQaCheck(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5"
+            />
+            <span>
+              <span className="font-medium text-foreground">Run QA Check after QA</span>
+              {
+                " - Execute generated test cases; missing browser automation blocks only browser-dependent cases."
+              }
             </span>
           </label>
         )}

@@ -93,6 +93,7 @@ export {
   type GitHubIssueLink,
   type UpdateProjectOrganizationInput,
   type CreateProjectInput,
+  type UpdateProjectInput,
   type AppSettings,
   type UpdateAppSettingsInput,
   type Task,

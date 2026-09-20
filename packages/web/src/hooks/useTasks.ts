@@ -187,3 +187,11 @@ export function useRunQa(taskId: string) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["task", taskId] }),
   });
 }
+
+export function useRunQaCheck(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.runQaCheck(taskId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["task", taskId] }),
+  });
+}

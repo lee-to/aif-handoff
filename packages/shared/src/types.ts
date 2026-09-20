@@ -144,9 +144,8 @@ export interface GitHubIssueLink {
   updatedAt: string;
 }
 
-export interface CreateProjectInput {
+interface ProjectInputSettings {
   name: string;
-  rootPath: string;
   plannerMaxBudgetUsd?: number;
   planCheckerMaxBudgetUsd?: number;
   implementerMaxBudgetUsd?: number;
@@ -157,6 +156,13 @@ export interface CreateProjectInput {
   defaultPlanRuntimeProfileId?: string | null;
   defaultReviewRuntimeProfileId?: string | null;
   defaultChatRuntimeProfileId?: string | null;
+}
+
+export type CreateProjectInput = ProjectInputSettings &
+  ({ rootPath: string; githubRepository?: never } | { rootPath?: never; githubRepository: string });
+
+export interface UpdateProjectInput extends ProjectInputSettings {
+  rootPath: string;
 }
 
 export interface UpdateProjectOrganizationInput {
@@ -333,10 +339,14 @@ export interface Task {
   runPlanImprove: boolean;
   runPostVerify: boolean;
   autoQa: boolean;
+  autoQaCheck: boolean;
   qaChangeSummary: string | null;
   qaTestPlan: string | null;
   qaTestCases: string | null;
   qaStatus: "idle" | "running" | "done" | "error";
+  qaCheckReport: string | null;
+  qaCheckStatus: "idle" | "running" | "done" | "error";
+  qaCheckPlaywrightConfigured: boolean | null;
   status: TaskStatus;
   priority: number;
   position: number;
@@ -498,6 +508,7 @@ export interface CreateTaskInput {
   runPlanImprove?: boolean;
   runPostVerify?: boolean;
   autoQa?: boolean;
+  autoQaCheck?: boolean;
   maxReviewIterations?: number;
   paused?: boolean;
   runtimeProfileId?: string | null;
@@ -525,10 +536,14 @@ export interface UpdateTaskInput {
   runPlanImprove?: boolean;
   runPostVerify?: boolean;
   autoQa?: boolean;
+  autoQaCheck?: boolean;
   qaChangeSummary?: string | null;
   qaTestPlan?: string | null;
   qaTestCases?: string | null;
   qaStatus?: "idle" | "running" | "done" | "error";
+  qaCheckReport?: string | null;
+  qaCheckStatus?: "idle" | "running" | "done" | "error";
+  qaCheckPlaywrightConfigured?: boolean | null;
   plan?: string | null;
   implementationLog?: string | null;
   reviewComments?: string | null;

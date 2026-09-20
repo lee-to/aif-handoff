@@ -566,3 +566,26 @@ describe("settings overview — GitHub issue-to-PR flag", () => {
     expect((await buildSettingsOverview()).githubIssuePrEnabled).toBe(false);
   });
 });
+
+describe("settings overview — GitHub project clone flag", () => {
+  const original = process.env.AIF_GITHUB_PROJECT_CLONE_ENABLED;
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env.AIF_GITHUB_PROJECT_CLONE_ENABLED;
+    } else {
+      process.env.AIF_GITHUB_PROJECT_CLONE_ENABLED = original;
+    }
+    resetEnvCache();
+  });
+
+  it("reports githubProjectCloneEnabled from AIF_GITHUB_PROJECT_CLONE_ENABLED", async () => {
+    process.env.AIF_GITHUB_PROJECT_CLONE_ENABLED = "true";
+    resetEnvCache();
+    expect((await buildSettingsOverview()).githubProjectCloneEnabled).toBe(true);
+
+    process.env.AIF_GITHUB_PROJECT_CLONE_ENABLED = "false";
+    resetEnvCache();
+    expect((await buildSettingsOverview()).githubProjectCloneEnabled).toBe(false);
+  });
+});

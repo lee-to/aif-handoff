@@ -1084,6 +1084,16 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 29,
+    description: "Add QA Check report, lifecycle status, and Playwright MCP preflight result",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN auto_qa_check INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE tasks ADD COLUMN qa_check_report TEXT;
+      ALTER TABLE tasks ADD COLUMN qa_check_status TEXT NOT NULL DEFAULT 'idle';
+      ALTER TABLE tasks ADD COLUMN qa_check_playwright_configured INTEGER;
+    `,
+  },
 ];
 
 function splitSqlStatements(sqlText: string): string[] {

@@ -75,9 +75,8 @@ const taskAttachmentSchema = z.object({
   path: z.string().max(1000).optional(),
 });
 
-export const createProjectSchema = z.object({
+const projectSettingsSchema = z.object({
   name: z.string().min(1, "Name is required").max(200),
-  rootPath: z.string().min(1, "Root path is required"),
   plannerMaxBudgetUsd: z.number().positive().optional(),
   planCheckerMaxBudgetUsd: z.number().positive().optional(),
   implementerMaxBudgetUsd: z.number().positive().optional(),
@@ -89,11 +88,30 @@ export const createProjectSchema = z.object({
   defaultChatRuntimeProfileId: z.string().min(1).nullable().optional(),
 });
 
+const githubRepositorySchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "Repository must use owner/name format");
+
+export const createProjectSchema = projectSettingsSchema.and(
+  z.union([
+    z.object({
+      rootPath: z.string().min(1, "Root path is required"),
+      githubRepository: z.never().optional(),
+    }),
+    z.object({
+      rootPath: z.never().optional(),
+      githubRepository: githubRepositorySchema,
+    }),
+  ]),
+);
+
+export const updateProjectSchema = projectSettingsSchema.extend({
+  rootPath: z.string().min(1, "Root path is required"),
+});
+
 export const githubConnectSchema = z.object({
-  repository: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "Repository must use owner/name format"),
+  repository: githubRepositorySchema,
   tokenEnvVar: z
     .string()
     .trim()
@@ -149,6 +167,7 @@ export const createTaskSchema = z.object({
   runPlanImprove: z.boolean().default(false),
   runPostVerify: z.boolean().default(false),
   autoQa: z.boolean().optional(),
+  autoQaCheck: z.boolean().optional(),
   maxReviewIterations: z
     .number()
     .int()
@@ -180,6 +199,7 @@ export const updateTaskSchema = z.object({
   runPlanImprove: z.boolean().optional(),
   runPostVerify: z.boolean().optional(),
   autoQa: z.boolean().optional(),
+  autoQaCheck: z.boolean().optional(),
   maxReviewIterations: z.number().int().min(1).max(50).optional(),
   plan: z.string().nullable().optional(),
   implementationLog: z.string().nullable().optional(),

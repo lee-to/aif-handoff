@@ -22,22 +22,20 @@ describe("internalBroadcastHeaders", () => {
     });
   });
 
-  it("falls back to the loopback caller header in development", () => {
-    vi.stubEnv("NODE_ENV", "development");
+  it.each(["development", "production", ""])(
+    "sends no auth hint without a token (NODE_ENV=%j)",
+    (nodeEnv) => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
 
-    expect(internalBroadcastHeaders(undefined)).toEqual({
-      "Content-Type": "application/json",
-      "X-Real-IP": "127.0.0.1",
-    });
-  });
-
-  it("sends no auth hint without a token outside development", () => {
-    vi.stubEnv("NODE_ENV", "");
-
-    // internalBroadcastAuth rejects this caller with 401 — the combination is
-    // a misconfiguration, and the helper must not paper over it.
-    expect(internalBroadcastHeaders(null)).toEqual({
-      "Content-Type": "application/json",
-    });
-  });
+      // internalBroadcastAuth only ever accepts a matching token, or any caller
+      // while NODE_ENV=test. There is no loopback-header fallback to reach for,
+      // so a missing token is a misconfiguration the helper must not paper over.
+      expect(internalBroadcastHeaders(undefined)).toEqual({
+        "Content-Type": "application/json",
+      });
+      expect(internalBroadcastHeaders(null)).toEqual({
+        "Content-Type": "application/json",
+      });
+    },
+  );
 });

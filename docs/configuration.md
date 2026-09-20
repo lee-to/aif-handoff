@@ -707,18 +707,24 @@ The config is editable via the **Global Settings** dialog in the web UI (gear ic
 | `skip_push_after_commit` | `false`    | Skip push after /aif-commit                     |
 | `strict_base_update`     | `false`    | Hard-fail if `git pull --ff-only` of base fails |
 
-**`task_defaults`** — per-project defaults applied when a task is created without an explicit value for a flag. Resolution order: **explicit task arg → `task_defaults` → schema default**. This mirrors the existing task → project → system fallback used for runtime profiles (see [Runtime Profile Defaults](#runtime-profile-defaults)). All fields are optional — a project overrides only the flags it cares about. Because the values are read from `.ai-factory/config.yaml`, they apply to every creation path: UI, MCP `handoff_create_task`, REST API, auto-queue, and roadmap import.
+**`task_defaults`** — per-project defaults applied when a task is created without an explicit value for a flag. Resolution order: **explicit task arg → `task_defaults` → global default**. This mirrors the existing task → project → system fallback used for runtime profiles (see [Runtime Profile Defaults](#runtime-profile-defaults)). All fields are optional — a project overrides only the flags it cares about.
 
-| Key                   | Schema default | Options          | Notes                                                             |
-| --------------------- | -------------- | ---------------- | ----------------------------------------------------------------- |
-| `autoMode`            | `true`         | boolean          | `false` parks the task at `plan_ready` for manager review.        |
-| `plannerMode`         | `fast`         | `fast`, `full`   | `full` creates a feature branch and an iteratively polished plan. |
-| `skipReview`          | `false`        | boolean          | Bypass the review + security sidecar stage.                       |
-| `useSubagents`        | `false`        | boolean          | Use native agent definitions instead of slash-command fallback.   |
-| `planTests`           | `false`        | boolean          | Include test tasks in the generated plan.                         |
-| `maxReviewIterations` | `3`            | positive integer | Cap on automatic review→rework cycles (autoMode only).            |
+`createTask` is the single resolution point, so every creation path benefits: UI, MCP `handoff_create_task`, REST API, auto-queue, and roadmap import all leave omitted flags as `undefined` rather than filling a default the project would then lose to.
 
-Invalid values (wrong type, unknown enum, non-positive integer) are normalized to "no override" — the affected flag falls through to the schema default rather than failing task creation.
+| Key                   | Global default                 | Options          | Notes                                                             |
+| --------------------- | ------------------------------ | ---------------- | ----------------------------------------------------------------- |
+| `autoMode`            | `true`                         | boolean          | `false` parks the task at `plan_ready` for manager review.        |
+| `plannerMode`         | `fast`                         | `fast`, `full`   | `full` creates a feature branch and an iteratively polished plan. |
+| `skipReview`          | mode-driven (`fast` → `true`)  | boolean          | Bypass the review + security sidecar stage.                       |
+| `useSubagents`        | `AGENT_USE_SUBAGENTS`          | boolean          | Use native agent definitions instead of slash-command fallback.   |
+| `planTests`           | mode-driven (`fast` → `false`) | boolean          | Include test tasks in the generated plan.                         |
+| `maxReviewIterations` | `AGENT_MAX_REVIEW_ITERATIONS`  | positive integer | Cap on automatic review→rework cycles (autoMode only).            |
+
+The mode-driven defaults come from the resolved `plannerMode` — so a project that
+sets only `plannerMode: full` also gets `skipReview: false` and `planTests: true`
+unless it overrides them. `task_defaults` outrank the mode-driven layer.
+
+Invalid values (wrong type, unknown enum, non-positive integer) are normalized to "no override" — the affected flag falls through to the global default rather than failing task creation.
 
 Example — a SwiftPM iOS project that always wants manager review and cannot run two parallel `swift build`:
 

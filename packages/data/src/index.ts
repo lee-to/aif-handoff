@@ -23,6 +23,7 @@ import {
   TASK_STATUSES,
   buildRuntimeLimitSignature,
   appSettings,
+  defaultsForMode,
   generatePlanPath,
   getEnv,
   getProjectConfig,
@@ -1225,13 +1226,29 @@ export function createTask(input: {
   const cfg = getProjectConfig(projectRoot);
   const td = cfg.task_defaults;
 
-  // Resolve task flags: explicit input → project task_defaults → undefined (schema default).
-  const resolvedPlannerMode = input.plannerMode ?? td.plannerMode;
-  const resolvedAutoMode = input.autoMode ?? td.autoMode;
-  const resolvedSkipReview = input.skipReview ?? td.skipReview;
-  const resolvedUseSubagents = input.useSubagents ?? td.useSubagents;
-  const resolvedPlanTests = input.planTests ?? td.planTests;
-  const resolvedMaxReviewIterations = input.maxReviewIterations ?? td.maxReviewIterations;
+  // Resolve task flags: explicit input → project task_defaults → global default.
+  // createTask is the single resolution point: callers (REST, web form, roadmap
+  // import, MCP) pass `undefined` for anything the user did not choose, so the
+  // project's task_defaults are never pre-empted by a materialized default.
+  const env = getEnv();
+  const resolvedPlannerMode = input.plannerMode ?? td.plannerMode ?? "fast";
+  const resolvedAutoMode = input.autoMode ?? td.autoMode ?? true;
+  const resolvedUseSubagents = input.useSubagents ?? td.useSubagents ?? env.AGENT_USE_SUBAGENTS;
+  const resolvedMaxReviewIterations =
+    input.maxReviewIterations ?? td.maxReviewIterations ?? env.AGENT_MAX_REVIEW_ITERATIONS;
+
+  // Mode-driven flag defaults are the last layer, so an explicit task argument
+  // and the project's task_defaults both outrank them.
+  // `plannerMode` is typed as a plain string here, so narrow the way
+  // defaultsForMode itself does: anything that is not "full" is fast mode.
+  const modeDefaults = defaultsForMode(resolvedPlannerMode === "full" ? "full" : "fast");
+  const resolvedSkipReview = input.skipReview ?? td.skipReview ?? modeDefaults.skipReview;
+  const resolvedPlanTests = input.planTests ?? td.planTests ?? modeDefaults.planTests;
+  const resolvedPlanDocs = input.planDocs ?? modeDefaults.planDocs;
+
+  // Subagent workflows own their own improve/verify passes.
+  const resolvedRunPlanImprove = resolvedUseSubagents ? false : input.runPlanImprove;
+  const resolvedRunPostVerify = resolvedUseSubagents ? false : input.runPostVerify;
 
   // Auto-compute planPath for full mode when no explicit path is provided
   let resolvedPlanPath = input.planPath;
@@ -1301,12 +1318,12 @@ export function createTask(input: {
       isFix: input.isFix,
       plannerMode: resolvedPlannerMode,
       planPath: resolvedPlanPath,
-      planDocs: input.planDocs,
+      planDocs: resolvedPlanDocs,
       planTests: resolvedPlanTests,
       skipReview: resolvedSkipReview,
       useSubagents: resolvedUseSubagents,
-      runPlanImprove: input.runPlanImprove,
-      runPostVerify: input.runPostVerify,
+      runPlanImprove: resolvedRunPlanImprove,
+      runPostVerify: resolvedRunPostVerify,
       autoQa: input.autoQa,
       autoQaCheck: input.autoQaCheck,
       maxReviewIterations: resolvedMaxReviewIterations,

@@ -69,21 +69,26 @@ describe("createTask task_defaults fallback", () => {
     expect(task!.plannerMode).toBe("full"); // from task_defaults
   });
 
-  it("falls back to schema default when neither explicit nor task_defaults", () => {
-    // no config.yaml → task_defaults empty → schema defaults
+  it("falls back to the global default when neither explicit nor task_defaults", () => {
+    // no config.yaml → task_defaults empty → global defaults
     const task = createTask({
       projectId: PROJECT_ID,
       title: "T3",
       description: "d",
     });
     expect(task).toBeDefined();
-    expect(task!.autoMode).toBe(true); // schema default
-    expect(task!.plannerMode).toBe("fast"); // schema default
-    expect(task!.skipReview).toBe(false); // schema default
-    expect(task!.maxReviewIterations).toBe(3); // schema default
+    expect(task!.autoMode).toBe(true);
+    expect(task!.plannerMode).toBe("fast");
+    expect(task!.useSubagents).toBe(false); // AGENT_USE_SUBAGENTS
+    expect(task!.maxReviewIterations).toBe(3); // AGENT_MAX_REVIEW_ITERATIONS
+    // Mode-driven defaults are the last layer, so fast mode skips review and
+    // plans no tests — the same values POST /tasks used to fill in itself.
+    expect(task!.skipReview).toBe(true);
+    expect(task!.planTests).toBe(false);
+    expect(task!.planDocs).toBe(false);
   });
 
-  it("partial task_defaults leaves unspecified flags on schema default", () => {
+  it("partial task_defaults leaves unspecified flags on the global default", () => {
     writeTaskDefaults("task_defaults:\n  useSubagents: true\n");
     const task = createTask({
       projectId: PROJECT_ID,
@@ -92,7 +97,57 @@ describe("createTask task_defaults fallback", () => {
     });
     expect(task).toBeDefined();
     expect(task!.useSubagents).toBe(true); // from task_defaults
-    expect(task!.autoMode).toBe(true); // schema default (not in task_defaults)
-    expect(task!.skipReview).toBe(false); // schema default
+    expect(task!.autoMode).toBe(true); // global default (not in task_defaults)
+    expect(task!.skipReview).toBe(true); // fast-mode default
+  });
+
+  it("task_defaults outrank the mode-driven flag defaults", () => {
+    // fast mode would give skipReview=true / planTests=false; the project
+    // overrides both, and that must survive all the way into the row.
+    writeTaskDefaults(
+      "task_defaults:\n  plannerMode: fast\n  skipReview: false\n  planTests: true\n",
+    );
+    const task = createTask({
+      projectId: PROJECT_ID,
+      title: "T5",
+      description: "d",
+    });
+    expect(task).toBeDefined();
+    expect(task!.plannerMode).toBe("fast");
+    expect(task!.skipReview).toBe(false);
+    expect(task!.planTests).toBe(true);
+    // planDocs has no task_defaults entry, so it stays on the mode default.
+    expect(task!.planDocs).toBe(false);
+  });
+
+  it("derives mode-driven defaults from the task_defaults plannerMode", () => {
+    // plannerMode comes from the project, so the full-mode flag defaults must
+    // follow it rather than the "fast" the caller never asked for.
+    writeTaskDefaults("task_defaults:\n  plannerMode: full\n");
+    const task = createTask({
+      projectId: PROJECT_ID,
+      title: "T6",
+      description: "d",
+    });
+    expect(task).toBeDefined();
+    expect(task!.plannerMode).toBe("full");
+    expect(task!.skipReview).toBe(false);
+    expect(task!.planTests).toBe(true);
+    expect(task!.planDocs).toBe(true);
+  });
+
+  it("lets subagent mode from task_defaults disable the improve/verify passes", () => {
+    writeTaskDefaults("task_defaults:\n  useSubagents: true\n");
+    const task = createTask({
+      projectId: PROJECT_ID,
+      title: "T7",
+      description: "d",
+      runPlanImprove: true,
+      runPostVerify: true,
+    });
+    expect(task).toBeDefined();
+    expect(task!.useSubagents).toBe(true);
+    expect(task!.runPlanImprove).toBe(false);
+    expect(task!.runPostVerify).toBe(false);
   });
 });

@@ -502,30 +502,9 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     body.plannerMode = "full";
   }
 
-  // Fill omitted flag values from mode-driven defaults (mirror of web UI behavior).
-  const modeDefaults = defaultsForMode(body.plannerMode);
-  const resolvedSkipReview = body.skipReview ?? modeDefaults.skipReview;
-  const resolvedPlanDocs = body.planDocs ?? modeDefaults.planDocs;
-  const resolvedPlanTests = body.planTests ?? modeDefaults.planTests;
-  const resolvedRunPlanImprove = body.useSubagents ? false : body.runPlanImprove;
-  const resolvedRunPostVerify = body.useSubagents ? false : body.runPostVerify;
-  if (
-    body.skipReview === undefined ||
-    body.planDocs === undefined ||
-    body.planTests === undefined
-  ) {
-    log.debug(
-      {
-        plannerMode: body.plannerMode,
-        filled: {
-          skipReview: body.skipReview === undefined,
-          planDocs: body.planDocs === undefined,
-          planTests: body.planTests === undefined,
-        },
-      },
-      "Applied mode-driven task flag defaults",
-    );
-  }
+  // Omitted flags stay omitted: createTask resolves them as explicit argument →
+  // project task_defaults → mode-driven default. Filling them here would hide
+  // the project's task_defaults behind a materialized value.
 
   // Pre-create the task to get an ID, then persist attachments to storage
   const created = createTask({
@@ -541,12 +520,12 @@ tasksRouter.post("/", jsonValidator(createTaskSchema), async (c) => {
     isFix: body.isFix,
     plannerMode: body.plannerMode,
     planPath: body.planPath ?? defaultPlanPath,
-    planDocs: resolvedPlanDocs,
-    planTests: resolvedPlanTests,
-    skipReview: resolvedSkipReview,
+    planDocs: body.planDocs,
+    planTests: body.planTests,
+    skipReview: body.skipReview,
     useSubagents: body.useSubagents,
-    runPlanImprove: resolvedRunPlanImprove,
-    runPostVerify: resolvedRunPostVerify,
+    runPlanImprove: body.runPlanImprove,
+    runPostVerify: body.runPostVerify,
     autoQa: body.autoQa,
     autoQaCheck: body.autoQaCheck,
     maxReviewIterations: body.maxReviewIterations,

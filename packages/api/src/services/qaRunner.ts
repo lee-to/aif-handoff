@@ -13,6 +13,7 @@ const log = logger("qa-runner");
 export interface RunQaQueryResult {
   ok: boolean;
   error?: string;
+  code?: "ai_handoff_required";
 }
 
 export interface RunQaQueryInput {
@@ -77,6 +78,17 @@ export function resolveQaBranch(persistedBranch: string | null, executionRoot: s
   } catch {
     return "";
   }
+}
+
+/** Resolve the shared branch-scoped directory used by aif-qa and aif-qa-check. */
+export function resolveQaArtifactDir(
+  persistedBranch: string | null,
+  executionRoot: string,
+): { artifactDir: string; branch: string; branchSlug: string; qaRoot: string } {
+  const branch = resolveQaBranch(persistedBranch, executionRoot);
+  const qaRoot = join(executionRoot, getProjectConfig(executionRoot).paths.qa);
+  const branchSlug = computeQaBranchSlug(branch, executionRoot);
+  return { artifactDir: join(qaRoot, branchSlug), branch, branchSlug, qaRoot };
 }
 
 /** Build the explicit aif-qa pipeline prompt with absolute artifact paths baked in. */
@@ -156,6 +168,17 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
     log.error({ taskId, projectId }, msg);
     return { ok: false, error: msg };
   }
+  if (task.executionOwner === "human") {
+    log.warn(
+      { taskId, projectId, executionOwner: task.executionOwner },
+      "[QA] Runtime rejected for human-owned task",
+    );
+    return {
+      ok: false,
+      code: "ai_handoff_required",
+      error: "The task must be handed to AI before QA can run",
+    };
+  }
 
   // Branch/config/slug resolution lives INSIDE the try alongside the runtime
   // call so runQaQuery honors its "NEVER throws" contract. computeQaBranchSlug
@@ -168,15 +191,12 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
     // task's persisted branch, or the current git branch as a fallback. This keeps
     // the runner's slug in lockstep with the skill so CLI/API transports agree on
     // the artifact directory even for branchless (fast-mode) tasks.
-    const resolvedBranch = resolveQaBranch(task.branchName, executionRoot);
-
-    // Resolve artifact paths deterministically BEFORE running the runtime so the
-    // exact paths can be baked into the prompt (CLI resolves /aif-qa --all to its
-    // own slug dir, but Codex-API/OpenRouter only execute the spelled-out prompt).
-    const cfg = getProjectConfig(executionRoot);
-    const qaRoot = join(executionRoot, cfg.paths.qa);
-    const branchSlug = computeQaBranchSlug(resolvedBranch, executionRoot);
-    const artifactDir = join(qaRoot, branchSlug);
+    const {
+      artifactDir,
+      branch: resolvedBranch,
+      branchSlug,
+      qaRoot,
+    } = resolveQaArtifactDir(task.branchName, executionRoot);
 
     log.info(
       { taskId, branch: resolvedBranch, branchSource: task.branchName ? "task" : "git" },
@@ -193,6 +213,14 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
     // finalizes the run to "done" / "error".
     const prompt = buildQaPrompt(artifactDir);
 
+    const executionBoundaryTask = findTaskById(taskId);
+    if (!executionBoundaryTask || executionBoundaryTask.executionOwner === "human") {
+      return {
+        ok: false,
+        code: "ai_handoff_required",
+        error: "The task must be handed to AI before QA can run",
+      };
+    }
     const { result } = await runApiRuntimeOneShot({
       projectId,
       projectRoot: executionRoot,
@@ -237,6 +265,9 @@ export async function runQaQuery(input: RunQaQueryInput): Promise<RunQaQueryResu
       qaChangeSummary,
       qaTestPlan,
       qaTestCases,
+      qaCheckStatus: "idle",
+      qaCheckReport: null,
+      qaCheckPlaywrightConfigured: null,
     });
     const doneTask = findTaskById(taskId);
     if (doneTask) {

@@ -15,40 +15,6 @@ interface ColumnProps {
   hasActiveFilters: boolean;
 }
 
-const OWNER_BADGES: Record<TaskStatus, Array<{ label: string; className: string }>> = {
-  backlog: [
-    { label: "Human controlled", className: "text-cyan-300 border-cyan-500/35 bg-cyan-500/10" },
-  ],
-  planning: [
-    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
-  ],
-  improve: [
-    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
-  ],
-  plan_ready: [
-    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
-    { label: "Human decision", className: "text-green-300 border-green-500/35 bg-green-500/10" },
-  ],
-  implementing: [
-    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
-  ],
-  review: [
-    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
-  ],
-  verify: [
-    { label: "AI controlled", className: "text-amber-300 border-amber-500/35 bg-amber-500/10" },
-  ],
-  blocked_external: [
-    { label: "Human controlled", className: "text-cyan-300 border-cyan-500/35 bg-cyan-500/10" },
-  ],
-  done: [
-    { label: "Human decision", className: "text-green-300 border-green-500/35 bg-green-500/10" },
-  ],
-  verified: [
-    { label: "Human controlled", className: "text-cyan-300 border-cyan-500/35 bg-cyan-500/10" },
-  ],
-};
-
 function reorderBacklog(
   tasks: TaskListItem[],
   idx: number,
@@ -85,7 +51,6 @@ export function Column({
   hasActiveFilters,
 }: ColumnProps) {
   const config = STATUS_CONFIG[status];
-  const owners = OWNER_BADGES[status];
   const share = totalVisibleTasks > 0 ? Math.round((tasks.length / totalVisibleTasks) * 100) : 0;
   const isCompact = density === "compact";
   const reorder = useReorderTask();
@@ -125,17 +90,6 @@ export function Column({
             style={{ width: `${share}%`, backgroundColor: config.color }}
           />
         </div>
-      </div>
-
-      <div className={`flex flex-wrap gap-1.5 ${isCompact ? "mb-2" : "mb-3"}`}>
-        {owners.map((owner) => (
-          <span
-            key={owner.label}
-            className={`inline-flex border ${isCompact ? "px-1.5 py-0 text-4xs" : "px-2 py-0.5 text-3xs"} ${owner.className}`}
-          >
-            {owner.label}
-          </span>
-        ))}
       </div>
 
       {status === "backlog" && (

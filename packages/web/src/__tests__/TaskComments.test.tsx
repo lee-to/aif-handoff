@@ -30,6 +30,13 @@ describe("TaskComments", () => {
           id: "c-1",
           taskId: "t-1",
           author: "human",
+          participantId: "participant-1",
+          participant: {
+            id: "participant-1",
+            displayName: "Alice",
+            role: "member",
+            active: false,
+          },
           message: "Please adjust the architecture section.",
           createdAt: "2026-01-01T10:00:00.000Z",
           attachments: [
@@ -46,6 +53,7 @@ describe("TaskComments", () => {
 
     render(<TaskComments taskId="t-1" />);
     expect(screen.getByText("Please adjust the architecture section.")).toBeDefined();
+    expect(screen.getByText("Alice (inactive)")).toBeDefined();
     expect(screen.getByText("Attachments")).toBeDefined();
     expect(screen.getByText(/notes\.md/)).toBeDefined();
   });

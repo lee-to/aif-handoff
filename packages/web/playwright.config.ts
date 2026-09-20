@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const isolatedUi = process.env.AIF_E2E_ISOLATED_UI === "true";
+
 // Perf suite boots against a running local dev stack (API on 3009, web on 5180).
 // reuseExistingServer keeps iteration fast: when a dev shell is already up, the
 // suite attaches; otherwise playwright boots one from the repo root.
@@ -27,7 +29,9 @@ export default defineConfig({
   webServer: process.env.AIF_SKIP_DEV_SERVER
     ? undefined
     : {
-        command: "npm run dev:perf --prefix ../..",
+        command: isolatedUi
+          ? "npm run dev --workspace @aif/web -- --host 127.0.0.1"
+          : "npm run dev:perf --prefix ../..",
         env: {
           ...process.env,
           AIF_ENABLE_CODEX_LOGIN_PROXY: "false",

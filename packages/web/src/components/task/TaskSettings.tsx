@@ -10,6 +10,7 @@ import { useQaPipelineEnabled } from "@/hooks/useSettings";
 import { useAppRuntimeDefaults, useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
 import { formatRuntimeProfileOptionLabel } from "@/lib/runtimeProfiles";
 import { defaultsForMode, type Task, type UpdateTaskInput } from "@aif/shared/browser";
+import { TaskOwnershipSummary } from "./TaskOwnership";
 
 interface Props {
   task: Task;
@@ -37,6 +38,7 @@ export function TaskSettings({ task, onSave }: Props) {
   const [runPlanImprove, setRunPlanImprove] = useState(task.runPlanImprove);
   const [runPostVerify, setRunPostVerify] = useState(task.runPostVerify);
   const [autoQa, setAutoQa] = useState(task.autoQa);
+  const [autoQaCheck, setAutoQaCheck] = useState(task.autoQaCheck);
   const [plannerMode, setPlannerMode] = useState<"full" | "fast">(
     task.plannerMode as "full" | "fast",
   );
@@ -67,6 +69,7 @@ export function TaskSettings({ task, onSave }: Props) {
     runPlanImprove !== task.runPlanImprove ||
     runPostVerify !== task.runPostVerify ||
     autoQa !== task.autoQa ||
+    autoQaCheck !== task.autoQaCheck ||
     maxReviewIterations !== task.maxReviewIterations ||
     (runtimeProfileId || null) !== (task.runtimeProfileId ?? null) ||
     (modelOverride.trim() || null) !== (task.modelOverride ?? null) ||
@@ -86,6 +89,7 @@ export function TaskSettings({ task, onSave }: Props) {
     if (runPlanImprove !== task.runPlanImprove) input.runPlanImprove = runPlanImprove;
     if (runPostVerify !== task.runPostVerify) input.runPostVerify = runPostVerify;
     if (autoQa !== task.autoQa) input.autoQa = autoQa;
+    if (autoQaCheck !== task.autoQaCheck) input.autoQaCheck = autoQaCheck;
     if (maxReviewIterations !== task.maxReviewIterations)
       input.maxReviewIterations = maxReviewIterations;
     if ((runtimeProfileId || null) !== (task.runtimeProfileId ?? null)) {
@@ -141,6 +145,7 @@ export function TaskSettings({ task, onSave }: Props) {
               setRunPlanImprove(task.runPlanImprove);
               setRunPostVerify(task.runPostVerify);
               setAutoQa(task.autoQa);
+              setAutoQaCheck(task.autoQaCheck);
               setMaxReviewIterations(task.maxReviewIterations);
               setPlannerMode(task.plannerMode as "full" | "fast");
               setPlanPath(task.planPath);
@@ -159,6 +164,15 @@ export function TaskSettings({ task, onSave }: Props) {
       </div>
 
       <div className="space-y-2">
+        <div className="border border-border/60 bg-muted/20 p-2">
+          <p className="mb-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Execution responsibility
+          </p>
+          <TaskOwnershipSummary executionOwner={task.executionOwner} assignees={task.assignees} />
+          <p className="mt-1 text-3xs text-muted-foreground">
+            Change owner and assignees through Assign / hand off. Auto mode below is independent.
+          </p>
+        </div>
         <CheckboxField label="Auto mode" checked={autoMode} onChange={setAutoMode}>
           AI moves tasks between statuses automatically.
         </CheckboxField>
@@ -193,11 +207,29 @@ export function TaskSettings({ task, onSave }: Props) {
           </>
         )}
         {qaPipelineEnabled && (
-          <CheckboxField label="Run QA after done" checked={autoQa} onChange={setAutoQa}>
-            Automatically run the QA pipeline when this task is approved (done → verified).
-            Fast-mode tasks have no feature branch, so QA artifacts are keyed by the current branch
-            — later runs on the same branch overwrite earlier ones.
-          </CheckboxField>
+          <>
+            <CheckboxField
+              label="Run QA after done"
+              checked={autoQa}
+              onChange={(checked) => {
+                setAutoQa(checked);
+                if (!checked) setAutoQaCheck(false);
+              }}
+            >
+              Automatically generate the QA plan when this task is approved (done → verified).
+              Fast-mode tasks have no feature branch, so QA artifacts are keyed by the current
+              branch — later runs on the same branch overwrite earlier ones.
+            </CheckboxField>
+            <CheckboxField
+              label="Run QA Check after QA"
+              checked={autoQaCheck}
+              onChange={setAutoQaCheck}
+              disabled={!autoQa}
+            >
+              Execute generated test cases. The runtime checks its actual Browser/Playwright tools;
+              missing browser automation blocks only browser-dependent cases.
+            </CheckboxField>
+          </>
         )}
       </div>
 
@@ -414,11 +446,13 @@ function CheckboxField({
   label,
   checked,
   onChange,
+  disabled = false,
   children,
 }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
   children?: React.ReactNode;
 }) {
   return (
@@ -426,6 +460,7 @@ function CheckboxField({
       <Checkbox
         aria-label={label}
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange((e.target as HTMLInputElement).checked)}
         className="mt-0.5 h-3.5 w-3.5"
       />

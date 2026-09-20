@@ -1,13 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { logger, TASK_STATUSES } from "@aif/shared";
-import {
-  findTaskById,
-  updateTaskStatus,
-  touchLastSyncedAt,
-  toTaskResponse,
-  setTaskFields,
-} from "@aif/data";
+import { findTaskById, transitionTaskStatus, toTaskResponse } from "@aif/data";
 import { registerMcpTool, type ToolContext } from "./index.js";
 import { rateLimitError, toMcpError, validationError } from "../middleware/errorHandler.js";
 import { resolveConflict } from "../sync/conflictResolver.js";
@@ -48,7 +42,15 @@ export function register(server: McpServer, context: ToolContext): void {
         throw rateLimitError("handoff_sync_status");
       }
 
-      log.debug({ args }, "handoff_sync_status called");
+      log.debug(
+        {
+          taskId: args.taskId,
+          newStatus: args.newStatus,
+          direction: args.direction,
+          paused: args.paused,
+        },
+        "handoff_sync_status called",
+      );
 
       const row = findTaskById(args.taskId);
       if (!row) {
@@ -144,12 +146,48 @@ export function register(server: McpServer, context: ToolContext): void {
 
       try {
         // Source is newer — apply the status change
-        updateTaskStatus(args.taskId, args.newStatus);
-        touchLastSyncedAt(args.taskId);
-
-        // Apply paused flag atomically if provided
-        if (args.paused !== undefined) {
-          setTaskFields(args.taskId, { paused: args.paused });
+        const nowIso = new Date().toISOString();
+        const transition = transitionTaskStatus({
+          taskId: args.taskId,
+          status: args.newStatus,
+          expectedStatus: row.status,
+          extra: {
+            lastSyncedAt: nowIso,
+            ...(args.paused === undefined ? {} : { paused: args.paused }),
+          },
+          actor: {
+            kind: "agent",
+            id: "mcp",
+            displayNameSnapshot: "MCP",
+          },
+          action: "task.status_synced",
+        });
+        if (!transition.ok) {
+          const currentRow = findTaskById(args.taskId) ?? row;
+          log.warn(
+            {
+              taskId: args.taskId,
+              direction: args.direction,
+              requestedStatus: args.newStatus,
+              code: transition.code,
+              currentStatus: transition.currentStatus ?? currentRow.status,
+            },
+            "Status sync transition rejected",
+          );
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  applied: false,
+                  conflict: transition.code === "status_conflict",
+                  reason: transition.message,
+                  task: compactTaskResponse(toTaskResponse(currentRow)),
+                  lastSyncedAt: currentRow.lastSyncedAt,
+                }),
+              },
+            ],
+          };
         }
 
         const updatedRow = findTaskById(args.taskId);

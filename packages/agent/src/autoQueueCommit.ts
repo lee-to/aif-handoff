@@ -96,6 +96,13 @@ export async function ensureAutoQueueTaskCommit(input: {
   if (!task) {
     throw new StageManualBlockError(`Auto-queue commit failed: task ${input.taskId} not found.`);
   }
+  if (task.executionOwner !== "ai") {
+    log.debug(
+      { taskId: task.id, executionOwner: task.executionOwner },
+      "Auto-queue commit skipped for human-owned task",
+    );
+    return { status: "not_required", commitSha: null };
+  }
 
   if (task.autoQueueCommitStatus === "committed" && task.commitSha) {
     return { status: "committed", commitSha: task.commitSha };
@@ -178,6 +185,17 @@ export async function ensureAutoQueueTaskCommit(input: {
 
   let runtimeError: unknown;
   try {
+    const executionBoundaryTask = findTaskById(task.id);
+    if (!executionBoundaryTask || executionBoundaryTask.executionOwner !== "ai") {
+      log.warn(
+        {
+          taskId: task.id,
+          executionOwner: executionBoundaryTask?.executionOwner ?? null,
+        },
+        "Auto-queue commit aborted at ownership boundary",
+      );
+      return { status: "not_required", commitSha: null };
+    }
     await executeSubagentQuery({
       taskId: task.id,
       projectRoot: executionRoot,

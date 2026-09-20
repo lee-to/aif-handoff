@@ -2,8 +2,9 @@ import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useTask, useRunQa } from "@/hooks/useTasks";
+import { useTask, useRunQa, useRunQaCheck } from "@/hooks/useTasks";
 import { useQaPipelineEnabled } from "@/hooks/useSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { TaskDescription } from "./TaskDescription";
@@ -21,6 +22,8 @@ import { useTaskDetailActions } from "./useTaskDetailActions";
 import { AlertBox } from "@/components/ui/alert-box";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
+import { HandoffDialog } from "./TaskOwnership";
+import { ExecutorTimeline } from "./ExecutorTimeline";
 
 interface TaskDetailProps {
   taskId: string | null;
@@ -30,8 +33,10 @@ interface TaskDetailProps {
 export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
   const { data: task } = useTask(taskId);
   const [selectedTab, setSelectedTab] = useState<TaskDetailTab | null>(null);
+  const [showHandoffDialog, setShowHandoffDialog] = useState(false);
   const actions = useTaskDetailActions(task, onClose);
   const runQaMutation = useRunQa(taskId ?? "");
+  const runQaCheckMutation = useRunQaCheck(taskId ?? "");
   const qaPipelineEnabled = useQaPipelineEnabled();
   const defaultTab: TaskDetailTab = (() => {
     if (!task) return "implementation";
@@ -59,6 +64,7 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                 isDisabled={actions.isSubmittingPlanChange}
                 isCheckingStartAi={actions.isCheckingStartAiPlanFile}
                 planChangeSuccess={actions.planChangeSuccess}
+                onOpenHandoff={() => setShowHandoffDialog(true)}
                 onClose={onClose}
               />
 
@@ -77,11 +83,59 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                   <Section title="Description">
                     <TaskDescription
                       description={task.description}
+                      readOnly={Boolean(task.github)}
                       onSave={(description) =>
                         actions.updateTask.mutate({ id: task.id, input: { description } })
                       }
                     />
                   </Section>
+
+                  {task.github && (
+                    <Section title="GitHub">
+                      <div className="space-y-2 text-sm">
+                        <a
+                          href={task.github.htmlUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary underline underline-offset-2"
+                        >
+                          Issue #{task.github.issueNumber}
+                        </a>
+                        {task.github.prUrl && (
+                          <div>
+                            <a
+                              href={task.github.prUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary underline underline-offset-2"
+                            >
+                              Pull request #{task.github.prNumber}
+                            </a>
+                          </div>
+                        )}
+                        <div className="flex flex-wrap gap-1.5">
+                          <Badge variant="outline" size="sm">
+                            issue: {task.github.state}
+                          </Badge>
+                          {task.github.prState && (
+                            <Badge variant="outline" size="sm">
+                              PR: {task.github.prState}
+                            </Badge>
+                          )}
+                          {task.github.prChecksStatus && (
+                            <Badge variant="outline" size="sm">
+                              checks: {task.github.prChecksStatus}
+                            </Badge>
+                          )}
+                          {task.github.reviewState && (
+                            <Badge variant="outline" size="sm">
+                              review: {task.github.reviewState}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </Section>
+                  )}
 
                   <Section title="Attachments">
                     <TaskAttachments
@@ -154,11 +208,18 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
                       <TaskComments taskId={task.id} />
                     </Section>
                   )}
+                  {activeTab === "executors" && (
+                    <Section title="Executor history">
+                      <ExecutorTimeline taskId={task.id} />
+                    </Section>
+                  )}
                   {qaPipelineEnabled && activeTab === "qa" && (
                     <TaskQA
                       task={task}
                       onRunQa={() => runQaMutation.mutate()}
+                      onRunQaCheck={() => runQaCheckMutation.mutate()}
                       isRunning={task.qaStatus === "running"}
+                      isQaCheckRunning={task.qaCheckStatus === "running"}
                     />
                   )}
                   {activeTab === "activity" && (
@@ -350,6 +411,14 @@ export function TaskDetail({ taskId, onClose }: TaskDetailProps) {
         onSubmit={actions.handlePlanChangeRequest}
         onCancel={actions.resetReplanModal}
       />
+      {task && (
+        <HandoffDialog
+          key={`${task.id}:${task.ownershipRevision}:${showHandoffDialog}`}
+          task={task}
+          open={showHandoffDialog}
+          onOpenChange={setShowHandoffDialog}
+        />
+      )}
     </>
   );
 }

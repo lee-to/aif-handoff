@@ -83,6 +83,18 @@ describe("runCommitQuery", () => {
     expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
   });
 
+  it("rejects commit generation for a human-owned task", async () => {
+    mockFindTaskById.mockReturnValue({
+      id: "t1",
+      executionOwner: "human",
+      branchName: null,
+      isFix: false,
+    });
+    const res = await runCommitQuery({ projectId: "p1", taskId: "t1" });
+    expect(res).toMatchObject({ ok: false, code: "ai_handoff_required" });
+    expect(mockRunApiRuntimeOneShot).not.toHaveBeenCalled();
+  });
+
   it("sends push-enabled prompt when skip_push_after_commit=false", async () => {
     mockGetProjectConfig.mockReturnValue(gitConfig(false));
     mockRunApiRuntimeOneShot.mockResolvedValue({ result: { outputText: "ok" }, context: {} });

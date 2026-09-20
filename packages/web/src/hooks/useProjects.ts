@@ -6,6 +6,7 @@ import type {
   UpdateProjectOrganizationInput,
 } from "@aif/shared/browser";
 import { api, ApiError } from "../lib/api.js";
+import type { GitHubEligibility } from "@aif/shared/browser";
 import { invalidateProjectWarmupQueries } from "./useProjectWarmup.js";
 
 const MAX_PROJECTS_RETRIES = 8;
@@ -109,6 +110,56 @@ export function useCreateProject() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       invalidateProjectTaskOverviews(queryClient);
+    },
+  });
+}
+
+export function useProjectGitHub(projectId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["projectGitHub", projectId],
+    queryFn: () => api.getProjectGitHub(projectId!),
+    enabled: enabled && Boolean(projectId),
+  });
+}
+
+export function useConnectProjectGitHub() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string;
+      input: {
+        repository: string;
+        tokenEnvVar: string;
+        enabled: boolean;
+        eligibility: GitHubEligibility;
+      };
+    }) => api.connectProjectGitHub(id, input),
+    onSuccess: (_, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["projectGitHub", id] });
+    },
+  });
+}
+
+export function useDisconnectProjectGitHub() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.disconnectProjectGitHub(id),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ["projectGitHub", id] });
+    },
+  });
+}
+
+export function useSyncProjectGitHub() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.syncProjectGitHub(id),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ["projectGitHub", id] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
 }

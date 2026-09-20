@@ -147,6 +147,8 @@ describe("tasks schema", () => {
     expect(result!.position).toBe(1000.0);
     expect(result!.description).toBe("");
     expect(result!.autoMode).toBe(true);
+    expect(result!.executionOwner).toBe("ai");
+    expect(result!.ownershipRevision).toBe(0);
     expect(result!.plan).toBeNull();
     expect(result!.implementationLog).toBeNull();
     expect(result!.reviewComments).toBeNull();

@@ -19,8 +19,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProjectSelector } from "@/components/project/ProjectSelector";
 import { WarmupDialog } from "@/components/project/WarmupDialog";
-import type { Project } from "@aif/shared/browser";
+import type { ParticipantSummary, Project } from "@aif/shared/browser";
 import type { TaskMetricsSummary } from "@/lib/taskMetrics";
+import { ParticipantMenu } from "@/components/participants/ParticipantMenu";
 import { NotificationsDialog } from "./NotificationsDialog";
 import { MetricsDialog, type AggregateProjectTotals } from "./MetricsDialog";
 import { RoadmapDialog } from "./RoadmapDialog";
@@ -48,6 +49,13 @@ interface Props {
   runtimeProfilesOpen: boolean;
   onToggleRuntimeProfiles: () => void;
   onRoadmapImportComplete?: (result: RoadmapImportResult) => void;
+  canManageConfiguration?: boolean;
+  participant?: ParticipantSummary | null;
+  onManageParticipants?: () => void;
+  onLogout?: () => Promise<unknown>;
+  isLoggingOut?: boolean;
+  onChangePassword?: (input: { currentPassword: string; newPassword: string }) => Promise<unknown>;
+  isChangingPassword?: boolean;
 }
 
 export function Header({
@@ -64,6 +72,13 @@ export function Header({
   runtimeProfilesOpen,
   onToggleRuntimeProfiles,
   onRoadmapImportComplete,
+  canManageConfiguration = true,
+  participant = null,
+  onManageParticipants = () => undefined,
+  onLogout = async () => undefined,
+  isLoggingOut = false,
+  onChangePassword = async () => undefined,
+  isChangingPassword = false,
 }: Props) {
   const { theme, toggleTheme } = useTheme();
   const headerRef = useRef<HTMLElement>(null);
@@ -148,6 +163,7 @@ export function Header({
             selectedId={selectedProject?.id ?? null}
             onSelect={onSelectProject}
             onDeselect={onDeselectProject}
+            canManage={canManageConfiguration}
           />
         </div>
 
@@ -250,30 +266,34 @@ export function Header({
               <span className="hidden md:inline">USAGE</span>
             </Button>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onToggleRuntimeProfiles}
-            disabled={!selectedProject}
-            className={cn(
-              "gap-1 font-mono text-3xs",
-              runtimeProfilesOpen && "border-primary/70 bg-primary/10",
-            )}
-            aria-label="Runtime profiles"
-            title={runtimeButtonTitle}
-          >
-            <Cpu className="h-3.5 w-3.5" />
-            <span>RUNTIME</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => setGlobalSettingsOpen((v) => !v)}
-            className="h-8 w-8"
-            aria-label="Global settings"
-          >
-            <Settings className="h-4 w-4" />
-          </Button>
+          {canManageConfiguration && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onToggleRuntimeProfiles}
+                disabled={!selectedProject}
+                className={cn(
+                  "gap-1 font-mono text-3xs",
+                  runtimeProfilesOpen && "border-primary/70 bg-primary/10",
+                )}
+                aria-label="Runtime profiles"
+                title={runtimeButtonTitle}
+              >
+                <Cpu className="h-3.5 w-3.5" />
+                <span>RUNTIME</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setGlobalSettingsOpen((v) => !v)}
+                className="h-8 w-8"
+                aria-label="Global settings"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             size="icon"
@@ -292,6 +312,16 @@ export function Header({
           >
             {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
+          {participant && (
+            <ParticipantMenu
+              participant={participant}
+              onManageParticipants={onManageParticipants}
+              onLogout={onLogout}
+              isLoggingOut={isLoggingOut}
+              onChangePassword={onChangePassword}
+              isChangingPassword={isChangingPassword}
+            />
+          )}
         </div>
       </div>
 
@@ -315,11 +345,13 @@ export function Header({
         project={selectedProject}
         enabled={warmupEnabled}
       />
-      <GlobalSettingsDialog
-        open={globalSettingsOpen}
-        onOpenChange={setGlobalSettingsOpen}
-        projectId={selectedProject?.id ?? null}
-      />
+      {canManageConfiguration && (
+        <GlobalSettingsDialog
+          open={globalSettingsOpen}
+          onOpenChange={setGlobalSettingsOpen}
+          projectId={selectedProject?.id ?? null}
+        />
+      )}
       {selectedProject && usageLimitsEnabled && (
         <RuntimeUsageDialog
           open={runtimeUsageOpen}

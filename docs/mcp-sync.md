@@ -1,5 +1,7 @@
 # MCP Sync Server
 
+[← Providers](providers.md) · [Back to README](../README.md)
+
 The Handoff MCP server enables bidirectional synchronization between the Handoff task management system and AI Factory (AIF) tooling via the [Model Context Protocol](https://modelcontextprotocol.io).
 
 ## Setup
@@ -61,6 +63,14 @@ When running in Docker, or in local development with `MCP_PORT` set to a valid i
 
 The HTTP mode also exposes a `/health` endpoint for Docker healthchecks.
 
+HTTP MCP always requires `MCP_AUTH_TOKEN`, independently of Participants Mode.
+Every `/mcp` request must send
+`Authorization: Bearer <MCP_AUTH_TOKEN>`; `/health` remains unauthenticated.
+Invalid or missing credentials return `401` with
+`code: "mcp_authentication_required"`. Token comparison is timing-safe and the
+token is never logged. Browser participant cookies and CSRF tokens are separate
+credentials and cannot authenticate MCP. `stdio` behavior is unchanged.
+
 By default the HTTP transport runs in **single-session** mode: one shared server/transport for the whole process (the original behavior). Because that transport is stateful, only the first client can `initialize` — a second concurrent client (e.g. another Claude Code window) receives `-32600 "Server already initialized"`.
 
 Set `AIF_MCP_HTTP_MULTI_SESSION_ENABLED=true` to opt into **stateless multi-session** mode. Each request then gets its own short-lived server/transport with no shared session, so multiple clients (several Claude Code windows, or remote clients) can connect to the same `/mcp` endpoint concurrently and every `initialize` succeeds independently. The flag defaults to off so enabling concurrent clients is an intentional rollout rather than an unconditional transport change. The stateless path is `POST`-only: an optional `GET /mcp` SSE stream is answered with `405` (the SDK treats this as "server does not offer SSE"), because server→client events (task updates) are delivered out-of-band via the API broadcast endpoint, not through the MCP transport.
@@ -76,6 +86,7 @@ The MCP server uses the shared monorepo environment (`packages/shared/src/env.ts
 | `MCP_TRANSPORT`                      | `stdio` | Transport mode: `stdio` or `http`                                                                                                                    |
 | `MCP_PORT`                           | `3100`  | HTTP port (`1-65535`, only used when `MCP_TRANSPORT=http`)                                                                                           |
 | `AIF_MCP_HTTP_MULTI_SESSION_ENABLED` | `false` | Opt into stateless multi-session HTTP transport so multiple clients connect concurrently (`1/true/yes/on` = on). Only used when `MCP_TRANSPORT=http` |
+| `MCP_AUTH_TOKEN`                     | unset   | Required bearer token for `/mcp` whenever HTTP transport is enabled                                                                                  |
 | `MCP_RATE_LIMIT_READ_RPM`            | `120`   | Read tool rate limit (requests/minute)                                                                                                               |
 | `MCP_RATE_LIMIT_READ_BURST`          | `10`    | Read tool burst capacity                                                                                                                             |
 | `MCP_RATE_LIMIT_WRITE_RPM`           | `30`    | Write tool rate limit (requests/minute)                                                                                                              |
@@ -83,10 +94,20 @@ The MCP server uses the shared monorepo environment (`packages/shared/src/env.ts
 
 Shared variables (from `@aif/shared`):
 
-| Variable       | Default                 | Description                             |
-| -------------- | ----------------------- | --------------------------------------- |
-| `DATABASE_URL` | `./data/aif.sqlite`     | SQLite database path                    |
-| `API_BASE_URL` | `http://localhost:3009` | API server URL for WebSocket broadcasts |
+| Variable                    | Default                 | Description                                                         |
+| --------------------------- | ----------------------- | ------------------------------------------------------------------- |
+| `DATABASE_URL`              | `./data/aif.sqlite`     | SQLite database path                                                |
+| `API_BASE_URL`              | `http://localhost:3009` | API server URL for WebSocket broadcasts                             |
+| `PARTICIPANTS_MODE_ENABLED` | `false`                 | Activates HTTP MCP bearer enforcement and ownership-aware contracts |
+
+Ownership behavior:
+
+- create tools always create AI-owned, unassigned tasks;
+- read/list/search responses include `executionOwner`, `ownershipRevision`, and
+  assignee snapshots, with filters for owner, assignee, and unassigned tasks;
+- generic update and status-sync tools reject ownership/assignment fields;
+- handoffs remain an authenticated REST operation so MCP cannot bypass participant
+  RBAC, optimistic concurrency, live-lock protection, or immutable executor history.
 
 ## Tools Reference
 
@@ -402,3 +423,9 @@ Mode 1 does not require MCP — the coordinator writes to the database directly 
 - **Rate limit errors**: Increase `MCP_RATE_LIMIT_*` environment variables or wait for the token bucket to refill.
 - **Conflict on sync**: The target task was modified more recently. Fetch the latest task state and retry with a newer timestamp, or accept the conflict.
 - **Annotation not found**: Ensure task IDs in annotations are valid UUIDs matching existing tasks.
+
+## See Also
+
+- [Configuration](configuration.md)
+- [API Reference](api.md)
+- [Providers](providers.md)

@@ -7,7 +7,7 @@ import {
   clearTaskRuntimeLimitSnapshot,
   listDueBlockedExternalTasks,
   listStaleInProgressTasks,
-  setTaskFields,
+  transitionTaskStatus,
 } from "@aif/data";
 import { logger, getEnv, type TaskStatus } from "@aif/shared";
 import { logActivity } from "./hooks.js";
@@ -17,6 +17,11 @@ const log = logger("task-watchdog");
 const env = getEnv();
 const STALE_TIMEOUT_MS = Math.max(env.AGENT_STAGE_STALE_TIMEOUT_MS, 60_000);
 const STALE_MAX_RETRY = Math.max(env.AGENT_STAGE_STALE_MAX_RETRY, 1);
+const WATCHDOG_ACTOR = {
+  kind: "system" as const,
+  id: "task-watchdog",
+  displayNameSnapshot: "Task Watchdog",
+};
 
 export function getRandomBackoffMinutes(): number {
   return Math.floor(Math.random() * 11) + 5; // 5..15
@@ -45,15 +50,26 @@ export function releaseDueBlockedTasks(): void {
   for (const task of blockedTasks) {
     if (!task.blockedFromStatus) continue;
 
-    setTaskFields(task.id, {
+    const transition = transitionTaskStatus({
+      taskId: task.id,
       status: task.blockedFromStatus,
-      blockedReason: null,
-      blockedFromStatus: null,
-      retryAfter: null,
-      retryCount: 0,
-      lastHeartbeatAt: nowIso,
-      updatedAt: nowIso,
+      expectedStatus: "blocked_external",
+      extra: {
+        blockedReason: null,
+        blockedFromStatus: null,
+        retryAfter: null,
+        retryCount: 0,
+      },
+      actor: WATCHDOG_ACTOR,
+      action: "task.watchdog_released",
     });
+    if (!transition.ok) {
+      log.warn(
+        { taskId: task.id, code: transition.code },
+        "Skipped blocked task release after status race",
+      );
+      continue;
+    }
     clearTaskRuntimeLimitSnapshot(task.id, nowIso);
     void notifyTaskBroadcast(task.id, "task:moved", {
       title: task.title,
@@ -96,14 +112,25 @@ export function recoverStaleInProgressTasks(): void {
     const reasonBase = `Watchdog: task stale in ${task.status} for ${ageMinutes}m`;
 
     if (retryCount >= STALE_MAX_RETRY) {
-      setTaskFields(task.id, {
+      const transition = transitionTaskStatus({
+        taskId: task.id,
         status: "blocked_external",
-        blockedReason: `${reasonBase}; auto-retry limit reached (${STALE_MAX_RETRY})`,
-        blockedFromStatus: resumeStatus,
-        retryAfter: null,
-        lastHeartbeatAt: nowIso,
-        updatedAt: nowIso,
+        expectedStatus: task.status,
+        extra: {
+          blockedReason: `${reasonBase}; auto-retry limit reached (${STALE_MAX_RETRY})`,
+          blockedFromStatus: resumeStatus,
+          retryAfter: null,
+        },
+        actor: WATCHDOG_ACTOR,
+        action: "task.watchdog_quarantined",
       });
+      if (!transition.ok) {
+        log.warn(
+          { taskId: task.id, code: transition.code },
+          "Skipped stale-task quarantine after status race",
+        );
+        continue;
+      }
       clearTaskRuntimeLimitSnapshot(task.id, nowIso);
       void notifyTaskBroadcast(task.id, "task:moved", {
         title: task.title,
@@ -125,15 +152,26 @@ export function recoverStaleInProgressTasks(): void {
 
     const backoffMinutes = getRandomBackoffMinutes();
     const retryAfter = new Date(now + backoffMinutes * 60_000).toISOString();
-    setTaskFields(task.id, {
+    const transition = transitionTaskStatus({
+      taskId: task.id,
       status: "blocked_external",
-      blockedReason: `${reasonBase}; auto-recover scheduled`,
-      blockedFromStatus: resumeStatus,
-      retryAfter,
-      retryCount: retryCount + 1,
-      lastHeartbeatAt: nowIso,
-      updatedAt: nowIso,
+      expectedStatus: task.status,
+      extra: {
+        blockedReason: `${reasonBase}; auto-recover scheduled`,
+        blockedFromStatus: resumeStatus,
+        retryAfter,
+        retryCount: retryCount + 1,
+      },
+      actor: WATCHDOG_ACTOR,
+      action: "task.watchdog_recovery_scheduled",
     });
+    if (!transition.ok) {
+      log.warn(
+        { taskId: task.id, code: transition.code },
+        "Skipped stale-task recovery after status race",
+      );
+      continue;
+    }
     clearTaskRuntimeLimitSnapshot(task.id, nowIso);
     void notifyTaskBroadcast(task.id, "task:moved", {
       title: task.title,

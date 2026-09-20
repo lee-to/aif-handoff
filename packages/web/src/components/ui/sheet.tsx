@@ -70,6 +70,8 @@ function SheetTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingEle
 function SheetClose({ onClose }: { onClose: () => void }) {
   return (
     <button
+      type="button"
+      aria-label="Close"
       className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100"
       onClick={onClose}
     >

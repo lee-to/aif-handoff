@@ -65,7 +65,7 @@ function DropdownMenuTrigger({ children, asChild }: DropdownMenuTriggerProps) {
       <span
         ref={triggerRef as React.RefObject<HTMLSpanElement>}
         onClick={() => onOpenChange(!open)}
-        className="contents"
+        className="inline-flex"
       >
         {children}
       </span>

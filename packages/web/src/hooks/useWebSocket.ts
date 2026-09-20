@@ -1,9 +1,25 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { WsEvent, Task, TaskListItem, TaskStatus } from "@aif/shared/browser";
+import type {
+  AuthSessionState,
+  WsEvent,
+  Task,
+  TaskListItem,
+  TaskStatus,
+  TaskOwnershipBroadcastPayload,
+} from "@aif/shared/browser";
 import { useNotificationSettings } from "./useNotificationSettings";
-import { playStatusChangeBeep, showTaskMovedNotification } from "@/lib/notifications";
+import {
+  playStatusChangeBeep,
+  showTaskAssignmentNotification,
+  showTaskMovedNotification,
+} from "@/lib/notifications";
 import { invalidateProjectTaskOverviews } from "./useProjects";
+import {
+  api,
+  reportWebSocketAuthenticationFailure,
+  webSocketAuthenticationIsValid,
+} from "@/lib/api";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -30,6 +46,21 @@ function hasRuntimeLimitPayload(
 
 function hasWarmupPayload(value: unknown): value is { projectId: string; status?: string } {
   return isRecord(value) && typeof value.projectId === "string";
+}
+
+function hasTaskOwnershipPayload(value: unknown): value is TaskOwnershipBroadcastPayload {
+  return (
+    isRecord(value) &&
+    typeof value.taskId === "string" &&
+    typeof value.projectId === "string" &&
+    isRecord(value.ownership) &&
+    (value.ownership.executionOwner === "ai" || value.ownership.executionOwner === "human") &&
+    Array.isArray(value.ownership.assignees)
+  );
+}
+
+function hasTaskIdPayload(value: unknown): value is { taskId: string } {
+  return isRecord(value) && typeof value.taskId === "string";
 }
 
 function invalidateRuntimeLimitQueries(
@@ -59,7 +90,7 @@ export function getWsClientId(): string | null {
   return currentClientId;
 }
 
-export function useWebSocket() {
+export function useWebSocket(enabled = true) {
   const wsRef = useRef<WebSocket | null>(null);
   const queryClient = useQueryClient();
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -76,16 +107,16 @@ export function useWebSocket() {
     settingsRef.current = settings;
   }, [settings]);
 
-  const findTaskStatusInCache = useCallback(
-    (taskId: string): TaskStatus | null => {
+  const findTaskInCache = useCallback(
+    (taskId: string): Task | TaskListItem | null => {
       const detailed = queryClient.getQueryData<Task>(["task", taskId]);
-      if (detailed) return detailed.status;
+      if (detailed) return detailed;
 
       const taskLists = queryClient.getQueriesData<TaskListItem[]>({ queryKey: ["tasks"] });
       for (const [, tasks] of taskLists) {
         if (!tasks) continue;
         const found = tasks.find((task) => task.id === taskId);
-        if (found) return found.status;
+        if (found) return found;
       }
 
       return null;
@@ -94,6 +125,11 @@ export function useWebSocket() {
   );
 
   const connect = useCallback(() => {
+    if (!enabled) return;
+    if (!webSocketAuthenticationIsValid()) {
+      reportWebSocketAuthenticationFailure();
+      return;
+    }
     const url = resolveWsUrl();
 
     console.debug("[ws] Connecting to", url);
@@ -119,6 +155,29 @@ export function useWebSocket() {
       }
 
       console.debug("[ws] Event received:", raw.type);
+
+      if (
+        raw.type === "participant:created" ||
+        raw.type === "participant:updated" ||
+        raw.type === "participant:deactivated"
+      ) {
+        queryClient.invalidateQueries({ queryKey: ["participants"] });
+        queryClient.invalidateQueries({ queryKey: ["tasks"] });
+        return;
+      }
+
+      if (
+        raw.type === "auth:session_revoked" &&
+        isRecord(raw.payload) &&
+        typeof raw.payload.participantId === "string"
+      ) {
+        const session = queryClient.getQueryData<AuthSessionState>(["auth", "session"]);
+        if (session?.participant?.id === raw.payload.participantId) {
+          reportWebSocketAuthenticationFailure();
+          queryClient.invalidateQueries({ queryKey: ["auth", "session"] });
+        }
+        return;
+      }
 
       // Capture per-client WS identifier from server (not a WsEvent)
       if (
@@ -178,10 +237,42 @@ export function useWebSocket() {
 
       const data = raw as unknown as WsEvent;
 
+      if (
+        (data.type === "task:handoff" || data.type === "task:assignment_updated") &&
+        hasTaskOwnershipPayload(data.payload)
+      ) {
+        const cachedTask = findTaskInCache(data.payload.taskId);
+        queryClient.invalidateQueries({ queryKey: ["tasks"] });
+        queryClient.invalidateQueries({ queryKey: ["task", data.payload.taskId] });
+        queryClient.invalidateQueries({
+          queryKey: ["task-executor-history", data.payload.taskId],
+        });
+        invalidateProjectTaskOverviews(queryClient);
+        if (data.type === "task:handoff" && settingsRef.current.desktop && cachedTask) {
+          showTaskAssignmentNotification(
+            data.payload.taskId,
+            cachedTask.title,
+            data.payload.ownership.executionOwner,
+            data.payload.ownership.assignees,
+          );
+        }
+        if (data.type === "task:handoff" && settingsRef.current.sound) {
+          void playStatusChangeBeep().catch((error) => {
+            console.debug("[ws] Failed to play assignment sound:", error);
+          });
+        }
+        return;
+      }
+
+      if (data.type === "task:comment_created" && hasTaskIdPayload(data.payload)) {
+        queryClient.invalidateQueries({ queryKey: ["task-comments", data.payload.taskId] });
+        return;
+      }
+
       if (data.type === "task:moved" && isTaskPayload(data.payload)) {
         const movedTask = data.payload;
         const cachedStatus = statusCacheRef.current.get(movedTask.id);
-        const previousStatus = cachedStatus ?? findTaskStatusInCache(movedTask.id);
+        const previousStatus = cachedStatus ?? findTaskInCache(movedTask.id)?.status ?? null;
         statusCacheRef.current.set(movedTask.id, movedTask.status);
 
         if (previousStatus && previousStatus !== movedTask.status) {
@@ -294,8 +385,27 @@ export function useWebSocket() {
       if (intentionalCloseRef.current) {
         return;
       }
-      console.debug("[ws] Disconnected, reconnecting in 3s...");
-      reconnectTimer.current = setTimeout(() => connectRef.current(), 3000);
+      void api.getAuthSession().then(
+        (session) => {
+          if (
+            session.participantsModeEnabled &&
+            (!session.authenticated || !webSocketAuthenticationIsValid())
+          ) {
+            reportWebSocketAuthenticationFailure();
+            return;
+          }
+          console.debug("[ws] Disconnected, reconnecting in 3s...");
+          reconnectTimer.current = setTimeout(() => connectRef.current(), 3000);
+        },
+        () => {
+          if (!webSocketAuthenticationIsValid()) {
+            reportWebSocketAuthenticationFailure();
+            return;
+          }
+          console.debug("[ws] Session check unavailable, reconnecting in 3s...");
+          reconnectTimer.current = setTimeout(() => connectRef.current(), 3000);
+        },
+      );
     };
 
     ws.onerror = (error) => {
@@ -304,13 +414,14 @@ export function useWebSocket() {
     };
 
     wsRef.current = ws;
-  }, [findTaskStatusInCache, queryClient]);
+  }, [enabled, findTaskInCache, queryClient]);
 
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
 
   useEffect(() => {
+    if (!enabled) return;
     connect();
     return () => {
       clearTimeout(reconnectTimer.current);
@@ -337,5 +448,5 @@ export function useWebSocket() {
         ws.close();
       }
     };
-  }, [connect]);
+  }, [connect, enabled]);
 }

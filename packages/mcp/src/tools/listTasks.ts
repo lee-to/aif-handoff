@@ -9,6 +9,9 @@ const log = logger("mcp:tool:list-tasks");
 const listTasksInputSchema = z.object({
   projectId: z.string().uuid().optional().describe("Filter by project ID"),
   status: z.enum(TASK_STATUSES).optional().describe("Filter by task status"),
+  executionOwner: z.enum(["ai", "human"]).optional().describe("Filter by execution owner"),
+  assigneeId: z.string().uuid().optional().describe("Filter by participant assignee ID"),
+  unassigned: z.boolean().optional().describe("Filter tasks without participant assignees"),
   limit: z
     .number()
     .int()
@@ -20,10 +23,13 @@ const listTasksInputSchema = z.object({
 });
 
 type ListTasksArgs = {
+  assigneeId?: string;
+  executionOwner?: "ai" | "human";
   limit?: number;
   offset?: number;
   projectId?: string;
   status?: (typeof TASK_STATUSES)[number];
+  unassigned?: boolean;
 };
 
 export function register(server: McpServer, context: ToolContext): void {
@@ -44,11 +50,14 @@ export function register(server: McpServer, context: ToolContext): void {
         const result = listTasksPaginated({
           projectId: args.projectId,
           status: args.status,
+          executionOwner: args.executionOwner,
+          assigneeId: args.assigneeId,
+          unassigned: args.unassigned,
           limit: args.limit,
           offset: args.offset,
         });
 
-        const items = result.items.map(toTaskSummary);
+        const items = result.items.map((row) => toTaskSummary(row));
 
         log.info(
           {

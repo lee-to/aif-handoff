@@ -10,6 +10,9 @@ function makeTask(overrides: Partial<TaskListItem> = {}): TaskListItem {
     title: "Test Task 1",
     description: "Description 1",
     autoMode: true,
+    executionOwner: "ai",
+    ownershipRevision: 0,
+    assignees: [],
     isFix: false,
     status: "backlog",
     priority: 1,
@@ -64,6 +67,16 @@ vi.mock("@/hooks/useTasks", () => ({
   useUpdateTask: () => ({ mutate: vi.fn() }),
   useDeleteTask: () => ({ mutate: vi.fn() }),
   useCreateTask: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({
+    session: {
+      participantsModeEnabled: true,
+      authenticated: true,
+      participant: { id: "member-1", displayName: "Alice", role: "member", active: true },
+    },
+  }),
 }));
 
 const { Board } = await import("@/components/kanban/Board");
@@ -216,14 +229,90 @@ describe("Board", () => {
     expectTaskBefore(getColumn("Planning"), "Planning Earlier Position", "Planning Later Position");
   });
 
-  it("should render ownership badges", () => {
+  it("should render task ownership and assignees", () => {
+    const originalLength = mockTasks.length;
+    mockTasks.push(
+      makeTask({
+        id: "human-task",
+        title: "Human Task",
+        executionOwner: "human",
+        assignees: [
+          { participantId: "member-1", displayName: "Alice", role: "member", active: true },
+        ],
+      }),
+    );
     render(<Board projectId="test-project" onTaskClick={vi.fn()} density="comfortable" />, {
       wrapper: Wrapper,
     });
 
-    expect(screen.getAllByText("AI controlled").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Human controlled").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Human decision").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("AI owner").length).toBeGreaterThan(0);
+    expect(screen.getByText("Human owner")).toBeDefined();
+    expect(screen.getByText("Alice")).toBeDefined();
+    mockTasks.splice(originalLength);
+  });
+
+  it("filters My tasks by authenticated participant assignment", () => {
+    const originalLength = mockTasks.length;
+    mockTasks.push(
+      makeTask({
+        id: "mine",
+        title: "Assigned to Alice",
+        executionOwner: "human",
+        assignees: [
+          { participantId: "member-1", displayName: "Alice", role: "member", active: true },
+        ],
+      }),
+      makeTask({
+        id: "other",
+        title: "Assigned to Bob",
+        executionOwner: "human",
+        assignees: [
+          { participantId: "member-2", displayName: "Bob", role: "member", active: true },
+        ],
+      }),
+    );
+    render(<Board projectId="test-project" onTaskClick={vi.fn()} density="comfortable" />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(screen.getByText("mine"));
+
+    expect(screen.getByText("Assigned to Alice")).toBeDefined();
+    expect(screen.queryByText("Assigned to Bob")).toBeNull();
+    mockTasks.splice(originalLength);
+  });
+
+  it("filters Human-owned tasks by assignee", () => {
+    const originalLength = mockTasks.length;
+    mockTasks.push(
+      makeTask({
+        id: "human-alice",
+        title: "Alice Human Task",
+        executionOwner: "human",
+        assignees: [
+          { participantId: "member-1", displayName: "Alice", role: "member", active: true },
+        ],
+      }),
+      makeTask({
+        id: "human-bob",
+        title: "Bob Human Task",
+        executionOwner: "human",
+        assignees: [
+          { participantId: "member-2", displayName: "Bob", role: "member", active: true },
+        ],
+      }),
+    );
+    render(<Board projectId="test-project" onTaskClick={vi.fn()} density="comfortable" />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(screen.getByText("human-owned"));
+    const assigneeFilters = screen.getByTestId("assignee-filters");
+    fireEvent.click(within(assigneeFilters).getByText("Bob"));
+
+    expect(screen.queryByText("Alice Human Task")).toBeNull();
+    expect(screen.getByText("Bob Human Task")).toBeDefined();
+    mockTasks.splice(originalLength);
   });
 
   it("should show task descriptions", () => {

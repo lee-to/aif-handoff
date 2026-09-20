@@ -55,12 +55,18 @@ packages/
 │           └── openrouter/      # OpenRouter adapter (API transport)
 ├── data/                # @aif/data — centralized data-access layer
 │   └── src/
-│       └── index.ts         # Repository-style DB operations for API/Agent
+│       ├── participants.ts  # Participant lifecycle and admin invariants
+│       ├── authSessions.ts  # Password/session/CSRF persistence
+│       ├── taskOwnership.ts # Atomic handoff, assignments, executor history
+│       ├── taskTransitions.ts # Actor-aware atomic task transitions
+│       ├── audit.ts         # Immutable audit persistence
+│       └── index.ts         # Public repository API
 ├── api/                 # @aif/api — Hono REST + WebSocket server (port 3009)
 │   └── src/
 │       ├── index.ts         # Server entry point
-│       ├── routes/          # tasks.ts, projects.ts, chat.ts, runtimeProfiles.ts
+│       ├── routes/          # tasks/projects/chat/runtime profiles plus auth/participants
 │       ├── services/        # runtime.ts, codexIndex.ts, fastFix.ts, roadmapGeneration.ts
+│       │                    # github.ts provides the GitHub REST client
 │       ├── middleware/      # logger.ts, rateLimit.ts, zodValidator.ts
 │       ├── schemas.ts       # Zod request validation
 │       └── ws.ts            # WebSocket handler
@@ -68,8 +74,10 @@ packages/
 │   └── src/
 │       ├── App.tsx          # Root component
 │       ├── components/
+│       │   ├── auth/        # LoginPage
+│       │   ├── participants/ # Participant menu and administration dialog
 │       │   ├── kanban/      # Board, Column, TaskCard, AddTaskForm
-│       │   ├── task/        # TaskDetail, TaskPlan, TaskLog, AgentTimeline
+│       │   ├── task/        # Detail, ownership/handoff, executor timeline
 │       │   ├── layout/      # Header, CommandPalette
 │       │   ├── project/     # ProjectSelector, ProjectRuntimeSettings
 │       │   ├── settings/    # RuntimeProfileForm
@@ -86,6 +94,7 @@ packages/
         ├── hooks.ts         # Activity logging, project root
         ├── stderrCollector.ts # Generic stderr ring-buffer
         ├── notifier.ts      # Notification system
+        ├── githubWorkflow.ts # GitHub sync, branch push, and PR publication
         ├── codex/           # Codex login broker (OAuth-in-Docker bridge)
         └── subagents/       # planner.ts, implementer.ts, reviewer.ts
 
@@ -120,6 +129,7 @@ data/                    # SQLite database files (gitignored)
 | API Reference   | docs/api.md             | REST endpoints, WebSocket events          |
 | Configuration   | docs/configuration.md   | Environment variables, logging, auth      |
 | Providers       | docs/providers.md       | Runtime profiles and adapter capabilities |
+| MCP Sync        | docs/mcp-sync.md        | MCP tools, transports, and authentication |
 
 ## AI Context Files
 

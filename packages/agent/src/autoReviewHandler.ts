@@ -117,7 +117,7 @@ export async function handleAutoReviewGate(
 ): Promise<ReviewGateOutcome | null> {
   const env = getEnv();
   const refreshedTask = findTaskById(input.taskId);
-  if (!refreshedTask?.autoMode) {
+  if (!refreshedTask?.autoMode || refreshedTask.executionOwner === "human") {
     return null;
   }
 

@@ -1,17 +1,19 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  applyHumanTaskEvent,
   assertCurrentBranch,
   ensureFeatureBranch,
   isBranchIsolationError,
   looksLikeFullPlanUpdate,
   getProjectConfig,
+  resolveTaskAction,
   restorePersistedBranch,
+  type AuditActor,
+  type ParticipantRole,
   type TaskEvent,
 } from "@aif/shared";
 import {
-  clearTaskActiveRuntimeSelection,
+  applyTaskAction,
   findProjectById,
   findTaskById,
   getLatestHumanComment,
@@ -19,16 +21,20 @@ import {
   setTaskFields,
   type TaskRow,
 } from "@aif/data";
-import { runFastFixQuery, withTimeout } from "./fastFix.js";
+import { AiHandoffRequiredError, runFastFixQuery, withTimeout } from "./fastFix.js";
 
 interface EventHandlerInput {
   taskId: string;
   event: TaskEvent;
   deletePlanFile?: boolean;
+  participantsModeEnabled?: boolean;
+  actor?: AuditActor;
+  participantRole?: ParticipantRole | null;
+  participantActive?: boolean;
 }
 
 export type EventHandlerResult =
-  | { ok: false; status: number; error: string }
+  | { ok: false; status: number; error: string; code?: string }
   | { ok: true; task: TaskRow; broadcastType: "task:moved" | "task:updated" };
 
 function restoreTaskBranchForMutation(
@@ -78,6 +84,14 @@ async function handleFastFix(input: EventHandlerInput): Promise<EventHandlerResu
   const task = findTaskById(input.taskId);
   if (!task) {
     return { ok: false, status: 404, error: "Task not found" };
+  }
+  if (task.executionOwner !== "ai") {
+    return {
+      ok: false,
+      status: 409,
+      code: "ai_handoff_required",
+      error: "The task must be handed to AI before fast fix can run",
+    };
   }
   if (task.status !== "plan_ready") {
     return { ok: false, status: 409, error: "fast_fix is only allowed from plan_ready" };
@@ -191,12 +205,6 @@ function handleRegularTransition(input: EventHandlerInput): EventHandlerResult {
   if (!task) {
     return { ok: false, status: 404, error: "Task not found" };
   }
-  const { event } = input;
-  const transition = applyHumanTaskEvent(task, event);
-  if (!transition.ok) {
-    return { ok: false, status: 409, error: transition.error };
-  }
-
   if ((input.event === "approve_done" || input.event === "start_ai") && input.deletePlanFile) {
     const project = findProjectById(task.projectId);
     if (!project) {
@@ -219,11 +227,29 @@ function handleRegularTransition(input: EventHandlerInput): EventHandlerResult {
     }
   }
 
-  const nowIso = new Date().toISOString();
-  if (event !== "retry_from_blocked") {
-    clearTaskActiveRuntimeSelection(task.id);
+  const transition = applyTaskAction({
+    taskId: task.id,
+    event: input.event,
+    participantsModeEnabled: input.participantsModeEnabled ?? false,
+    actor: input.actor ?? {
+      kind: "anonymous",
+      id: null,
+      displayNameSnapshot: null,
+    },
+    participantRole: input.participantRole,
+    participantActive: input.participantActive,
+    expectedStatus: task.status,
+  });
+  if (!transition.ok) {
+    const authorizationDenied =
+      transition.code === "actor_not_authorized" || transition.code === "assignment_required";
+    return {
+      ok: false,
+      status: transition.code === "not_found" ? 404 : authorizationDenied ? 403 : 409,
+      code: transition.code,
+      error: transition.message,
+    };
   }
-  setTaskFields(task.id, { ...transition.patch, lastHeartbeatAt: nowIso, updatedAt: nowIso });
 
   const updated = findTaskById(task.id);
   if (!updated) {
@@ -306,22 +332,30 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
     updatedAt: nowIso,
   });
 
-  setTaskFields(input.taskId, {
-    status: "plan_ready",
-    activeRuntimeStatus: null,
-    activeRuntimeSelectionJson: null,
-    blockedReason: null,
-    blockedFromStatus: null,
-    retryAfter: null,
-    retryCount: 0,
-    reworkRequested: false,
-    reviewIterationCount: 0,
-    manualReviewRequired: false,
-    autoReviewState: null,
-    branchName: boundBranchName,
-    lastHeartbeatAt: nowIso,
-    updatedAt: nowIso,
+  const transition = applyTaskAction({
+    taskId: input.taskId,
+    event: "accept_existing_plan",
+    participantsModeEnabled: input.participantsModeEnabled ?? false,
+    actor: input.actor ?? {
+      kind: "anonymous",
+      id: null,
+      displayNameSnapshot: null,
+    },
+    participantRole: input.participantRole,
+    participantActive: input.participantActive,
+    expectedStatus: task.status,
+    extra: { branchName: boundBranchName },
   });
+  if (!transition.ok) {
+    const authorizationDenied =
+      transition.code === "actor_not_authorized" || transition.code === "assignment_required";
+    return {
+      ok: false,
+      status: transition.code === "not_found" ? 404 : authorizationDenied ? 403 : 409,
+      code: transition.code,
+      error: transition.message,
+    };
+  }
 
   const updated = findTaskById(input.taskId);
   if (!updated) {
@@ -332,11 +366,62 @@ function handleAcceptExistingPlan(input: EventHandlerInput): EventHandlerResult 
 }
 
 export async function handleTaskEvent(input: EventHandlerInput): Promise<EventHandlerResult> {
-  if (input.event === "fast_fix") {
-    return await handleFastFix(input);
+  try {
+    if (input.participantsModeEnabled) {
+      const task = findTaskById(input.taskId);
+      if (!task) {
+        return { ok: false, status: 404, error: "Task not found", code: "not_found" };
+      }
+      const authorization = resolveTaskAction(
+        {
+          status: task.status,
+          autoMode: task.autoMode,
+          executionOwner: task.executionOwner,
+          assignees: task.assignees,
+          blockedFromStatus: task.blockedFromStatus,
+          skipReview: task.skipReview,
+          runPostVerify: task.runPostVerify,
+        },
+        input.event,
+        {
+          participantsModeEnabled: true,
+          actor: input.actor ?? {
+            kind: "anonymous",
+            id: null,
+            displayNameSnapshot: null,
+          },
+          participantRole: input.participantRole,
+          participantActive: input.participantActive,
+        },
+      );
+      if (!authorization.ok) {
+        const authorizationDenied =
+          authorization.code === "actor_not_authorized" ||
+          authorization.code === "assignment_required";
+        return {
+          ok: false,
+          status: authorizationDenied ? 403 : 409,
+          code: authorization.code,
+          error: authorization.error,
+        };
+      }
+    }
+    if (input.event === "fast_fix") {
+      return await handleFastFix(input);
+    }
+    if (input.event === "accept_existing_plan") {
+      return handleAcceptExistingPlan(input);
+    }
+    return handleRegularTransition(input);
+  } catch (error) {
+    if (error instanceof AiHandoffRequiredError) {
+      return {
+        ok: false,
+        status: 409,
+        code: error.code,
+        error: error.message,
+      };
+    }
+    throw error;
   }
-  if (input.event === "accept_existing_plan") {
-    return handleAcceptExistingPlan(input);
-  }
-  return handleRegularTransition(input);
 }

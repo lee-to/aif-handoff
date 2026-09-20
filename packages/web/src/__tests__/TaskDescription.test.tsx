@@ -32,4 +32,11 @@ describe("TaskDescription", () => {
     expect(onSave).not.toHaveBeenCalled();
     expect(screen.getAllByText("Stable text").length).toBeGreaterThan(0);
   });
+
+  it("keeps synchronized descriptions read-only", () => {
+    render(<TaskDescription description="GitHub source" onSave={vi.fn()} readOnly />);
+
+    expect(screen.getByText("GitHub source")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Edit description" })).toBeNull();
+  });
 });

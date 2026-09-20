@@ -94,6 +94,18 @@ export function register(server: McpServer, context: ToolContext): void {
         if (!context.rateLimiter.check("handoff_update_task", "write")) {
           throw rateLimitError("handoff_update_task");
         }
+        if (
+          rawArgs &&
+          typeof rawArgs === "object" &&
+          ["executionOwner", "ownershipRevision", "assigneeIds", "participantId"].some((field) =>
+            Object.prototype.hasOwnProperty.call(rawArgs, field),
+          )
+        ) {
+          log.warn({ taskId: args.taskId }, "Rejected ownership fields in generic MCP task update");
+          throw validationError("Task ownership cannot be changed through handoff_update_task", {
+            ownership: ["Use the authenticated Handoff API for ownership changes"],
+          });
+        }
 
         log.debug(
           {

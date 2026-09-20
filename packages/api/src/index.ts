@@ -1,38 +1,47 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { getEnv, logger } from "@aif/shared";
-import { listProjects, listStaleInProgressTasks, resetStaleQaRuns } from "@aif/data";
+import {
+  listProjects,
+  listStaleInProgressTasks,
+  resetStaleQaCheckRuns,
+  resetStaleQaRuns,
+} from "@aif/data";
 import { projectsRouter } from "./routes/projects.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { chatRouter } from "./routes/chat.js";
 import { buildSettingsOverview, settingsRoutes } from "./routes/settings.js";
 import { runtimeProfilesRouter } from "./routes/runtimeProfiles.js";
 import { codexAuthRouter } from "./routes/codexAuth.js";
+import { authRouter } from "./routes/auth.js";
+import { participantsRouter } from "./routes/participants.js";
+import { githubRouter } from "./routes/github.js";
 import { setupWebSocket, closeAllWebSocketClients } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
 import { trackApiLoad } from "./middleware/apiLoad.js";
 import { startServer } from "./serverBootstrap.js";
 import { createCodexIndexService } from "./services/codexIndex.js";
 import { createGracefulShutdownHandler } from "./shutdown.js";
+import { participantAuth, type ParticipantApiEnv } from "./middleware/participantAuth.js";
+import { participantCsrf } from "./middleware/csrf.js";
+import { participantRouteAuthorization } from "./middleware/requireRole.js";
+import { participantCors } from "./middleware/participantCors.js";
 
 const log = logger("server");
 const startTime = Date.now();
 const nodeServerV2WebSocketEnabled = getEnv().AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED;
 
-const app = new Hono();
+const app = new Hono<ParticipantApiEnv>();
 
 // WebSocket must be set up before routes
 const { injectWebSocket, webSocketServer } = setupWebSocket(app, nodeServerV2WebSocketEnabled);
 
 // Middleware
-app.use(
-  "*",
-  cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:5180",
-  }),
-);
+app.use("*", participantCors());
 app.use("*", trackApiLoad);
 app.use("*", requestLogger);
+app.use("*", participantAuth);
+app.use("*", participantRouteAuthorization());
+app.use("*", participantCsrf());
 
 // Health check
 app.get("/health", (c) => {
@@ -76,7 +85,10 @@ app.get("/settings", async (c) => {
 });
 
 // Routes
+app.route("/auth", authRouter);
+app.route("/participants", participantsRouter);
 app.route("/projects", projectsRouter);
+app.route("/projects", githubRouter);
 app.route("/tasks", tasksRouter);
 app.route("/chat", chatRouter);
 app.route("/settings", settingsRoutes);
@@ -107,6 +119,10 @@ listProjects();
 const recoveredQaRuns = resetStaleQaRuns();
 if (recoveredQaRuns > 0) {
   log.warn({ recoveredQaRuns }, "Reset stale running QA runs to error after restart");
+}
+const recoveredQaCheckRuns = resetStaleQaCheckRuns();
+if (recoveredQaCheckRuns > 0) {
+  log.warn({ recoveredQaCheckRuns }, "Reset stale running QA Check runs to error after restart");
 }
 const codexIndexService = createCodexIndexService();
 

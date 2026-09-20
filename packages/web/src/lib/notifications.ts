@@ -1,4 +1,9 @@
-import { STATUS_CONFIG, type TaskStatus } from "@aif/shared/browser";
+import {
+  STATUS_CONFIG,
+  type ExecutionOwner,
+  type TaskAssigneeSummary,
+  type TaskStatus,
+} from "@aif/shared/browser";
 
 let audioContext: AudioContext | null = null;
 
@@ -21,6 +26,27 @@ export function showTaskMovedNotification(
   new Notification(`Task moved: ${taskTitle}`, {
     body: `${fromLabel} -> ${toLabel}`,
     tag: `task-status-${taskId}`,
+  });
+}
+
+export function showTaskAssignmentNotification(
+  taskId: string,
+  taskTitle: string,
+  executionOwner: ExecutionOwner,
+  assignees: TaskAssigneeSummary[],
+) {
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted") return;
+  const responsibility =
+    executionOwner === "ai"
+      ? "AI"
+      : assignees.length > 0
+        ? assignees.map((assignee) => assignee.displayName).join(", ")
+        : "Unassigned";
+
+  new Notification(`Task assignment: ${taskTitle}`, {
+    body: `Responsible: ${responsibility}`,
+    tag: `task-assignment-${taskId}`,
   });
 }
 

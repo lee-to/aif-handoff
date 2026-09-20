@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { projects, resetEnvCache, taskComments, tasks } from "@aif/shared";
+import {
+  githubIssues,
+  githubRepositories,
+  projects,
+  resetEnvCache,
+  taskComments,
+  tasks,
+} from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { eq } from "drizzle-orm";
 import { execFileSync } from "node:child_process";
@@ -44,6 +51,7 @@ describe("runPlanner comment selection", () => {
       queryMock;
     testDb.current = createTestDb();
     delete process.env.AIF_TASK_WORKTREES_ENABLED;
+    delete process.env.AIF_GITHUB_ISSUE_PR_ENABLED;
     resetEnvCache();
     queryMock.mockReset();
     queryMock.mockReturnValue(streamSuccess("## New Plan\n- [ ] Step"));
@@ -259,6 +267,27 @@ describe("runPlanner comment selection", () => {
         status: "planning",
         plannerMode: "full",
         useSubagents: true,
+      })
+      .run();
+    db.insert(githubRepositories)
+      .values({
+        projectId: "project-git",
+        owner: "owner",
+        name: "repo",
+        htmlUrl: "https://github.com/owner/repo",
+        defaultBranch: "main",
+      })
+      .run();
+    db.insert(githubIssues)
+      .values({
+        projectId: "project-git",
+        issueNumber: 154,
+        taskId: "task-git-1",
+        nodeId: "I_154",
+        htmlUrl: "https://github.com/owner/repo/issues/154",
+        state: "open",
+        sourceUpdatedAt: "2026-08-08T00:00:00.000Z",
+        lastSyncedAt: "2026-08-08T00:00:00.000Z",
       })
       .run();
 

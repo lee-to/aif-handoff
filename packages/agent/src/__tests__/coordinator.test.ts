@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { tasks, projects, runtimeProfiles, getEnv, resetEnvCache } from "@aif/shared";
+import {
+  auditEvents,
+  taskExecutorHistory,
+  tasks,
+  projects,
+  runtimeProfiles,
+  getEnv,
+  resetEnvCache,
+} from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { RuntimeExecutionError } from "@aif/runtime";
 import { eq } from "drizzle-orm";
@@ -1542,10 +1550,32 @@ describe("coordinator", () => {
     await pollAndProcess();
 
     task = db.select().from(tasks).where(eq(tasks.id, "task-rework-iter")).get();
-    expect(task!.status).toBe("done");
+    expect(task!.status).toBe("review");
+    expect(task!.executionOwner).toBe("human");
+    expect(task!.ownershipRevision).toBe(1);
     expect(task!.manualReviewRequired).toBe(true);
     expect(task!.reviewIterationCount).toBe(3);
     expect(task!.autoReviewStateJson).toContain("fix-a");
+    expect(
+      db
+        .select()
+        .from(taskExecutorHistory)
+        .where(eq(taskExecutorHistory.taskId, "task-rework-iter"))
+        .get(),
+    ).toMatchObject({
+      executionOwner: "human",
+      actorKind: "system",
+      actorId: "auto-review-gate",
+      reason: "max_iterations",
+    });
+    expect(
+      db
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.taskId, "task-rework-iter"))
+        .all()
+        .some((event) => event.action === "task.execution_handoff"),
+    ).toBe(true);
   });
 
   it("should reset reviewIterationCount to 0 for non-implementer stage transitions", async () => {
@@ -2077,6 +2107,78 @@ describe("coordinator", () => {
       expect(db.select().from(tasks).where(eq(tasks.id, "stale-review-task")).get()).toMatchObject({
         status: "review",
         paused: true,
+      });
+      expect(getStageSemaphore().totalActive()).toBe(0);
+    } finally {
+      releasePlanner?.();
+      Object.assign(coordinatorEnv, previousLimits);
+    }
+  });
+
+  it("should skip a candidate handed to a human while waiting for a global permit", async () => {
+    const db = testDb.current;
+    const coordinatorEnv = getEnv();
+    const previousLimits = {
+      COORDINATOR_MAX_CONCURRENT_TASKS: coordinatorEnv.COORDINATOR_MAX_CONCURRENT_TASKS,
+      COORDINATOR_MAX_CONCURRENT_PROJECTS: coordinatorEnv.COORDINATOR_MAX_CONCURRENT_PROJECTS,
+    };
+    let releasePlanner: (() => void) | undefined;
+
+    Object.assign(coordinatorEnv, {
+      COORDINATOR_MAX_CONCURRENT_TASKS: 1,
+      COORDINATOR_MAX_CONCURRENT_PROJECTS: 2,
+    });
+
+    try {
+      db.insert(projects)
+        .values({ id: "owner-holder-project", name: "Holder", rootPath: "/tmp/owner-holder" })
+        .run();
+      db.insert(projects)
+        .values({ id: "owner-flip-project", name: "Flip", rootPath: "/tmp/owner-flip" })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "owner-holder-task",
+          projectId: "owner-holder-project",
+          title: "Permit holder",
+          status: "planning",
+          createdAt: "2026-07-15T00:00:00.000Z",
+        })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "owner-flip-task",
+          projectId: "owner-flip-project",
+          title: "Owner flip",
+          status: "review",
+          createdAt: "2026-07-15T00:01:00.000Z",
+        })
+        .run();
+
+      vi.mocked(runPlanner).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releasePlanner = resolve;
+          }),
+      );
+
+      const pollPromise = pollAndProcess();
+      await vi.waitFor(() => expect(releasePlanner).toBeTypeOf("function"));
+      await vi.waitFor(() => expect(getStageSemaphore().waitingCount()).toBe(1));
+
+      db.update(tasks)
+        .set({ executionOwner: "human", ownershipRevision: 1 })
+        .where(eq(tasks.id, "owner-flip-task"))
+        .run();
+
+      releasePlanner?.();
+      await pollPromise;
+
+      expect(runReviewer).not.toHaveBeenCalledWith("owner-flip-task", "/tmp/owner-flip");
+      expect(db.select().from(tasks).where(eq(tasks.id, "owner-flip-task")).get()).toMatchObject({
+        status: "review",
+        executionOwner: "human",
+        lockedBy: null,
       });
       expect(getStageSemaphore().totalActive()).toBe(0);
     } finally {

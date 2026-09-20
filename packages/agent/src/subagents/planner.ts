@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   findProjectById,
+  findGitHubIssueByTaskId,
   findTaskById,
   listTaskComments,
   persistTaskPlanForTask,
@@ -10,6 +11,7 @@ import {
 import { createRuntimeWorkflowSpec } from "@aif/runtime";
 import { logger, formatAttachmentsForPrompt, getEnv, getProjectConfig } from "@aif/shared";
 import { executeSubagentQuery } from "../subagentQuery.js";
+import { StageManualBlockError } from "../stageErrorHandler.js";
 import {
   assertCurrentBranch,
   ensureFeatureBranch,
@@ -189,15 +191,20 @@ export async function runPlanner(taskId: string, projectRoot: string): Promise<v
     preparedBranch = task.branchName;
     logActivity(taskId, "Agent", `Restored feature branch: ${task.branchName}`);
   } else if (!task.isFix && plannerMode === "full") {
+    const githubIssue = getEnv().AIF_GITHUB_ISSUE_PR_ENABLED
+      ? findGitHubIssueByTaskId(taskId)
+      : null;
     const shouldCreateWorktree =
-      getEnv().AIF_TASK_WORKTREES_ENABLED &&
-      Boolean(project?.parallelEnabled) &&
-      projectSupportsTaskWorktrees(projectRoot);
+      Boolean(githubIssue) ||
+      (getEnv().AIF_TASK_WORKTREES_ENABLED &&
+        Boolean(project?.parallelEnabled) &&
+        projectSupportsTaskWorktrees(projectRoot));
     if (shouldCreateWorktree) {
       const worktreeResult = ensureTaskWorktree({
         projectRoot,
         taskId,
         title: task.title,
+        explicitBranchName: githubIssue ? `feature/github-issue-${githubIssue.issueNumber}` : null,
       });
       if (
         worktreeResult.action !== "skipped" &&
@@ -217,6 +224,11 @@ export async function runPlanner(taskId: string, projectRoot: string): Promise<v
           `Task worktree ${worktreeResult.action}: ${worktreeResult.worktreePath} (${worktreeResult.branchName})`,
         );
       } else if (worktreeResult.reason) {
+        if (githubIssue) {
+          throw new StageManualBlockError(
+            `GitHub issue #${githubIssue.issueNumber} requires an isolated Git worktree: ${worktreeResult.reason}`,
+          );
+        }
         log.debug({ taskId, reason: worktreeResult.reason }, "Worktree creation skipped");
       }
     } else {

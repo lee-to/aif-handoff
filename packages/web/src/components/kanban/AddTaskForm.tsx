@@ -11,9 +11,12 @@ import { useKeyboardShortcut } from "@/hooks/useKeyboardShortcut";
 import { useProjects } from "@/hooks/useProjects";
 import { useSettings, useProjectDefaults, useQaPipelineEnabled } from "@/hooks/useSettings";
 import { useRuntimeProfiles, useRuntimes } from "@/hooks/useRuntimeProfiles";
+import { useAuth } from "@/hooks/useAuth";
+import { useParticipants } from "@/hooks/useParticipants";
 import { formatRuntimeProfileOptionLabel } from "@/lib/runtimeProfiles";
-import { generatePlanPath, defaultsForMode } from "@aif/shared/browser";
+import { generatePlanPath, defaultsForMode, type ExecutionOwner } from "@aif/shared/browser";
 import { PlannerSettings } from "./PlannerSettings";
+import { OwnershipFields } from "@/components/task/TaskOwnership";
 
 interface Props {
   projectId: string;
@@ -26,6 +29,8 @@ export function AddTaskForm({ projectId }: Props) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [autoMode, setAutoMode] = useState(true);
+  const [executionOwner, setExecutionOwner] = useState<ExecutionOwner>("ai");
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [isFix, setIsFix] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [plannerMode, setPlannerMode] = useState<"full" | "fast">("fast");
@@ -38,12 +43,22 @@ export function AddTaskForm({ projectId }: Props) {
   const [runPlanImprove, setRunPlanImprove] = useState(false);
   const [runPostVerify, setRunPostVerify] = useState(false);
   const [autoQa, setAutoQa] = useState(false);
+  const [autoQaCheck, setAutoQaCheck] = useState(false);
   const [maxReviewIterations, setMaxReviewIterations] = useState(3);
   const [runtimeProfileId, setRuntimeProfileId] = useState("");
   const [modelOverride, setModelOverride] = useState("");
   const [runtimeOverrideOpen, setRuntimeOverrideOpen] = useState(false);
   const [priority, setPriority] = useState(0);
   const createTask = useCreateTask();
+  const { session } = useAuth();
+  const isParticipantsMode = session?.participantsModeEnabled === true;
+  const isAdmin = session?.participant?.role === "admin";
+  const { data: managedParticipants = [] } = useParticipants(isParticipantsMode && isAdmin);
+  const assignableParticipants = isAdmin
+    ? managedParticipants.filter((participant) => participant.active)
+    : session?.participant?.active
+      ? [session.participant]
+      : [];
 
   // Track whether the user has manually edited the plan path field.
   // When true, the auto-set effect will not overwrite their edit.
@@ -83,6 +98,7 @@ export function AddTaskForm({ projectId }: Props) {
     setRunPlanImprove(false);
     setRunPostVerify(false);
     setAutoQa(false);
+    setAutoQaCheck(false);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setPlanPath(defaultPlanPath);
     setRuntimeProfileId("");
@@ -101,6 +117,8 @@ export function AddTaskForm({ projectId }: Props) {
     setTitle("");
     setDescription("");
     setAutoMode(true);
+    setExecutionOwner("ai");
+    setAssigneeIds([]);
     setIsFix(false);
     setShowAdvanced(false);
     setPlannerMode("fast");
@@ -113,6 +131,7 @@ export function AddTaskForm({ projectId }: Props) {
     setRunPlanImprove(false);
     setRunPostVerify(false);
     setAutoQa(false);
+    setAutoQaCheck(false);
     setMaxReviewIterations(maxReviewIterationsDefault);
     setRuntimeProfileId("");
     setModelOverride("");
@@ -180,6 +199,8 @@ export function AddTaskForm({ projectId }: Props) {
         title: title.trim(),
         description: description.trim(),
         autoMode,
+        executionOwner,
+        assigneeIds: executionOwner === "human" ? assigneeIds : [],
         isFix,
         plannerMode: effectiveMode,
         planPath: effectivePlanPath,
@@ -190,6 +211,7 @@ export function AddTaskForm({ projectId }: Props) {
         runPlanImprove: useSubagents ? false : runPlanImprove,
         runPostVerify: useSubagents ? false : runPostVerify,
         autoQa,
+        autoQaCheck,
         maxReviewIterations,
         runtimeProfileId: runtimeProfileId || null,
         modelOverride: modelOverride.trim() || null,
@@ -270,6 +292,16 @@ export function AddTaskForm({ projectId }: Props) {
             </span>
           </label>
         </div>
+        {isParticipantsMode && (
+          <OwnershipFields
+            executionOwner={executionOwner}
+            assigneeIds={assigneeIds}
+            participants={assignableParticipants}
+            onExecutionOwnerChange={setExecutionOwner}
+            onAssigneeIdsChange={setAssigneeIds}
+            allowMultiple={isAdmin}
+          />
+        )}
         <label className="flex items-start gap-2 text-xs text-muted-foreground">
           <Checkbox
             aria-label="Auto mode"
@@ -396,12 +428,33 @@ export function AddTaskForm({ projectId }: Props) {
           <label className="flex items-start gap-2 text-xs text-muted-foreground">
             <Checkbox
               checked={autoQa}
-              onChange={(e) => setAutoQa(e.target.checked)}
+              onChange={(e) => {
+                setAutoQa(e.target.checked);
+                if (!e.target.checked) setAutoQaCheck(false);
+              }}
               className="mt-0.5 h-3.5 w-3.5"
             />
             <span>
               <span className="font-medium text-foreground">Run QA after done</span>
-              {" - Automatically run the QA pipeline when this task is approved (done → verified)."}
+              {
+                " - Automatically generate the QA plan when this task is approved (done → verified)."
+              }
+            </span>
+          </label>
+        )}
+        {qaPipelineEnabled && (
+          <label className="flex items-start gap-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={autoQaCheck}
+              disabled={!autoQa}
+              onChange={(e) => setAutoQaCheck(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5"
+            />
+            <span>
+              <span className="font-medium text-foreground">Run QA Check after QA</span>
+              {
+                " - Execute generated test cases; missing browser automation blocks only browser-dependent cases."
+              }
             </span>
           </label>
         )}

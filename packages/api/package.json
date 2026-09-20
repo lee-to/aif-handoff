@@ -13,13 +13,14 @@
     "test": "vitest run --configLoader runner",
     "coverage": "vitest run --coverage",
     "lint": "eslint \"src/**/*.ts\"",
-    "test:watch": "vitest --configLoader runner"
+    "test:watch": "vitest --configLoader runner",
+    "participants:bootstrap": "node --import tsx src/scripts/bootstrapParticipantAdmin.ts"
   },
   "dependencies": {
     "@aif/data": "*",
     "@aif/runtime": "*",
     "@aif/shared": "*",
-    "@anthropic-ai/claude-agent-sdk": "0.2.90",
+    "@anthropic-ai/claude-agent-sdk": "0.3.220",
     "@hono/node-server": "2.0.11",
     "@hono/zod-validator": "^0.7.6",
     "hono": "^4.12.12",

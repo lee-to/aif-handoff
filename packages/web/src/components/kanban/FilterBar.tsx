@@ -1,10 +1,21 @@
 import { Button } from "@/components/ui/button";
 import { FilterButton } from "@/components/ui/filter-button";
 
-type QuickFilter = "mine" | "blocked" | "recent" | "no_plan" | "roadmap";
+type QuickFilter =
+  | "mine"
+  | "human_owned"
+  | "ai_owned"
+  | "unassigned"
+  | "blocked"
+  | "recent"
+  | "no_plan"
+  | "roadmap";
 
 const FILTER_LABELS: Record<QuickFilter, string> = {
   mine: "mine",
+  human_owned: "human-owned",
+  ai_owned: "AI-owned",
+  unassigned: "unassigned",
   blocked: "blocked",
   recent: "recent",
   no_plan: "no plan",
@@ -19,6 +30,9 @@ interface FilterBarProps {
   roadmapAliases: string[];
   activeRoadmapAliases: string[];
   onToggleRoadmapAlias: (alias: string) => void;
+  assignees: Array<{ participantId: string; displayName: string }>;
+  activeAssigneeIds: string[];
+  onToggleAssignee: (participantId: string) => void;
 }
 
 export type { QuickFilter };
@@ -31,6 +45,9 @@ export function FilterBar({
   roadmapAliases,
   activeRoadmapAliases,
   onToggleRoadmapAlias,
+  assignees,
+  activeAssigneeIds,
+  onToggleAssignee,
 }: FilterBarProps) {
   return (
     <>
@@ -56,6 +73,27 @@ export function FilterBar({
           </Button>
         )}
       </div>
+
+      {activeFilters.includes("human_owned") && assignees.length > 0 && (
+        <div
+          data-testid="assignee-filters"
+          className={`-mt-2 mb-4 flex flex-wrap items-center gap-2 border border-border bg-card/35 ${isCompact ? "px-2 py-1.5" : "px-3 py-2"}`}
+        >
+          <span className="min-w-12 text-2xs uppercase tracking-label text-muted-foreground">
+            Assignee
+          </span>
+          {assignees.map((assignee) => (
+            <FilterButton
+              key={assignee.participantId}
+              active={activeAssigneeIds.includes(assignee.participantId)}
+              onClick={() => onToggleAssignee(assignee.participantId)}
+              size={isCompact ? "sm" : "default"}
+            >
+              {assignee.displayName}
+            </FilterButton>
+          ))}
+        </div>
+      )}
 
       {activeFilters.includes("roadmap") && roadmapAliases.length > 0 && (
         <div

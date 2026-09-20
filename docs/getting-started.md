@@ -6,7 +6,7 @@
 
 - **Docker** — Docker Desktop or compatible runtime
 - **Node.js** 20.19+ or 22.12+ and **npm** 10+ — only needed if running without Docker
-- **Claude Code CLI** — only needed if running without Docker (`npm i -g @anthropic-ai/claude-code`). The Agent SDK spawns Claude Code as a subprocess, so the CLI must be installed globally
+- **Claude Code CLI** — optional unless using the **CLI transport** without Docker (`npm i -g @anthropic-ai/claude-code`, version `>= 2.1.191`). The default SDK transport uses the Claude Code binary **bundled with `@anthropic-ai/claude-agent-sdk`** (currently `2.1.220`), so no global install is required for it; the runtime enforces `>= 2.1.191` and fails fast with `CLAUDE_VERSION_UNSUPPORTED` against an incompatible binary (older builds reject the empty attribution strings used to suppress Co-Authored-By trailers and crash at startup)
 - **Claude subscription** or Anthropic API key (for agent features)
 
 ## Quick Start with Docker
@@ -130,7 +130,7 @@ despite the Docker layer cache.
 ## Installation without Docker
 
 ```bash
-npm i -g @anthropic-ai/claude-code   # required — Agent SDK uses Claude Code CLI
+npm i -g @anthropic-ai/claude-code@latest   # optional — only for the CLI transport (>= 2.1.191); the SDK transport uses the binary bundled with @anthropic-ai/claude-agent-sdk
 git clone https://github.com/lee-to/aif-handoff.git
 cd aif-handoff
 npm install
@@ -185,6 +185,56 @@ cp .env.example .env
 You can set planner/plan-checker/implementer/review budgets per project in the project edit dialog. Leave any budget field empty for unlimited.
 
 See [Configuration](configuration.md) for details.
+
+## Participants Mode
+
+Participants Mode is off by default. With the flag unset or `false`, the UI and API keep
+the existing anonymous behavior and existing/new tasks default to AI ownership.
+
+1. Add the following to `.env` (the origin must match the browser origin exactly):
+
+   ```dotenv
+   PARTICIPANTS_MODE_ENABLED=true
+   PARTICIPANT_ALLOWED_ORIGINS=http://localhost:5180
+   ```
+
+2. Bootstrap the first administrator interactively before sharing the UI:
+
+   ```bash
+   npm run participants:bootstrap
+   ```
+
+   The command prompts for identity fields and reads the password plus confirmation without
+   echoing them. Passwords must contain at least 12 characters. `--password` and password
+   values on the command line are rejected so they cannot leak through shell history or
+   process listings. For automation, use protected stdin or a mode-`0600` password file.
+
+   ```bash
+   chmod 600 /secure/path/admin-password
+   npm run participants:bootstrap -- --username admin --display-name "Workspace Admin" --password-file /secure/path/admin-password
+   ```
+
+3. For Docker, feed the protected host file through stdin to the API container:
+
+   ```bash
+   docker compose exec -T api npm run participants:bootstrap -- --username admin --display-name "Workspace Admin" --password-stdin < /secure/path/admin-password
+   ```
+
+4. Start or restart the stack and sign in at the web URL. Administrators can create,
+   deactivate, rename, change roles, and reset passwords from the participant menu.
+   Every participant can replace a temporary password through their identity menu's
+   **Change password** action; the current password is required and other sessions are signed out.
+
+Flag-based bootstrap is idempotent only when the requested active admin already exists. Once any
+participant exists, the command refuses to create another account; use the authenticated
+admin UI/API instead. The final active administrator cannot be deactivated or demoted.
+If every administrator credential is lost, restore a database backup; bootstrap is not a
+break-glass password reset.
+
+Human/AI ownership is separate from `autoMode`. Human-owned tasks never enter coordinator,
+scheduler, auto-queue, watchdog, or runtime-budget execution paths. A handoff is rejected
+while an AI lease is live, but ownership is not filesystem isolation: wait for in-flight
+work to finish and inspect the shared project/worktree before editing it manually.
 
 ## Running
 

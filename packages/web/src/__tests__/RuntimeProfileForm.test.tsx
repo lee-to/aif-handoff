@@ -124,8 +124,8 @@ describe("RuntimeProfileForm", () => {
     vi.useRealTimers();
 
     fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
-    expect(screen.queryByRole("button", { name: "XHIGH" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "ULTRA" }));
+    expect(screen.queryByRole("option", { name: "XHIGH" })).toBeNull();
+    fireEvent.click(screen.getByRole("option", { name: "ULTRA" }));
     fireEvent.click(screen.getByRole("button", { name: /create profile/i }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -188,16 +188,16 @@ describe("RuntimeProfileForm", () => {
     expect(screen.getByText("Levels for model-a: low, ultra")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
-    fireEvent.click(screen.getByRole("button", { name: "ULTRA" }));
+    fireEvent.click(screen.getByRole("option", { name: "ULTRA" }));
     fireEvent.click(screen.getByRole("button", { name: "Model A (model-a)" }));
-    fireEvent.click(screen.getByRole("button", { name: "Model B (model-b)" }));
+    fireEvent.click(screen.getByRole("option", { name: "Model B (model-b)" }));
 
     expect(screen.getByText("Levels for model-b: medium, max")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
-    expect(screen.getByRole("button", { name: "MAX" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "ULTRA" })).toBeNull();
+    expect(screen.getByRole("option", { name: "MAX" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "ULTRA" })).toBeNull();
 
-    fireEvent.click(screen.getAllByRole("button", { name: /runtime default/i })[1]);
+    fireEvent.click(screen.getByRole("option", { name: /runtime default/i }));
     fireEvent.click(screen.getByRole("button", { name: /create profile/i }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -236,7 +236,7 @@ describe("RuntimeProfileForm", () => {
 
     await waitFor(() => expect(screen.getByDisplayValue("gpt-unknown")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
-    expect(screen.getByRole("button", { name: "XHIGH" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "XHIGH" })).toBeInTheDocument();
   });
 
   it("hides effort when the selected model explicitly does not support it", async () => {
@@ -311,7 +311,7 @@ describe("RuntimeProfileForm", () => {
     await waitFor(() => expect(screen.getByDisplayValue("gpt-5.4")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "CLI" }));
-    fireEvent.click(screen.getByRole("button", { name: "APP-SERVER" }));
+    fireEvent.click(screen.getByRole("option", { name: "APP-SERVER" }));
     fireEvent.click(screen.getByRole("button", { name: /create profile/i }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -360,10 +360,10 @@ describe("RuntimeProfileForm", () => {
     await waitFor(() => expect(screen.getByDisplayValue("sonnet")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: /runtime default/i }));
-    expect(screen.getByRole("button", { name: "HIGH" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "MAX" })).toBeNull();
+    expect(screen.getByRole("option", { name: "HIGH" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "MAX" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "HIGH" }));
+    fireEvent.click(screen.getByRole("option", { name: "HIGH" }));
     fireEvent.click(screen.getByRole("button", { name: /create profile/i }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -434,7 +434,7 @@ describe("RuntimeProfileForm", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: /codex \(codex\)/i }));
-    fireEvent.click(screen.getByRole("button", { name: /claude \(claude\)/i }));
+    fireEvent.click(screen.getByRole("option", { name: /claude \(claude\)/i }));
 
     await waitFor(() => {
       expect(mockRuntimeModels.mutateAsync).toHaveBeenCalledWith(
@@ -678,10 +678,10 @@ describe("RuntimeProfileForm", () => {
     fireEvent.change(filterInput, { target: { value: "gEmMa" } });
 
     expect(
-      screen.getByRole("button", { name: /Gemma 2B IT \(gemma-2b-it\)/i }),
+      screen.getByRole("option", { name: /Gemma 2B IT \(gemma-2b-it\)/i }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /GeMmA 9B \(GeMmA-9b\)/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Llama 3/i })).toBeNull();
+    expect(screen.getByRole("option", { name: /GeMmA 9B \(GeMmA-9b\)/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Llama 3/i })).toBeNull();
   });
 
   it("does not show model filter when suggested models are five or fewer", async () => {

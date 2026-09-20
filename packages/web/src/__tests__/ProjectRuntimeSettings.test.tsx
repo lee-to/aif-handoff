@@ -206,7 +206,7 @@ describe("ProjectRuntimeSettings", () => {
       }),
     );
     fireEvent.click(
-      screen.getAllByRole("button", {
+      screen.getAllByRole("option", {
         name: "Shared Codex [Global] (codex/openai)",
       })[0]!,
     );

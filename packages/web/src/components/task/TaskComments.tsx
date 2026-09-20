@@ -39,7 +39,15 @@ export function TaskComments({ taskId }: TaskCommentsProps) {
           }`}
         >
           <div className="mb-2 flex items-center justify-between text-2xs text-muted-foreground">
-            <AuthorBadge author={comment.author} />
+            <div className="flex items-center gap-1.5">
+              <AuthorBadge author={comment.author} />
+              {comment.author === "human" && comment.participant && (
+                <span>
+                  {comment.participant.displayName}
+                  {comment.participant.active ? "" : " (inactive)"}
+                </span>
+              )}
+            </div>
             <span>{formatWhen(comment.createdAt)}</span>
           </div>
           <Markdown content={comment.message} className="text-sm text-foreground/90" />

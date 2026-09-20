@@ -614,6 +614,7 @@ export async function runApiRuntimeOneShot(input: {
   systemPromptAppend?: string;
   includePartialMessages?: boolean;
   maxTurns?: number;
+  runTimeoutMs?: number;
   /**
    * Hint for adapters that support slash-command / skill resolution (e.g.
    * Claude Code CLI). Passed through to the workflow spec so compatible
@@ -712,7 +713,7 @@ export async function runApiRuntimeOneShot(input: {
         // so start timeout is meaningless — disable it and rely on run timeout only.
         startTimeoutMs:
           context.resolvedProfile.transport === "sdk" ? env.API_RUNTIME_START_TIMEOUT_MS : 0,
-        runTimeoutMs: env.API_RUNTIME_RUN_TIMEOUT_MS,
+        runTimeoutMs: input.runTimeoutMs ?? env.API_RUNTIME_RUN_TIMEOUT_MS,
         includePartialMessages: input.includePartialMessages ?? false,
         maxTurns: input.maxTurns,
         onEvent: onRuntimeEvent,

@@ -592,6 +592,27 @@ describe("runtime service", () => {
     );
   });
 
+  it("honors a caller-specific one-shot run timeout", async () => {
+    const runtimeService = await loadRuntimeService();
+    const adapter = createAdapter();
+    mockRegistryResolveRuntime.mockReturnValue(adapter);
+    mockResolveRuntimeProfile.mockReturnValue(createResolvedProfile());
+
+    await runtimeService.runApiRuntimeOneShot({
+      projectId: "proj-1",
+      projectRoot: "/tmp/project",
+      prompt: "run qa check",
+      runTimeoutMs: 600_000,
+      usageContext: { source: "qa" },
+    });
+
+    expect(adapter.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execution: expect.objectContaining({ runTimeoutMs: 600_000 }),
+      }),
+    );
+  });
+
   it("can run one-shot queries against planner runtime defaults", async () => {
     const runtimeService = await loadRuntimeService();
     const adapter = createAdapter();

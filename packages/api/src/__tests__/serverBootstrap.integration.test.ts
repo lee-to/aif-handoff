@@ -34,6 +34,15 @@ function waitForMessage(webSocket: WebSocket): Promise<Record<string, unknown>> 
   });
 }
 
+function withLifecycleTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 5_000).unref();
+    }),
+  ]);
+}
+
 describe("startServer WebSocket integration", () => {
   afterEach(() => {
     closeAllWebSocketClients();
@@ -62,17 +71,20 @@ describe("startServer WebSocket integration", () => {
         logger: createLogger(),
       });
 
-      await started;
+      await withLifecycleTimeout(started, "server start");
       const address = server.address() as AddressInfo;
       const webSocket = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
 
       try {
         const connectedMessage = waitForMessage(webSocket);
-        await new Promise<void>((resolve, reject) => {
-          webSocket.once("open", resolve);
-          webSocket.once("error", reject);
-        });
-        const connected = await connectedMessage;
+        await withLifecycleTimeout(
+          new Promise<void>((resolve, reject) => {
+            webSocket.once("open", resolve);
+            webSocket.once("error", reject);
+          }),
+          "WebSocket open",
+        );
+        const connected = await withLifecycleTimeout(connectedMessage, "connected message");
         expect(connected.type).toBe("ws:connected");
         const clientId = (connected.payload as { clientId: string }).clientId;
 
@@ -83,7 +95,7 @@ describe("startServer WebSocket integration", () => {
             payload: { id: "directed" },
           }),
         ).toBe(true);
-        expect(await directedMessage).toEqual({
+        expect(await withLifecycleTimeout(directedMessage, "directed message")).toEqual({
           type: "task:updated",
           payload: { id: "directed" },
         });
@@ -93,7 +105,7 @@ describe("startServer WebSocket integration", () => {
           type: "task:updated",
           payload: { id: "broadcast" },
         });
-        expect(await broadcastMessage).toEqual({
+        expect(await withLifecycleTimeout(broadcastMessage, "broadcast message")).toEqual({
           type: "task:updated",
           payload: { id: "broadcast" },
         });
@@ -102,7 +114,7 @@ describe("startServer WebSocket integration", () => {
           webSocket.once("close", () => resolve());
         });
         webSocket.close();
-        await closed;
+        await withLifecycleTimeout(closed, "WebSocket close");
         await vi.waitFor(() => {
           expect(getConnectedWebSocketClientCount()).toBe(0);
           expect(
@@ -116,6 +128,9 @@ describe("startServer WebSocket integration", () => {
         if (webSocket.readyState === WebSocket.OPEN) {
           webSocket.close();
         }
+        // Terminate any bridge-side client before awaiting server.close() so
+        // the lifecycle assertion cannot be delayed by an upgraded socket.
+        closeAllWebSocketClients();
         await new Promise<void>((resolve, reject) => {
           server.close((error) => {
             if (error) {

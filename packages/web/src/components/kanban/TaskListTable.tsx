@@ -3,6 +3,7 @@ import { ChevronUp, ChevronDown, Clock, Pause, Play } from "lucide-react";
 import { STATUS_CONFIG, type TaskListItem } from "@aif/shared/browser";
 import { TableHeaderCell } from "@/components/ui/table-header-cell";
 import { useReorderTask, useUpdateTask } from "@/hooks/useTasks";
+import { TaskOwnershipSummary } from "@/components/task/TaskOwnership";
 
 interface TaskListTableProps {
   tasks: TaskListItem[];
@@ -68,7 +69,7 @@ export function TaskListTable({
             <TableHeaderCell isCompact={isCompact} className="w-24">
               Priority
             </TableHeaderCell>
-            <TableHeaderCell isCompact={isCompact} className="w-20">
+            <TableHeaderCell isCompact={isCompact} className="w-52">
               Owner
             </TableHeaderCell>
             <TableHeaderCell isCompact={isCompact} className="w-44">
@@ -135,10 +136,12 @@ export function TaskListTable({
               >
                 {task.priority || "-"}
               </td>
-              <td
-                className={`px-3 text-muted-foreground ${isCompact ? "py-1 text-2xs" : "py-2.5 text-xs"}`}
-              >
-                {task.autoMode ? "AI" : "Manual"}
+              <td className={`px-3 ${isCompact ? "py-1" : "py-2.5"}`}>
+                <TaskOwnershipSummary
+                  executionOwner={task.executionOwner}
+                  assignees={task.assignees}
+                  compact={isCompact}
+                />
               </td>
               <td
                 className={`px-3 text-muted-foreground ${isCompact ? "py-1 text-2xs" : "py-2.5 text-xs"}`}

@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const { findProjectByTaskIdMock } = vi.hoisted(() => ({
+  findProjectByTaskIdMock: vi.fn(),
+}));
+
+vi.mock("@aif/data", () => ({
+  findProjectByTaskId: findProjectByTaskIdMock,
+}));
+
 vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
   return {
@@ -9,6 +17,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
   };
 });
 
+const { resetEnvCache } = await import("@aif/shared");
 const { notifyTaskBroadcast } = await import("../notifier.js");
 
 describe("notifyTaskBroadcast", () => {
@@ -16,6 +25,8 @@ describe("notifyTaskBroadcast", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    findProjectByTaskIdMock.mockReset();
+    resetEnvCache();
     vi.stubEnv("PORT", "3999");
     vi.stubEnv("API_BASE_URL", "http://localhost:3999");
   });
@@ -23,6 +34,7 @@ describe("notifyTaskBroadcast", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     vi.unstubAllEnvs();
+    resetEnvCache();
   });
 
   it("sends broadcast request with provided type", async () => {
@@ -104,6 +116,104 @@ describe("notifyTaskBroadcast", () => {
       expect(body.text).toContain("plan\\_ready");
     });
 
+    it("resolves and renders the task project name", async () => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "123:ABC");
+      vi.stubEnv("TELEGRAM_USER_ID", "999");
+      vi.stubEnv("AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED", "true");
+      findProjectByTaskIdMock.mockReturnValue({ name: "Platform [Core]" });
+
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      global.fetch = fetchMock as any;
+
+      await notifyTaskBroadcast("task-project", "task:moved", {
+        title: "Fix login",
+        fromStatus: "review",
+        toStatus: "done",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(findProjectByTaskIdMock).toHaveBeenCalledWith("task-project");
+      const telegramCall = fetchMock.mock.calls.find(
+        (call: any[]) => typeof call[0] === "string" && call[0].includes("api.telegram.org"),
+      );
+      const body = JSON.parse(telegramCall![1].body);
+      expect(body.text).toBe("📁 *Platform \\[Core\\]*\n📋 Fix login\nreview → done");
+    });
+
+    it("uses an explicit project name without querying the database", async () => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "123:ABC");
+      vi.stubEnv("TELEGRAM_USER_ID", "999");
+      vi.stubEnv("AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED", "true");
+
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      global.fetch = fetchMock as any;
+
+      await notifyTaskBroadcast("task-explicit", "task:moved", {
+        projectName: "Explicit Project",
+        title: "Deploy",
+        toStatus: "done",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(findProjectByTaskIdMock).not.toHaveBeenCalled();
+      const telegramCall = fetchMock.mock.calls.find(
+        (call: any[]) => typeof call[0] === "string" && call[0].includes("api.telegram.org"),
+      );
+      const body = JSON.parse(telegramCall![1].body);
+      expect(body.text).toContain("📁 *Explicit Project*");
+    });
+
+    it("still sends Telegram when project lookup throws", async () => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "123:ABC");
+      vi.stubEnv("TELEGRAM_USER_ID", "999");
+      vi.stubEnv("AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED", "true");
+      findProjectByTaskIdMock.mockImplementation(() => {
+        throw new Error("database unavailable");
+      });
+
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      global.fetch = fetchMock as any;
+
+      await notifyTaskBroadcast("task-lookup-error", "task:moved", {
+        title: "Keep delivering",
+        toStatus: "review",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(findProjectByTaskIdMock).toHaveBeenCalledWith("task-lookup-error");
+      const telegramCall = fetchMock.mock.calls.find(
+        (call: any[]) => typeof call[0] === "string" && call[0].includes("api.telegram.org"),
+      );
+      const body = JSON.parse(telegramCall![1].body);
+      expect(body.text).toBe("📋 *Keep delivering*\nreview");
+    });
+
+    it("does not query the project while project names are disabled", async () => {
+      vi.stubEnv("TELEGRAM_BOT_TOKEN", "123:ABC");
+      vi.stubEnv("TELEGRAM_USER_ID", "999");
+      findProjectByTaskIdMock.mockReturnValue({ name: "Hidden Project" });
+
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      global.fetch = fetchMock as any;
+
+      await notifyTaskBroadcast("task-disabled", "task:moved", {
+        title: "Legacy title",
+        toStatus: "done",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(findProjectByTaskIdMock).not.toHaveBeenCalled();
+      const telegramCall = fetchMock.mock.calls.find(
+        (call: any[]) => typeof call[0] === "string" && call[0].includes("api.telegram.org"),
+      );
+      const body = JSON.parse(telegramCall![1].body);
+      expect(body.text).toBe("📋 *Legacy title*\ndone");
+    });
+
     it("does not send Telegram message when env is not configured", async () => {
       // Explicitly clear tokens that may exist in the real environment
       vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
@@ -122,6 +232,7 @@ describe("notifyTaskBroadcast", () => {
         (call: any[]) => typeof call[0] === "string" && call[0].includes("api.telegram.org"),
       );
       expect(telegramCall).toBeUndefined();
+      expect(findProjectByTaskIdMock).not.toHaveBeenCalled();
     });
 
     it("does not send Telegram message on task:updated (only task:moved)", async () => {

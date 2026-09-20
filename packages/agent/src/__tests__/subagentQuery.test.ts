@@ -43,6 +43,7 @@ const getAppDefaultRuntimeProfileIdMock = vi.fn<
 interface MockTaskRow {
   id: string;
   projectId: string;
+  executionOwner?: "ai" | "human";
   status?: string;
   runtimeOptionsJson: string | null;
   modelOverride: string | null;
@@ -310,7 +311,7 @@ describe("executeSubagentQuery attribution", () => {
     vi.unstubAllGlobals();
   });
 
-  it("passes empty attribution to suppress Co-Authored-By trailers", async () => {
+  it("forwards the empty-string attribution suppression to the SDK", async () => {
     queryMock.mockImplementation(async function* () {
       yield {
         type: "result",
@@ -330,9 +331,33 @@ describe("executeSubagentQuery attribution", () => {
     });
 
     const callOptions = queryMock.mock.calls[0][0].options;
-    expect(callOptions.settings).toEqual(
-      expect.objectContaining({ attribution: { commit: "", pr: "" } }),
-    );
+    // The agent requests Co-Authored-By suppression via the documented
+    // empty-string attribution values, and the Claude adapter forwards them to
+    // the SDK unchanged (empty commit/pr hide the trailers). They are NOT
+    // collapsed to {} — that would restore Claude Code's default attribution.
+    expect(callOptions.settings).toEqual({ attribution: { commit: "", pr: "" } });
+  });
+
+  it("rejects a human-owned task before runtime resolution or usage", async () => {
+    findTaskByIdMock.mockReturnValue({
+      id: "task-human",
+      projectId: "project-1",
+      executionOwner: "human",
+      runtimeOptionsJson: null,
+      modelOverride: null,
+    });
+
+    await expect(
+      executeSubagentQuery({
+        taskId: "task-human",
+        projectRoot: "/tmp/project",
+        agentName: "implement-coordinator",
+        prompt: "run",
+        workflowKind: "implementer",
+      }),
+    ).rejects.toMatchObject({ code: "ai_handoff_required" });
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(resolveEffectiveRuntimeProfileMock).not.toHaveBeenCalled();
   });
 
   it("passes Handoff branch contract in runtime environment", async () => {

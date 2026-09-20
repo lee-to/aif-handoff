@@ -1,3 +1,4 @@
+import { findProjectByTaskId } from "@aif/data";
 import { logger, getEnv, internalBroadcastHeaders, sendTelegramNotification } from "@aif/shared";
 
 const log = logger("agent-notifier");
@@ -5,6 +6,7 @@ const log = logger("agent-notifier");
 type BroadcastType = "task:updated" | "task:moved" | "task:activity" | "task:scheduled_fired";
 
 export interface TaskNotificationInfo {
+  projectName?: string;
   title?: string;
   fromStatus?: string;
   toStatus?: string;
@@ -116,6 +118,8 @@ export async function notifyTaskBroadcast(
   if (type === "task:moved" && (!info.fromStatus || info.fromStatus !== info.toStatus)) {
     void sendTelegramNotification({
       taskId,
+      projectName: info.projectName,
+      resolveProjectName: () => findProjectByTaskId(taskId)?.name,
       title: info.title,
       fromStatus: info.fromStatus,
       toStatus: info.toStatus,

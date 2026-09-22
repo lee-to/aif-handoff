@@ -70,11 +70,21 @@ export interface AifProjectLanguage {
   technical_terms: "keep" | "translate";
 }
 
+export interface AifProjectTaskDefaults {
+  autoMode?: boolean;
+  plannerMode?: "fast" | "full";
+  skipReview?: boolean;
+  useSubagents?: boolean;
+  planTests?: boolean;
+  maxReviewIterations?: number;
+}
+
 export interface AifProjectConfig {
   paths: AifProjectPaths;
   workflow: AifProjectWorkflow;
   git: AifProjectGit;
   language: AifProjectLanguage;
+  task_defaults: AifProjectTaskDefaults;
 }
 
 const DEFAULT_PATHS: AifProjectPaths = {
@@ -121,6 +131,14 @@ const DEFAULT_LANGUAGE: AifProjectLanguage = {
 };
 
 /**
+ * Task creation defaults sourced from `.ai-factory/config.yaml` → `task_defaults`.
+ * Empty by default: a project overrides only the flags it cares about, and
+ * unspecified flags fall through to the schema default (via `undefined`).
+ * Resolved in `createTask` as: explicit task arg → `task_defaults` → schema default.
+ */
+const DEFAULT_TASK_DEFAULTS: AifProjectTaskDefaults = {};
+
+/**
  * Conservative BCP-47-ish tag: 2-3 letter primary subtag optionally followed
  * by one or more `-`/`_` separated alphanumeric subtags (2-8 chars each).
  * Catches typos and garbage values so they don't leak into the injected
@@ -148,6 +166,29 @@ function normalizeLanguage(raw: unknown): AifProjectLanguage {
   return { ui, artifacts, technical_terms: technicalTerms };
 }
 
+/**
+ * Validate and normalize the `task_defaults` section. Garbage values fall back
+ * to `undefined` (no override) instead of leaking into task creation. Mirrors
+ * the lenient-but-strict style of `normalizeLanguage`.
+ */
+function normalizeTaskDefaults(raw: unknown): AifProjectTaskDefaults {
+  const obj = (raw ?? {}) as Partial<AifProjectTaskDefaults>;
+  return {
+    autoMode: typeof obj.autoMode === "boolean" ? obj.autoMode : undefined,
+    plannerMode:
+      obj.plannerMode === "fast" || obj.plannerMode === "full" ? obj.plannerMode : undefined,
+    skipReview: typeof obj.skipReview === "boolean" ? obj.skipReview : undefined,
+    useSubagents: typeof obj.useSubagents === "boolean" ? obj.useSubagents : undefined,
+    planTests: typeof obj.planTests === "boolean" ? obj.planTests : undefined,
+    maxReviewIterations:
+      typeof obj.maxReviewIterations === "number" &&
+      Number.isFinite(obj.maxReviewIterations) &&
+      obj.maxReviewIterations > 0
+        ? Math.floor(obj.maxReviewIterations)
+        : undefined,
+  };
+}
+
 /** Cached configs keyed by projectRoot to avoid re-reading on every call */
 const configCache = new Map<string, { config: AifProjectConfig; mtimeMs: number }>();
 
@@ -165,6 +206,7 @@ export function getProjectConfig(projectRoot: string): AifProjectConfig {
       workflow: { ...DEFAULT_WORKFLOW },
       git: { ...DEFAULT_GIT },
       language: { ...DEFAULT_LANGUAGE },
+      task_defaults: { ...DEFAULT_TASK_DEFAULTS },
     };
   }
 
@@ -186,6 +228,7 @@ export function getProjectConfig(projectRoot: string): AifProjectConfig {
     workflow: { ...DEFAULT_WORKFLOW, ...yamlWorkflow },
     git: { ...DEFAULT_GIT, ...yamlGit },
     language: normalizeLanguage(parsed?.language),
+    task_defaults: normalizeTaskDefaults(parsed?.task_defaults),
   };
 
   configCache.set(projectRoot, { config, mtimeMs: stat.mtimeMs });

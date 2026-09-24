@@ -1,12 +1,15 @@
+import { getEnv } from "@aif/shared";
 import { createClaudeRuntimeAdapter } from "./adapters/claude/index.js";
 import { createCodexRuntimeAdapter } from "./adapters/codex/index.js";
 import { createOpenCodeRuntimeAdapter } from "./adapters/opencode/index.js";
 import { createOpenRouterRuntimeAdapter } from "./adapters/openrouter/index.js";
+import { createAntigravityRuntimeAdapter } from "./adapters/antigravity/index.js";
 import {
   createRuntimeRegistry,
   type RuntimeRegistry,
   type RuntimeRegistryLogger,
 } from "./registry.js";
+import type { RuntimeAdapter } from "./types.js";
 import type { RuntimeUsageSink } from "./usageSink.js";
 
 export interface BootstrapRuntimeRegistryOptions {
@@ -31,13 +34,21 @@ export interface BootstrapRuntimeRegistryOptions {
 export async function bootstrapRuntimeRegistry(
   options: BootstrapRuntimeRegistryOptions = {},
 ): Promise<RuntimeRegistry> {
+  const env = getEnv();
+
+  const builtInAdapters: RuntimeAdapter[] = [
+    createClaudeRuntimeAdapter(),
+    createCodexRuntimeAdapter(),
+    createOpenCodeRuntimeAdapter(),
+    createOpenRouterRuntimeAdapter(),
+  ];
+
+  if (env.AIF_RUNTIME_ANTIGRAVITY_ENABLED) {
+    builtInAdapters.push(createAntigravityRuntimeAdapter());
+  }
+
   const registry = createRuntimeRegistry({
-    builtInAdapters: [
-      createClaudeRuntimeAdapter(),
-      createCodexRuntimeAdapter(),
-      createOpenCodeRuntimeAdapter(),
-      createOpenRouterRuntimeAdapter(),
-    ],
+    builtInAdapters,
     logger: options.logger,
     usageSink: options.usageSink,
     modelEffortDiscoveryEnabled: options.modelEffortDiscoveryEnabled,

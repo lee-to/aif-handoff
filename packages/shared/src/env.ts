@@ -276,6 +276,7 @@ const envSchema = z.object({
   AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: booleanEnvSchema.default(false),
   AIF_GITHUB_PROJECT_CLONE_ENABLED: booleanEnvSchema.default(false),
   AIF_GITHUB_ISSUE_PR_ENABLED: booleanEnvSchema.default(false),
+  AIF_RUNTIME_ANTIGRAVITY_ENABLED: booleanEnvSchema.default(false),
   AIF_RUNTIME_SESSION_FORK_ENABLED: z
     .preprocess((value) => {
       if (typeof value === "string") {

@@ -81,6 +81,7 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
     AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: false,
     AIF_GITHUB_PROJECT_CLONE_ENABLED: false,
     AIF_GITHUB_ISSUE_PR_ENABLED: false,
+    AIF_RUNTIME_ANTIGRAVITY_ENABLED: false,
     AIF_STAGE_RUNTIME_PIN_ENABLED: false,
     AIF_WARMUP_ENABLED: false,
     AIF_QA_PIPELINE_ENABLED: false,

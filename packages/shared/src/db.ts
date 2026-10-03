@@ -1094,6 +1094,14 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN qa_check_playwright_configured INTEGER;
     `,
   },
+  {
+    version: 30,
+    description: "Track started stages and fence superseded coordinator attempts",
+    sql: `
+      ALTER TABLE tasks ADD COLUMN stage_attempt_id TEXT;
+      ALTER TABLE tasks ADD COLUMN stage_started_at TEXT;
+    `,
+  },
 ];
 
 function splitSqlStatements(sqlText: string): string[] {

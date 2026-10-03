@@ -13,6 +13,8 @@ const { mockWarn, mockError } = vi.hoisted(() => ({
 }));
 
 vi.mock("@aif/data", () => ({
+  isTaskAttemptCurrent: () => true,
+  getTaskAttempt: () => undefined,
   appendTaskActivityLog: vi.fn(),
 }));
 

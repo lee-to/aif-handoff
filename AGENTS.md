@@ -58,6 +58,7 @@ packages/
 │       ├── participants.ts  # Participant lifecycle and admin invariants
 │       ├── authSessions.ts  # Password/session/CSRF persistence
 │       ├── taskOwnership.ts # Atomic handoff, assignments, executor history
+│       ├── taskAttempts.ts  # Attempt context and fencing for stale coordinator writes
 │       ├── taskTransitions.ts # Actor-aware atomic task transitions
 │       ├── audit.ts         # Immutable audit persistence
 │       └── index.ts         # Public repository API

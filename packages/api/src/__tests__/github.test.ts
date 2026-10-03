@@ -484,4 +484,89 @@ describe("GitHub project routes", () => {
     expect(createCalls).toHaveLength(1);
     expect(commentCalls).toHaveLength(1);
   });
+
+  it("reconciles a created PR after its response is lost instead of replaying creation", async () => {
+    upsertGitHubRepository({
+      projectId: "project-1",
+      owner: "owner",
+      name: "repo",
+      htmlUrl: "https://github.com/owner/repo",
+      defaultBranch: "main",
+      tokenEnvVar: "GITHUB_TEST_TOKEN",
+      eligibility: { labels: [], assignee: null, milestone: null },
+      enabled: true,
+    });
+    const imported = importGitHubIssueTask({
+      projectId: "project-1",
+      owner: "owner",
+      repository: "repo",
+      issueNumber: 154,
+      nodeId: "I_154",
+      htmlUrl: "https://github.com/owner/repo/issues/154",
+      state: "open",
+      sourceUpdatedAt: "2026-08-08T00:00:00Z",
+      snapshot: {
+        title: "Lost response",
+        body: "Implement",
+        author: "author",
+        labels: [],
+        assignees: [],
+        milestone: null,
+        comments: [],
+      },
+    });
+    const pull = {
+      number: 200,
+      html_url: "https://github.com/owner/repo/pull/200",
+      state: "open",
+      merged_at: null,
+      head: { sha: "0123456789abcdef" },
+    };
+    // This journal represents remote state, independent of task/linkage persistence.
+    const effectJournal: (typeof pull)[] = [];
+    const operations: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const path = new URL(url).pathname;
+        const method = init?.method ?? "GET";
+        operations.push(`${method} ${path}`);
+        if (path.endsWith("/pulls") && method === "GET") return jsonResponse(effectJournal);
+        if (path.endsWith("/pulls") && method === "POST") {
+          effectJournal.push(pull);
+          throw new TypeError("response lost after remote commit");
+        }
+        if (path.endsWith("/pulls/200") && method === "PATCH") return jsonResponse(pull);
+        if (path.endsWith("/status"))
+          return jsonResponse({ state: "success", total_count: 1, statuses: [{}] });
+        if (path.endsWith("/check-runs")) return jsonResponse({ total_count: 0, check_runs: [] });
+        throw new Error(`Unexpected fake request: ${method} ${path}`);
+      }),
+    );
+    const app = new Hono();
+    app.route("/projects", githubRouter);
+    const publish = () =>
+      app.request(`/projects/project-1/github/tasks/${imported.taskId}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch: "feature/lost-response", commitSha: pull.head.sha }),
+      });
+
+    expect((await publish()).status).toBe(502);
+    expect(effectJournal).toHaveLength(1);
+    expect(findGitHubIssue("project-1", 154)?.prNumber).toBeNull();
+    const retry = await publish();
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ prNumber: 200 });
+    expect(effectJournal).toHaveLength(1);
+    expect(operations.filter((op) => op === "POST /repos/owner/repo/pulls")).toHaveLength(1);
+    expect(operations).toEqual([
+      "GET /repos/owner/repo/pulls",
+      "POST /repos/owner/repo/pulls",
+      "GET /repos/owner/repo/pulls",
+      "PATCH /repos/owner/repo/pulls/200",
+      `GET /repos/owner/repo/commits/${pull.head.sha}/status`,
+      `GET /repos/owner/repo/commits/${pull.head.sha}/check-runs`,
+    ]);
+  });
 });

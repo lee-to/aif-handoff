@@ -76,6 +76,7 @@ describe("env validation", () => {
     expect(result.AIF_RUNTIME_MODEL_EFFORT_DISCOVERY_ENABLED).toBe(false);
     expect(result.AIF_API_NODE_SERVER_V2_WEBSOCKET_ENABLED).toBe(false);
     expect(result.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED).toBe(false);
+    expect(result.AIF_AGENT_ATTEMPT_RECOVERY_ENABLED).toBe(false);
     expect(result.AIF_GITHUB_PROJECT_CLONE_ENABLED).toBe(false);
     expect(result.AIF_GITHUB_ISSUE_PR_ENABLED).toBe(false);
     expect(result.AIF_NOTIFICATIONS_PROJECT_NAMES_ENABLED).toBe(false);
@@ -264,4 +265,23 @@ describe("env validation", () => {
     expect(() => getEnv()).toThrow("Environment validation failed");
     vi.unstubAllEnvs();
   });
+});
+
+it.each([
+  ["true", true],
+  ["1", true],
+  ["yes", true],
+  ["on", true],
+  ["false", false],
+  ["0", false],
+  ["no", false],
+  ["off", false],
+])("parses attempt recovery rollout %s", (value, expected) => {
+  expect(
+    validateEnv({ AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: String(value) })
+      .AIF_AGENT_ATTEMPT_RECOVERY_ENABLED,
+  ).toBe(expected);
+});
+it("rejects an invalid attempt recovery rollout value", () => {
+  expect(() => validateEnv({ AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: "sometimes" })).toThrow();
 });

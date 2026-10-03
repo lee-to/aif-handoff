@@ -1,3 +1,4 @@
+import { assertTaskAttemptCurrent, isTaskAttemptRecoveryEnabled } from "./taskAttempts.js";
 import { and, asc, eq } from "drizzle-orm";
 import {
   auditEvents,
@@ -190,6 +191,7 @@ export function transitionTaskStatus(
 
   try {
     return getDb().transaction((tx) => {
+      assertTaskAttemptCurrent(input.taskId);
       const task = tx.select().from(tasks).where(eq(tasks.id, input.taskId)).get();
       if (!task) {
         return { ok: false, code: "not_found", message: "Task not found" } as const;
@@ -227,6 +229,9 @@ export function transitionTaskStatus(
       const updated = tx
         .update(tasks)
         .set({
+          ...(isTaskAttemptRecoveryEnabled() && task.status !== input.status
+            ? { stageStartedAt: null }
+            : {}),
           ...normalizeExtra(input.extra ?? {}),
           status: input.status,
           sessionId: null,
@@ -355,6 +360,14 @@ export function applyTaskAction(input: ApplyTaskActionInput): TaskTransitionResu
         .set({
           ...normalizeExtra(input.extra ?? {}),
           ...normalizeExtra(resolution.patch),
+          ...(isTaskAttemptRecoveryEnabled()
+            ? {
+                stageStartedAt: null,
+                stageAttemptId: null,
+                lockedBy: null,
+                lockedUntil: null,
+              }
+            : {}),
           status: resolution.patch.status,
           sessionId: null,
           ...(input.event === "retry_from_blocked"

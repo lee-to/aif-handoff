@@ -7,6 +7,7 @@ import {
   clearTaskRuntimeLimitSnapshot,
   listDueBlockedExternalTasks,
   listStaleInProgressTasks,
+  isTaskAttemptRecoveryEnabled,
   transitionTaskStatus,
 } from "@aif/data";
 import { logger, getEnv, type TaskStatus } from "@aif/shared";
@@ -15,6 +16,7 @@ import { notifyTaskBroadcast } from "./notifier.js";
 
 const log = logger("task-watchdog");
 const env = getEnv();
+const ATTEMPT_RECOVERY_ENABLED = isTaskAttemptRecoveryEnabled();
 const STALE_TIMEOUT_MS = Math.max(env.AGENT_STAGE_STALE_TIMEOUT_MS, 60_000);
 const STALE_MAX_RETRY = Math.max(env.AGENT_STAGE_STALE_MAX_RETRY, 1);
 const WATCHDOG_ACTOR = {
@@ -58,7 +60,8 @@ export function releaseDueBlockedTasks(): void {
         blockedReason: null,
         blockedFromStatus: null,
         retryAfter: null,
-        retryCount: 0,
+        // The rollout preserves debt until the retried stage actually succeeds.
+        retryCount: ATTEMPT_RECOVERY_ENABLED ? task.retryCount : 0,
       },
       actor: WATCHDOG_ACTOR,
       action: "task.watchdog_released",

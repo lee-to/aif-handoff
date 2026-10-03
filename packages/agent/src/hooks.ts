@@ -1,4 +1,10 @@
-import { appendTaskActivityLog } from "@aif/data";
+import {
+  appendTaskActivityLog,
+  getTaskAttempt,
+  withTaskAttempt,
+  isTaskAttemptCurrent,
+  type TaskAttempt,
+} from "@aif/data";
 import { logger, findMonorepoRootFromUrl, getEnv } from "@aif/shared";
 import { notifyTaskBroadcast } from "./notifier.js";
 
@@ -31,6 +37,7 @@ export type RuntimeHookCallback = (
 // ---------------------------------------------------------------------------
 
 interface QueueEntry {
+  attempt?: TaskAttempt;
   timestamp: string;
   category: ActivityCategory;
   detail: string;
@@ -63,8 +70,23 @@ export function flushActivityQueue(taskId: string): void {
   log.debug({ taskId, entries: entries.length, trigger: "flush" }, "Flushing activity queue");
 
   try {
-    const newLines = entries.map((e) => `[${e.timestamp}] ${e.category}: ${e.detail}`).join("\n");
-    appendActivityLogToDb(taskId, newLines);
+    const groups = new Map<string | undefined, QueueEntry[]>();
+    for (const entry of entries) {
+      const key = entry.attempt?.attemptId;
+      const group = groups.get(key) ?? [];
+      group.push(entry);
+      groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      const append = () => {
+        if (!isTaskAttemptCurrent(taskId)) return;
+        const newLines = group.map((e) => `[${e.timestamp}] ${e.category}: ${e.detail}`).join("\n");
+        appendActivityLogToDb(taskId, newLines);
+      };
+      const attempt = group[0].attempt;
+      if (attempt) withTaskAttempt(attempt, append);
+      else append();
+    }
     log.info({ taskId, entries: entries.length, mode: "batch" }, "Activity queue flushed");
   } catch (err) {
     log.error({ err, taskId, lostEntries: entries.length }, "Failed to flush activity queue");
@@ -125,6 +147,7 @@ function resetFlushTimer(taskId: string, maxAgeMs: number): void {
  * or manual flush triggers are met.
  */
 export function logActivity(taskId: string, category: ActivityCategory, detail: string): void {
+  if (!isTaskAttemptCurrent(taskId)) return;
   const env = getEnv();
   const timestamp = new Date().toISOString();
 
@@ -156,7 +179,8 @@ export function logActivity(taskId: string, category: ActivityCategory, detail: 
     );
   }
 
-  queue.push({ timestamp, category, detail });
+  const attempt = getTaskAttempt();
+  queue.push({ timestamp, category, detail, attempt: attempt ? { ...attempt } : undefined });
   log.debug({ taskId, queueSize: queue.length }, "Activity entry enqueued");
 
   // Flush if batch size reached

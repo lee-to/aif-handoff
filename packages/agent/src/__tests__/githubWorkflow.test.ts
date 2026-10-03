@@ -4,6 +4,7 @@ const listRepositoriesMock = vi.fn();
 const findGitHubIssueMock = vi.fn();
 
 vi.mock("@aif/data", () => ({
+  isTaskAttemptRecoveryEnabled: () => false,
   appendTaskActivityLog: vi.fn(),
   findGitHubIssueByTaskId: (...args: unknown[]) => findGitHubIssueMock(...args),
   findTaskById: vi.fn(),

@@ -1,9 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { tasks, projects } from "@aif/shared";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { tasks, projects, getEnv } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { eq } from "drizzle-orm";
+import { claimCoordinatorTaskIfEligible, releaseStaleTaskClaims } from "@aif/data";
 
 const testDb = { current: createTestDb() };
+
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  return {
+    ...actual,
+    getEnv: () => Object.assign(actual.getEnv(), { AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: true }),
+  };
+});
 
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
@@ -23,6 +32,11 @@ import {
   recoverStaleInProgressTasks,
   getRandomBackoffMinutes,
 } from "../taskWatchdog.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const PROJECT_ID = "proj-watchdog-test";
 
@@ -131,7 +145,7 @@ describe("releaseDueBlockedTasks", () => {
     const task = db.select().from(tasks).where(eq(tasks.id, id)).get();
     expect(task?.status).toBe("planning");
     expect(task?.blockedReason).toBeNull();
-    expect(task?.retryCount).toBe(0);
+    expect(task?.retryCount).toBe(1);
     expect(task?.runtimeLimitSnapshotJson).toBeNull();
   });
 
@@ -179,6 +193,7 @@ describe("recoverStaleInProgressTasks", () => {
     const id = insertTask(db, {
       status: "planning",
       lastHeartbeatAt: staleTime,
+      stageStartedAt: staleTime,
       updatedAt: staleTime,
       retryCount: 0,
     });
@@ -198,6 +213,7 @@ describe("recoverStaleInProgressTasks", () => {
     const id = insertTask(db, {
       status: "implementing",
       lastHeartbeatAt: staleTime,
+      stageStartedAt: staleTime,
       updatedAt: staleTime,
       retryCount: 99,
     });
@@ -224,5 +240,60 @@ describe("recoverStaleInProgressTasks", () => {
 
     const task = db.select().from(tasks).where(eq(tasks.id, id)).get();
     expect(task?.status).toBe("planning");
+  });
+
+  it("does not recover a task that only waited for capacity and never started", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const id = insertTask(testDb.current, { status: "review" });
+    vi.setSystemTime(Date.now() + getEnv().AGENT_STAGE_STALE_TIMEOUT_MS + 1);
+
+    recoverStaleInProgressTasks();
+
+    expect(testDb.current.select().from(tasks).where(eq(tasks.id, id)).get()).toMatchObject({
+      status: "review",
+      retryCount: 0,
+      retryAfter: null,
+    });
+  });
+
+  it("exhausts the retry budget across complete stale/backoff/retry cycles", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const db = testDb.current;
+    const id = insertTask(db, { status: "planning" });
+    const maxRetries = getEnv().AGENT_STAGE_STALE_MAX_RETRY;
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      expect(
+        claimCoordinatorTaskIfEligible({
+          taskId: id,
+          expectedProjectId: PROJECT_ID,
+          expectedStatus: "planning",
+          coordinatorId: "fake-runtime",
+          lockDurationMs: 60_000,
+        }),
+      ).toBeDefined();
+      vi.setSystemTime(Date.now() + getEnv().AGENT_STAGE_STALE_TIMEOUT_MS + 1);
+      releaseStaleTaskClaims();
+      recoverStaleInProgressTasks();
+      const blocked = db.select().from(tasks).where(eq(tasks.id, id)).get()!;
+      expect(blocked.status).toBe("blocked_external");
+      if (attempt === maxRetries) {
+        expect(blocked.retryAfter).toBeNull();
+        expect(blocked.retryCount).toBe(maxRetries);
+        vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+        releaseDueBlockedTasks();
+        expect(db.select().from(tasks).where(eq(tasks.id, id)).get()!.status).toBe(
+          "blocked_external",
+        );
+      } else {
+        expect(blocked.retryCount).toBe(attempt + 1);
+        expect(Date.parse(blocked.retryAfter!)).toBe(Date.now() + 10 * 60_000);
+        vi.setSystemTime(new Date(blocked.retryAfter!));
+        releaseDueBlockedTasks();
+        expect(db.select().from(tasks).where(eq(tasks.id, id)).get()!.retryCount).toBe(attempt + 1);
+      }
+    }
   });
 });

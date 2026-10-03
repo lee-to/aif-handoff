@@ -5,6 +5,8 @@ const mockCreateTaskComment = vi.fn();
 const mockAppendTaskActivityLog = vi.fn();
 
 vi.mock("@aif/data", () => ({
+  isTaskAttemptCurrent: () => true,
+  getTaskAttempt: () => undefined,
   findTaskById: (...args: unknown[]) => mockFindTaskById(...args),
   createTaskComment: (...args: unknown[]) => mockCreateTaskComment(...args),
   appendTaskActivityLog: (...args: unknown[]) => mockAppendTaskActivityLog(...args),

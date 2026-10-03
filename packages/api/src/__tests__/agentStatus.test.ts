@@ -79,6 +79,7 @@ describe("GET /agent/status", () => {
         title: "Active Task",
         description: "desc",
         status: "implementing",
+        stageStartedAt: now,
         lastHeartbeatAt: now,
         updatedAt: now,
       })
@@ -103,6 +104,7 @@ describe("GET /agent/status", () => {
         title: "Stale Task",
         description: "desc",
         status: "planning",
+        stageStartedAt: tenMinAgo,
         lastHeartbeatAt: tenMinAgo,
         updatedAt: tenMinAgo,
       })

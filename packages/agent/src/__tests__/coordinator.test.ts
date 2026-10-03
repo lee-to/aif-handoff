@@ -32,6 +32,14 @@ function createGitRoot(prefix: string): string {
   return createGitTestRoot(prefix, { readme: "# auto queue\n" }).rootPath;
 }
 
+vi.mock("@aif/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aif/shared")>();
+  return {
+    ...actual,
+    getEnv: () => Object.assign(actual.getEnv(), { AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: true }),
+  };
+});
+
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
   return {
@@ -109,6 +117,7 @@ vi.mock("../autoReviewHandler.js", async (importOriginal) => {
 });
 
 const {
+  COORDINATOR_ID,
   pollAndProcess,
   getCoordinatorRuntimeCounters,
   resetCoordinatorRuntimeCountersForTests,
@@ -855,6 +864,7 @@ describe("coordinator", () => {
         projectId: "test-project",
         title: "Stale implementer",
         status: "implementing",
+        stageStartedAt: staleDate,
         updatedAt: staleDate,
       })
       .run();
@@ -903,6 +913,7 @@ describe("coordinator", () => {
         title: "Stale over limit",
         status: "implementing",
         retryCount: 3,
+        stageStartedAt: staleDate,
         updatedAt: staleDate,
       })
       .run();
@@ -2813,4 +2824,60 @@ describe("coordinator", () => {
       await pollPromise;
     }
   });
+
+  it.each(["late_success", "late_error"])(
+    "ignores %s from a superseded attempt without releasing the new claim",
+    async (completion) => {
+      const { claimCoordinatorTaskIfEligible, releaseTaskClaim, setTaskFields } =
+        await import("@aif/data");
+      const db = testDb.current;
+      db.insert(tasks)
+        .values({
+          id: "overlap-task",
+          projectId: "test-project",
+          title: "Overlap",
+          status: "planning",
+          autoMode: false,
+        })
+        .run();
+      let finishOld!: () => void;
+      let started!: () => void;
+      const oldStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const oldResult = new Promise<void>((resolve) => {
+        finishOld = resolve;
+      });
+      vi.mocked(runPlanner).mockImplementationOnce(async () => {
+        started();
+        await oldResult;
+        if (completion === "late_error") throw new Error("old attempt failed");
+        setTaskFields("overlap-task", {
+          plan: "obsolete plan",
+          implementationLog: "obsolete artifact",
+        });
+      });
+      const processing = pollAndProcess();
+      await oldStarted;
+      releaseTaskClaim("overlap-task");
+      const newer = claimCoordinatorTaskIfEligible({
+        taskId: "overlap-task",
+        expectedProjectId: "test-project",
+        expectedStatus: "planning",
+        coordinatorId: COORDINATOR_ID,
+        lockDurationMs: 60_000,
+      });
+      expect(newer).toBeDefined();
+      setTaskFields("overlap-task", { plan: "new plan", implementationLog: "new artifact" });
+      finishOld();
+      await processing;
+      expect(db.select().from(tasks).where(eq(tasks.id, "overlap-task")).get()).toMatchObject({
+        status: "planning",
+        plan: "new plan",
+        implementationLog: "new artifact",
+        lockedBy: COORDINATOR_ID,
+      });
+      expect(runImplementer).not.toHaveBeenCalled();
+    },
+  );
 });

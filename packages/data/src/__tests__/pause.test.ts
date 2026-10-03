@@ -221,6 +221,7 @@ describe("pause functionality", () => {
           projectId: "test-project",
           title: "Paused planning",
           status: "planning",
+          stageStartedAt: new Date().toISOString(),
           paused: true,
         })
         .run();
@@ -237,6 +238,7 @@ describe("pause functionality", () => {
           projectId: "test-project",
           title: "Active implementing",
           status: "implementing",
+          stageStartedAt: new Date().toISOString(),
           paused: false,
         })
         .run();

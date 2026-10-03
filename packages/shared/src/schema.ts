@@ -170,6 +170,8 @@ export const tasks = sqliteTable("tasks", {
   activeRuntimeSelectionJson: text("active_runtime_selection_json"),
   runtimeLimitSnapshotJson: text("runtime_limit_snapshot_json"),
   runtimeLimitUpdatedAt: text("runtime_limit_updated_at"),
+  stageAttemptId: text("stage_attempt_id"),
+  stageStartedAt: text("stage_started_at"),
   lockedBy: text("locked_by"),
   lockedUntil: text("locked_until"),
   scheduledAt: text("scheduled_at"),

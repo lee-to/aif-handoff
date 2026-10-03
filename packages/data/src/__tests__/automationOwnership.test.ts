@@ -73,17 +73,17 @@ describe("AI automation ownership boundary", () => {
     const humanOnly = createOwnedTask("human-project", "Human only", "human");
     testDb.current
       .update(tasks)
-      .set({ status: "planning" })
+      .set({ status: "planning", stageStartedAt: new Date().toISOString() })
       .where(eq(tasks.id, ai.id))
       .run();
     testDb.current
       .update(tasks)
-      .set({ status: "planning" })
+      .set({ status: "planning", stageStartedAt: new Date().toISOString() })
       .where(eq(tasks.id, human.id))
       .run();
     testDb.current
       .update(tasks)
-      .set({ status: "planning" })
+      .set({ status: "planning", stageStartedAt: new Date().toISOString() })
       .where(eq(tasks.id, humanOnly.id))
       .run();
 

@@ -10,6 +10,10 @@ import {
   handoffTaskExecution,
   hasActiveLockedTaskForProject,
   claimCoordinatorTaskIfEligible,
+  isTaskAttemptRecoveryEnabled,
+  withTaskAttempt,
+  assertTaskAttemptCurrent,
+  isTaskAttemptCurrent,
   releaseTaskClaim,
   releaseStaleTaskClaims,
   updateTaskStatus as updateTaskStatusRow,
@@ -70,6 +74,7 @@ import {
 
 const log = logger("coordinator");
 const env = getEnv();
+const ATTEMPT_RECOVERY_ENABLED = isTaskAttemptRecoveryEnabled();
 const AUTO_QUEUE_COMMIT_GATE_ENABLED = env.AIF_AGENT_AUTO_QUEUE_COMMIT_GATE_ENABLED;
 const STAGE_RUN_TIMEOUT_MS = Math.max(env.AGENT_STAGE_RUN_TIMEOUT_MS, 60_000);
 const CLAIM_LOCK_DURATION_MS = STAGE_RUN_TIMEOUT_MS + 5 * 60 * 1000; // stage timeout + 5 min buffer
@@ -308,7 +313,9 @@ async function ensureCommitBeforeTerminalStatus(task: TaskRow, projectRoot: stri
     return;
   }
   try {
+    assertTaskAttemptCurrent(task.id);
     await ensureAutoQueueTaskCommit({ taskId: task.id, projectRoot });
+    assertTaskAttemptCurrent(task.id);
   } finally {
     flushActivityQueue(task.id);
   }
@@ -583,7 +590,12 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
   if (sourceStatus !== stage.inProgress) {
     clearTaskActiveRuntimeSelection(task.id);
   }
-  updateTaskStatus(task.id, stage.inProgress, {}, { title: taskTitle, fromStatus: sourceStatus });
+  updateTaskStatus(
+    task.id,
+    stage.inProgress,
+    ATTEMPT_RECOVERY_ENABLED ? { stageStartedAt: task.stageStartedAt } : {},
+    { title: taskTitle, fromStatus: sourceStatus },
+  );
 
   log.debug(
     { taskId: task.id, from: sourceStatus, to: stage.inProgress },
@@ -605,11 +617,14 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
       return false;
     }
     await runStageWithTimeout(stage.runner, task.id, executionRoot, stage.label);
+    assertTaskAttemptCurrent(task.id);
 
     flushActivityQueue(task.id);
 
     if (stage.label === "implementer") {
+      assertTaskAttemptCurrent(task.id);
       await publishGitHubTask(task.id, project.rootPath);
+      assertTaskAttemptCurrent(task.id);
       flushActivityQueue(task.id);
     }
 
@@ -638,7 +653,9 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
         taskId: task.id,
         projectRoot: task.worktreePath ?? project.rootPath,
       });
+      assertTaskAttemptCurrent(task.id);
       await publishGitHubTask(task.id, project.rootPath);
+      assertTaskAttemptCurrent(task.id);
       flushActivityQueue(task.id);
 
       if (outcome?.status === "manual_review_required") {
@@ -769,6 +786,13 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
     );
     return true;
   } catch (err) {
+    if (!isTaskAttemptCurrent(task.id)) {
+      log.info(
+        { taskId: task.id, stage: stage.label },
+        "Ignored completion from a superseded task attempt",
+      );
+      return false;
+    }
     const recovery = classifyStageError({
       taskId: task.id,
       stageLabel: stage.label,
@@ -1251,7 +1275,11 @@ async function runPollCycle(
               const taskIdToRelease =
                 claimedTask?.id ?? (claimOutcomeUncertain ? task.id : undefined);
               if (taskIdToRelease) {
-                releaseTaskClaim(taskIdToRelease, COORDINATOR_ID);
+                releaseTaskClaim(
+                  taskIdToRelease,
+                  COORDINATOR_ID,
+                  ATTEMPT_RECOVERY_ENABLED ? (claimedTask?.stageAttemptId ?? undefined) : undefined,
+                );
               }
             } catch (err) {
               log.error(
@@ -1310,7 +1338,19 @@ async function runPollCycle(
               "[FIX:149] Task revalidated and claimed for processing",
             );
 
-            const taskPromise = processOneTask(executionTask, stage)
+            const execute = () => processOneTask(executionTask, stage);
+            const execution = ATTEMPT_RECOVERY_ENABLED
+              ? withTaskAttempt(
+                  {
+                    taskId: executionTask.id,
+                    attemptId: executionTask.stageAttemptId!,
+                    coordinatorId: COORDINATOR_ID,
+                    ownershipRevision: executionTask.ownershipRevision,
+                  },
+                  execute,
+                )
+              : execute();
+            const taskPromise = execution
               .then((success) => {
                 if (!success) failedInCycle.add(executionTask.id);
               })

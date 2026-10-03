@@ -274,6 +274,7 @@ const envSchema = z.object({
     }, z.boolean())
     .default(false),
   AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: booleanEnvSchema.default(false),
+  AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: booleanEnvSchema.default(false),
   AIF_GITHUB_PROJECT_CLONE_ENABLED: booleanEnvSchema.default(false),
   AIF_GITHUB_ISSUE_PR_ENABLED: booleanEnvSchema.default(false),
   AIF_RUNTIME_SESSION_FORK_ENABLED: z

@@ -127,13 +127,13 @@ Planning ──[runPlanImprove]──► Improve ──► Plan Ready
 Implementing ──[runPostVerify]──► Verify ──► Review
 ```
 
-| Stage Transition                                                                                 | Agent                                                                     | Description                                                                                                                                              |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Backlog → Planning → Plan Ready                                                                  | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                                                            |
-| Planning → Improve → Plan Ready                                                                  | `/aif-improve`                                                            | Optional skills-mode plan refinement. Enabled per task with `runPlanImprove`; ignored when `useSubagents=true`                                           |
-| Plan Ready → Implementing → Review                                                               | `implement-coordinator`                                                   | Parallel execution with worktrees + quality sidecars                                                                                                     |
-| Implementing → Verify → Review / Done                                                            | `/aif-verify`                                                             | Optional skills-mode implementation verification against the plan before review. Enabled per task with `runPostVerify`; ignored when `useSubagents=true` |
-| Review → Done / Review → request_changes → Implementing / Review → Done + manual review required | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, structured blocking findings drive automatic rework until success or explicit manual handoff   |
+| Stage Transition                                                                                          | Agent                                                                     | Description                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backlog → Planning → Plan Ready                                                                           | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                                                            |
+| Planning → Improve → Plan Ready                                                                           | `/aif-improve`                                                            | Optional skills-mode plan refinement. Enabled per task with `runPlanImprove`; ignored when `useSubagents=true`                                           |
+| Plan Ready → Implementing → Review                                                                        | `implement-coordinator`                                                   | Parallel execution with worktrees + quality sidecars                                                                                                     |
+| Implementing → Verify → Review / Done                                                                     | `/aif-verify`                                                             | Optional skills-mode implementation verification against the plan before review. Enabled per task with `runPostVerify`; ignored when `useSubagents=true` |
+| Review → Done / Review → request_changes → Implementing / Review → human handoff + manual review required | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, structured blocking findings drive automatic rework until success or explicit manual handoff   |
 
 ### GitHub Issue-to-PR Workflow
 
@@ -174,13 +174,15 @@ paused without creating a second task or PR.
 
 The pipeline includes four reliability layers for long-running autonomous execution:
 
-- **First-activity watchdog (SDK only):** After agent start, if no tool call or subagent spawn arrives within `AGENT_FIRST_ACTIVITY_TIMEOUT_MS` (default 60s), the agent is killed and restarted (up to 2 retries). Detects hung agents within seconds instead of waiting for the stale timeout. Disabled for CLI/API transports which do not stream tool events.
+- **First-activity watchdog (SDK/CLI):** After agent start, if no streamed runtime event, tool call, or subagent spawn arrives within `AGENT_FIRST_ACTIVITY_TIMEOUT_MS` (default 60s; CLI uses a 2× startup buffer), the agent is killed and restarted (up to 2 retries). Disabled for non-streaming API transports. With attempt recovery enabled, a superseded execution is discarded instead of restarted.
 - **Heartbeat liveness:** Task rows are updated with `lastHeartbeatAt` during agent activity and stage transitions.
 - **Stale-stage watchdog:** On each poll cycle, tasks stuck in `planning` / `improve` / `implementing` / `review` / `verify` beyond timeout are auto-recovered to `blocked_external` with retry backoff.
 - **Runtime-limit auto-pause:** Exact/heuristic persisted runtime-limit snapshots can proactively move new work to `blocked_external` before a provider hard-fails, and structured `resetAt` / `retryAfterSeconds` replace random quota backoff when available.
-- **Transition reset:** valid transitions clear watchdog state (`blocked*`, `retryAfter`, `retryCount`) and refresh heartbeat baseline.
+- **Transition reset:** successful stage completion and explicit human retry clear watchdog state (`blocked*`, `retryAfter`, `retryCount`); transitions refresh the heartbeat baseline. Automatic backoff release preserves `retryCount` only when the attempt-recovery rollout is enabled.
 
-For stale `implementing`, recovery resumes from `plan_ready` to force a clean implementation pass instead of continuing a potentially inconsistent in-flight run.
+Stale recovery resumes the same stage. `AIF_AGENT_ATTEMPT_RECOVERY_ENABLED` defaults to `false` and is read once at initialization: the off path retains legacy lock-only claims, age-based stale detection, unscoped execution, and retry-debt reset on backoff release. When enabled, automatic backoff release preserves retry debt; successful stage completion or an explicit human retry clears it. The watchdog then requires `stageStartedAt`, set on an actual coordinator claim and cleared on stage exit, so unstarted tasks waiting for capacity are excluded.
+
+With the rollout enabled, every claim rotates `stageAttemptId`. The data layer scopes stage writes to that attempt and ownership revision in an immediate SQLite write transaction, reserving the writer before validation or canonical plan-file mutation. A superseded runtime result cannot update task artifacts, sessions, review outcomes, or a newer claim. Heartbeats and buffered activity retain their originating attempt, and stale controller cleanup cannot remove a newer controller. This fencing covers application persistence; runtime tool side effects require the operation’s own repeat/reconciliation contract. GitHub publication, for example, looks up the branch’s existing PR before retrying creation after a lost response.
 
 ### Layer-Driven Implementation Dispatch
 
@@ -212,13 +214,13 @@ Defined in `packages/shared/src/stateMachine.ts`. Human actions available per st
 | `done`             | `approve_done`, `request_changes`                        |
 | `verified`         | _(terminal state)_                                       |
 
-Tasks have an `autoMode` flag. When `true`, the agent automatically transitions through all stages. This includes an automatic post-review gate: reviewer output is stored in a structured format, parsed deterministically, and converted into blocking findings for the next cycle. When blockers remain, the coordinator applies a `request_changes`-style transition (`done -> implementing`) with an agent comment containing required fixes. When `false`, the user must manually trigger `start_implementation` from `plan_ready`.
+Tasks have an `autoMode` flag. When `true`, the agent automatically transitions through all stages. This includes an automatic post-review gate: reviewer output is stored in a structured format, parsed deterministically, and converted into blocking findings for the next cycle. When blockers remain, the coordinator applies a `request_changes`-style transition (`review -> implementing`) with an agent comment containing required fixes. When `false`, the user must manually trigger `start_implementation` from `plan_ready`.
 
 Auto-review strategy is controlled globally by `AGENT_AUTO_REVIEW_STRATEGY`:
 
 - `full_re_review` (default): every review cycle can trigger another automatic rework if current blocking findings exist.
 - `closure_first`: rework cycles verify previously-blocking findings first; only `still_blocking` previous findings can trigger another automatic loop.
-- If `closure_first` resolves previous blockers but the reviewer finds new blockers, or if max review iterations are reached, the task moves to `done` with `manualReviewRequired=true` and preserved `autoReviewState` for explicit human triage.
+- If `closure_first` resolves previous blockers but the reviewer finds new blockers, or if max review iterations are reached, the task stays in `review`, transfers execution to a human, and retains `manualReviewRequired=true` and `autoReviewState` for explicit triage.
 
 Tasks also have a `skipReview` flag (default `false`). When `true`, the coordinator bypasses the review stage entirely — after successful implementation the task moves directly to `done`, skipping the `review-sidecar` and `security-sidecar` runs. This is useful for small changes or tasks where code review is unnecessary.
 

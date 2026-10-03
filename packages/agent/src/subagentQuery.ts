@@ -12,6 +12,11 @@ import {
   resolveEffectiveRuntimeProfile,
   saveTaskActiveRuntimeSelection,
   saveTaskSessionId,
+  assertTaskAttemptCurrent,
+  getTaskAttempt,
+  withTaskAttempt,
+  isTaskAttemptCurrent,
+  SupersededTaskAttemptError,
   updateTaskHeartbeat,
 } from "@aif/data";
 import {
@@ -853,6 +858,7 @@ export async function executeSubagentQuery(
 
   try {
     const context = await resolveExecutionContext(options);
+    assertTaskAttemptCurrent(taskId);
     runtimeIdForError = context.runtimeId;
     providerIdForError = context.providerId;
     runtimeProfileIdForError = context.profileId;
@@ -1101,6 +1107,7 @@ export async function executeSubagentQuery(
 
       try {
         assertAiExecutionOwner(taskId);
+        assertTaskAttemptCurrent(taskId);
         if (warmupSourceSessionId && adapter.forkSession) {
           result = await adapter.forkSession({
             ...runInput,
@@ -1113,12 +1120,15 @@ export async function executeSubagentQuery(
               ? await adapter.resume({ ...runInput, sessionId: existingSessionId as string })
               : await adapter.run(runInput);
         }
+        assertTaskAttemptCurrent(taskId);
         // Success — break out of retry loop
         watchdog.clear();
         break;
       } catch (err) {
         const stalledByWatchdog = watchdog.didFire;
         watchdog.clear();
+        assertTaskAttemptCurrent(taskId);
+        if (err instanceof SupersededTaskAttemptError) throw err;
         if (stalledByWatchdog && attempt < FIRST_ACTIVITY_MAX_RETRIES) {
           // Agent stalled — kill and retry
           log.info(
@@ -1226,6 +1236,7 @@ export async function executeSubagentQuery(
 
     return { resultText };
   } catch (error) {
+    if (!isTaskAttemptCurrent(taskId)) throw new SupersededTaskAttemptError(taskId);
     if (runtimeUsageLimitsEnabled) {
       refreshRuntimeProfileLimitState({
         runtimeProfileId: runtimeProfileIdForError,
@@ -1306,10 +1317,25 @@ export function setCoordinatorId(id: string): void {
 
 /** Start a periodic heartbeat that updates the task's lastHeartbeatAt and renews the lock. */
 export function startHeartbeat(taskId: string): NodeJS.Timeout {
-  return setInterval(() => {
-    updateTaskHeartbeat(taskId);
-    if (_coordinatorId) {
-      renewTaskClaim(taskId, _coordinatorId, getLockRenewalMs());
+  const attempt = getTaskAttempt();
+  const beat = () => {
+    if (!isTaskAttemptCurrent(taskId)) {
+      clearInterval(timer);
+      return;
     }
+    try {
+      updateTaskHeartbeat(taskId);
+      if (_coordinatorId) {
+        renewTaskClaim(taskId, _coordinatorId, getLockRenewalMs());
+      }
+    } catch (error) {
+      if (error instanceof SupersededTaskAttemptError) clearInterval(timer);
+      else throw error;
+    }
+  };
+  const timer = setInterval(() => {
+    if (attempt) withTaskAttempt(attempt, beat);
+    else beat();
   }, HEARTBEAT_INTERVAL_MS);
+  return timer;
 }

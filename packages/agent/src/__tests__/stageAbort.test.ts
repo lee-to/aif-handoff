@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 
+const attemptContext = { current: undefined as { attemptId: string } | undefined };
 const mockReleaseTaskClaim = vi.fn();
 vi.mock("@aif/data", () => ({
+  getTaskAttempt: () => attemptContext.current,
   releaseTaskClaim: (...args: unknown[]) => mockReleaseTaskClaim(...args),
 }));
 
@@ -77,8 +79,25 @@ describe("stageAbort", () => {
     expect(getActiveStageAbortController("task-1")).toBeNull();
     expect(getActiveStageAbortController("task-2")).toBeNull();
     // Locks released for each active task
-    expect(mockReleaseTaskClaim).toHaveBeenCalledWith("task-1");
-    expect(mockReleaseTaskClaim).toHaveBeenCalledWith("task-2");
+    expect(mockReleaseTaskClaim).toHaveBeenCalledWith("task-1", undefined, undefined);
+    expect(mockReleaseTaskClaim).toHaveBeenCalledWith("task-2", undefined, undefined);
     expect(mockReleaseTaskClaim).toHaveBeenCalledTimes(2);
+  });
+  it("does not let an old attempt clear or abort a newer controller", () => {
+    const old = new AbortController();
+    const current = new AbortController();
+    attemptContext.current = { attemptId: "old" };
+    setActiveStageAbortController("task", old);
+    attemptContext.current = { attemptId: "new" };
+    setActiveStageAbortController("task", current);
+    expect(old.signal.aborted).toBe(true);
+    attemptContext.current = { attemptId: "old" };
+    expect(getActiveStageAbortController("task")).toBeNull();
+    setActiveStageAbortController("task", null);
+    attemptContext.current = { attemptId: "new" };
+    expect(getActiveStageAbortController("task")).toBe(current);
+    expect(current.signal.aborted).toBe(false);
+    setActiveStageAbortController("task", null);
+    attemptContext.current = undefined;
   });
 });

@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { chatSessions } from "../schema.js";
 import { closeDb, createTestDb, getDb } from "../db.js";
 
-const CURRENT_SCHEMA_VERSION = 29;
+const CURRENT_SCHEMA_VERSION = 30;
 
 function removeSqliteArtifacts(dbPath: string): void {
   for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
@@ -23,6 +23,39 @@ describe("db", () => {
   it("createTestDb returns a working database with indexes", () => {
     const db = createTestDb();
     expect(db).toBeDefined();
+  });
+
+  it("appends attempt tracking to a v29 database without treating old queued rows as started", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-attempt-upgrade-${Date.now()}-${Math.random()}.sqlite`);
+    try {
+      getDb(dbPath);
+      closeDb();
+      const legacy = new Database(dbPath);
+      legacy.exec("ALTER TABLE tasks DROP COLUMN stage_attempt_id");
+      legacy.exec("ALTER TABLE tasks DROP COLUMN stage_started_at");
+      legacy.pragma("user_version = 29");
+      legacy
+        .prepare("INSERT INTO projects (id, name, root_path) VALUES (?, ?, ?)")
+        .run("project", "Upgrade", "/tmp/upgrade");
+      legacy
+        .prepare("INSERT INTO tasks (id, project_id, title, status) VALUES (?, ?, ?, ?)")
+        .run("task", "project", "Waiting", "review");
+      legacy.close();
+      getDb(dbPath);
+      closeDb();
+      const upgraded = new Database(dbPath, { readonly: true });
+      expect(upgraded.pragma("user_version", { simple: true })).toBe(30);
+      expect(
+        upgraded
+          .prepare("SELECT stage_attempt_id, stage_started_at, status FROM tasks WHERE id = ?")
+          .get("task"),
+      ).toEqual({ stage_attempt_id: null, stage_started_at: null, status: "review" });
+      upgraded.close();
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
   });
 
   it("creates persisted QA Check task columns", () => {

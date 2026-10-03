@@ -249,25 +249,28 @@ Database access is centralized in `packages/data`. `api` and `agent` must use `@
 
 The coordinator polls every 30 seconds and delegates to `.claude/agents/` definitions:
 
-| Stage                                                                                            | Agent                                                                     | What it does                                                                                                                                 |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Backlog → Planning → Plan Ready                                                                  | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                                                |
-| Planning → Improve → Plan Ready                                                                  | `/aif-improve`                                                            | Optional for skills-mode tasks (`useSubagents=false`) when `runPlanImprove=true`                                                             |
-| Plan Ready → Implementing → Review                                                               | `implement-coordinator`                                                   | Parallel task execution with worktrees + quality sidecars                                                                                    |
-| Implementing → Verify → Review / Done                                                            | `/aif-verify`                                                             | Optional for skills-mode tasks (`useSubagents=false`) when `runPostVerify=true`; moves to Done when `skipReview=true`                        |
-| Review → Done / Review → request_changes → Implementing / Review → Done + manual review required | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, structured blocking findings drive rework until success or explicit manual handoff |
+| Stage                                                                                                     | Agent                                                                     | What it does                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backlog → Planning → Plan Ready                                                                           | `plan-coordinator`                                                        | Iterative plan refinement via `plan-polisher`                                                                                                |
+| Planning → Improve → Plan Ready                                                                           | `/aif-improve`                                                            | Optional for skills-mode tasks (`useSubagents=false`) when `runPlanImprove=true`                                                             |
+| Plan Ready → Implementing → Review                                                                        | `implement-coordinator`                                                   | Parallel task execution with worktrees + quality sidecars                                                                                    |
+| Implementing → Verify → Review / Done                                                                     | `/aif-verify`                                                             | Optional for skills-mode tasks (`useSubagents=false`) when `runPostVerify=true`; moves to Done when `skipReview=true`                        |
+| Review → Done / Review → request_changes → Implementing / Review → human handoff + manual review required | `review-sidecar` + `security-sidecar` (+ auto review gate in coordinator) | Code review and security audit in parallel; in auto mode, structured blocking findings drive rework until success or explicit manual handoff |
 
 ### Auto-Review Convergence
 
 - `AGENT_AUTO_REVIEW_STRATEGY=full_re_review` keeps the broad re-review loop and is the default.
 - `AGENT_AUTO_REVIEW_STRATEGY=closure_first` only auto-reworks unresolved previous blockers; if new blockers appear after previous ones are resolved, the coordinator stops and asks for human review.
-- Hitting the review-iteration limit also stops automation at `done` with `manualReviewRequired=true`.
+- Hitting the review-iteration limit also stops automation in `review`, transfers execution to a human, and sets `manualReviewRequired=true`.
 
 ### Fault Tolerance
 
 - Task liveness is tracked with `lastHeartbeatAt`.
-- If a stage (`planning`, `implementing`, `review`) stops heartbeating longer than timeout, coordinator moves task to `blocked_external` with retry backoff.
-- After max stale retries, task is quarantined for manual intervention.
+- Enable `AIF_AGENT_ATTEMPT_RECOVERY_ENABLED` to opt into the recovery safeguards below. Its default `false` retains legacy lock-only claims, age-based stale detection, and retry-debt reset on backoff release.
+- With the rollout enabled, only stages with a recorded execution start are eligible for stale recovery; waiting for capacity does not count as a hung execution.
+- If a started stage (`planning`, `improve`, `implementing`, `review`, `verify`) stops heartbeating longer than timeout, coordinator moves task to `blocked_external` with retry backoff.
+- With the rollout enabled, retry debt survives automatic backoff release; after max stale retries, the task is quarantined for manual intervention.
+- With the rollout enabled, each coordinator claim receives a durable attempt ID. Superseded attempts cannot persist results or release a newer claim.
 
 All agents are loaded via `settingSources: ["project"]` from `.claude/agents/*.md` — the same agent definitions used by [AI Factory](https://github.com/lee-to/ai-factory).
 

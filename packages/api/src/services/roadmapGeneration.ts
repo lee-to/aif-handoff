@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
-import { logger, getEnv, getProjectConfig, generatePlanPath, defaultsForMode } from "@aif/shared";
+import { logger, getProjectConfig, generatePlanPath } from "@aif/shared";
 import {
   createTask,
   findProjectById,
@@ -532,13 +532,14 @@ export function importGeneratedTasks(
     }
 
     const tags = buildTaskTags(alias, genTask);
-    // Roadmap import bypasses POST /tasks, so mode-driven defaults must be
-    // applied here too. parallelEnabled projects force "full" (same rule POST
-    // applies); otherwise fall back to "fast". skipReview is always forced
-    // true for roadmap imports so the batch pipeline doesn't pause on review.
+    // parallelEnabled projects force "full" (same rule POST /tasks applies);
+    // otherwise leave plannerMode, planDocs, planTests and useSubagents
+    // omitted so createTask resolves them from the project's task_defaults
+    // before falling back to the mode-driven and env defaults.
+    //
+    // skipReview stays forced for roadmap imports so the batch pipeline does
+    // not pause on review — that is an intentional override, not a default.
     const planPath = reserveUniquePlanPath(genTask.title);
-    const plannerMode = project.parallelEnabled ? "full" : "fast";
-    const modeDefaults = defaultsForMode(plannerMode);
     const created = createTask({
       projectId,
       title: genTask.title,
@@ -546,11 +547,8 @@ export function importGeneratedTasks(
       roadmapAlias: alias,
       tags,
       planPath,
-      plannerMode,
-      planDocs: modeDefaults.planDocs,
-      planTests: modeDefaults.planTests,
+      plannerMode: project.parallelEnabled ? "full" : undefined,
       skipReview: true,
-      useSubagents: getEnv().AGENT_USE_SUBAGENTS,
       position: importPositionStart + createdPositionIndex * 100,
     });
 

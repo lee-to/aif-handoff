@@ -227,4 +227,59 @@ describe("getProjectConfig", () => {
     const second = getProjectConfig(projectRoot);
     expect(second.paths.plan).toBe("v2/PLAN.md");
   });
+
+  it("task_defaults is an empty object when the section is absent", () => {
+    const config = getProjectConfig(projectRoot);
+    expect(config.task_defaults).toEqual({});
+  });
+
+  it("task_defaults parses valid overrides from config.yaml", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "task_defaults:\n  autoMode: false\n  plannerMode: full\n  skipReview: true\n  useSubagents: true\n  planTests: false\n  maxReviewIterations: 2\n",
+    );
+    expect(getProjectConfig(projectRoot).task_defaults).toEqual({
+      autoMode: false,
+      plannerMode: "full",
+      skipReview: true,
+      useSubagents: true,
+      planTests: false,
+      maxReviewIterations: 2,
+    });
+  });
+
+  it("task_defaults partial override leaves other flags undefined", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "task_defaults:\n  useSubagents: false\n",
+    );
+    const td = getProjectConfig(projectRoot).task_defaults;
+    expect(td.useSubagents).toBe(false);
+    expect(td.autoMode).toBeUndefined();
+    expect(td.plannerMode).toBeUndefined();
+    expect(td.skipReview).toBeUndefined();
+    expect(td.planTests).toBeUndefined();
+    expect(td.maxReviewIterations).toBeUndefined();
+  });
+
+  it("task_defaults normalizes garbage values to undefined", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "task_defaults:\n  autoMode: 'maybe'\n  plannerMode: 'turbo'\n  skipReview: 42\n  maxReviewIterations: -3\n  planTests: null\n",
+    );
+    const td = getProjectConfig(projectRoot).task_defaults;
+    expect(td.autoMode).toBeUndefined();
+    expect(td.plannerMode).toBeUndefined();
+    expect(td.skipReview).toBeUndefined();
+    expect(td.maxReviewIterations).toBeUndefined();
+    expect(td.planTests).toBeUndefined();
+  });
+
+  it("task_defaults floors maxReviewIterations to a positive integer", () => {
+    writeFileSync(
+      join(projectRoot, ".ai-factory", "config.yaml"),
+      "task_defaults:\n  maxReviewIterations: 2.9\n",
+    );
+    expect(getProjectConfig(projectRoot).task_defaults.maxReviewIterations).toBe(2);
+  });
 });

@@ -69,6 +69,11 @@ describe("Timeout coverage guard", () => {
       const appServerRun = readAdapterSource("codex/appServer/run.ts");
       expect(hasAnyPattern(appServerRun, PROCESS_TIMEOUT_PATTERNS)).toBe(true);
     });
+
+    it("Antigravity CLI (antigravity/cli.ts)", () => {
+      const agyCli = readAdapterSource("antigravity/cli.ts");
+      expect(hasAnyPattern(agyCli, PROCESS_TIMEOUT_PATTERNS)).toBe(true);
+    });
   });
 
   describe("HTTP transports must support runTimeoutMs", () => {
@@ -103,6 +108,7 @@ describe("Timeout coverage guard", () => {
       "Codex app-server": ["codex/appServer/run.ts"],
       "Codex API": ["codex/api.ts"],
       "OpenRouter API": ["openrouter/api.ts"],
+      "Antigravity CLI": ["antigravity/cli.ts"],
     })) {
       it(`${name} imports shared timeout utilities`, () => {
         const sources = files.map((f) => readAdapterSource(f));

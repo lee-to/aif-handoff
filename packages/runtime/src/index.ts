@@ -249,3 +249,15 @@ export type {
   CreateOpenRouterRuntimeAdapterOptions,
   OpenRouterAdapterLogger,
 } from "./adapters/openrouter/index.js";
+
+export {
+  createAntigravityRuntimeAdapter,
+  type AntigravityRuntimeAdapterLogger,
+  type CreateAntigravityRuntimeAdapterOptions,
+} from "./adapters/antigravity/index.js";
+
+export {
+  ANTIGRAVITY_MODELS,
+  DEFAULT_ANTIGRAVITY_MODEL,
+  LIGHT_ANTIGRAVITY_MODEL,
+} from "./adapters/antigravity/models.js";

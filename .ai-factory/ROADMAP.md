@@ -15,6 +15,7 @@
 - [x] **Bidirectional Handoff ↔ AIF Sync** — implement two-way synchronization between Handoff and AI Factory via MCP server, keeping tasks, plans, and status in sync across both systems. Plans should include task ID annotations for traceability.
 - [x] **OpenRouter Runtime Adapter** — add built-in OpenRouter adapter with API transport, streaming, model discovery, and full test coverage.
 - [x] **GitHub-backed Project Creation** — create projects from GitHub repositories through an off-by-default managed clone workflow.
+- [ ] **Google Antigravity Runtime Adapter** — add pluggable Google Antigravity adapter with CLI transport, model discovery, streaming, project init support, and feature flag rollout.
 
 ## Completed
 

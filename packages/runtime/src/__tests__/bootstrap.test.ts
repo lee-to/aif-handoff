@@ -8,7 +8,26 @@ const VALID_USAGE_REPORTING = new Set<string>(Object.values(UsageReporting));
 describe("bootstrapRuntimeRegistry", () => {
   beforeEach(() => {
     delete process.env.AIF_RUNTIME_SESSION_FORK_ENABLED;
+    delete process.env.AIF_RUNTIME_ANTIGRAVITY_ENABLED;
     resetEnvCache();
+  });
+
+  it("includes antigravity adapter and enables project init when AIF_RUNTIME_ANTIGRAVITY_ENABLED is true", async () => {
+    process.env.AIF_RUNTIME_ANTIGRAVITY_ENABLED = "true";
+    resetEnvCache();
+    const registry = await bootstrapRuntimeRegistry();
+    const antigravity = registry.listRuntimes().find((r) => r.id === "antigravity");
+    expect(antigravity).toBeDefined();
+    expect(antigravity?.providerId).toBe("google");
+    expect(antigravity?.supportsProjectInit).toBe(true);
+    expect(antigravity?.projectInitAgentName).toBe("antigravity");
+  });
+
+  it("omits antigravity adapter when AIF_RUNTIME_ANTIGRAVITY_ENABLED is false or unset", async () => {
+    delete process.env.AIF_RUNTIME_ANTIGRAVITY_ENABLED;
+    resetEnvCache();
+    const registry = await bootstrapRuntimeRegistry();
+    expect(registry.listRuntimes().find((r) => r.id === "antigravity")).toBeUndefined();
   });
 
   it("creates registry with built-in claude, codex, opencode, and openrouter adapters", async () => {

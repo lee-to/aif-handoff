@@ -330,7 +330,9 @@ projectsRouter.get("/:id/defaults", (c) => {
   }
 
   const cfg = getProjectConfig(project.rootPath);
-  return c.json({ paths: cfg.paths, workflow: cfg.workflow });
+  // taskDefaults lets the create-task form seed the same values createTask
+  // would resolve, so the form shows what the project will actually apply.
+  return c.json({ paths: cfg.paths, workflow: cfg.workflow, taskDefaults: cfg.task_defaults });
 });
 
 // GET /projects/:id/roadmap/status — check if ROADMAP.md exists for the project

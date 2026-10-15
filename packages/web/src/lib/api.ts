@@ -88,6 +88,17 @@ export interface AifConfig {
   rules?: {
     base?: string;
   };
+  task_defaults?: ProjectTaskDefaults;
+}
+
+/** Mirrors `AifProjectTaskDefaults` in @aif/shared — every flag is optional. */
+export interface ProjectTaskDefaults {
+  autoMode?: boolean;
+  plannerMode?: "fast" | "full";
+  skipReview?: boolean;
+  useSubagents?: boolean;
+  planTests?: boolean;
+  maxReviewIterations?: number;
 }
 
 export interface AppRuntimeDefaultsResponse {
@@ -563,6 +574,7 @@ export const api = {
   getProjectDefaults(id: string): Promise<{
     paths: NonNullable<AifConfig["paths"]>;
     workflow: NonNullable<AifConfig["workflow"]>;
+    taskDefaults?: ProjectTaskDefaults;
   }> {
     return request(`/projects/${id}/defaults`);
   },

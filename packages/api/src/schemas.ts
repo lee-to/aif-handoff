@@ -154,26 +154,21 @@ export const createTaskSchema = z.object({
   description: z.string().default(""),
   attachments: z.array(taskAttachmentSchema).max(100).default([]),
   priority: z.number().int().min(0).max(5).default(0),
-  autoMode: z.boolean().default(true),
+  autoMode: z.boolean().optional(),
   executionOwner: z.enum(["ai", "human"]).default("ai"),
   assigneeIds: z.array(z.string().min(1)).max(100).default([]),
   isFix: z.boolean().default(false),
-  plannerMode: z.enum(["fast", "full"]).default("fast"),
+  plannerMode: z.enum(["fast", "full"]).optional(),
   planPath: z.string().max(500).optional(),
   planDocs: z.boolean().optional(),
   planTests: z.boolean().optional(),
   skipReview: z.boolean().optional(),
-  useSubagents: z.boolean().default(getEnv().AGENT_USE_SUBAGENTS),
+  useSubagents: z.boolean().optional(),
   runPlanImprove: z.boolean().default(false),
   runPostVerify: z.boolean().default(false),
   autoQa: z.boolean().optional(),
   autoQaCheck: z.boolean().optional(),
-  maxReviewIterations: z
-    .number()
-    .int()
-    .min(1)
-    .max(50)
-    .default(getEnv().AGENT_MAX_REVIEW_ITERATIONS),
+  maxReviewIterations: z.number().int().min(1).max(50).optional(),
   paused: z.boolean().default(false),
   runtimeProfileId: z.string().min(1).nullable().optional(),
   modelOverride: z.string().max(200).nullable().optional(),

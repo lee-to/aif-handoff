@@ -274,6 +274,8 @@ but operators must still avoid simultaneous edits to the same project root/workt
 
 ### Skills-mode Flag Interactions
 
+These flags resolve at task creation as: **explicit task argument → project `task_defaults` (`.ai-factory/config.yaml`) → global default** (mode-driven for `skipReview`/`planTests`/`planDocs`, env-backed for `useSubagents`/`maxReviewIterations`). `createTask` is the single resolution point, so REST, the web form, MCP and roadmap import all reach it with omitted flags still `undefined`. A project can therefore set a base for all tasks (e.g. `useSubagents: false` on SwiftPM to avoid a parallel `swift build` deadlock) and still override individual flags per task. See [Configuration → `task_defaults`](configuration.md#project-config-configyaml). The table below shows the effective pipeline once the flags are resolved.
+
 Flag interaction table:
 
 | `useSubagents` | `skipReview` | `runPlanImprove` | `runPostVerify` | Effective pipeline after planning starts                                |

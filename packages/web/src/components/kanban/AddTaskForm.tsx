@@ -87,13 +87,22 @@ export function AddTaskForm({ projectId }: Props) {
     ? runtimes.find((runtime) => runtime.id === selectedRuntimeProfile.runtimeId)
     : null;
 
-  // Derive defaults from server data (no setState in effects)
-  const useSubagentsDefault = settings?.useSubagents ?? false;
-  const maxReviewIterationsDefault = settings?.maxReviewIterations ?? 3;
+  // Derive defaults from server data (no setState in effects).
+  // The project's `.ai-factory/config.yaml` task_defaults outrank the app-wide
+  // settings, mirroring how createTask resolves them, so the form shows the
+  // values the project will actually apply.
+  const taskDefaults = defaults?.taskDefaults;
+  const autoModeDefault = taskDefaults?.autoMode ?? true;
+  const plannerModeDefault = taskDefaults?.plannerMode ?? "fast";
+  const useSubagentsDefault = taskDefaults?.useSubagents ?? settings?.useSubagents ?? false;
+  const maxReviewIterationsDefault =
+    taskDefaults?.maxReviewIterations ?? settings?.maxReviewIterations ?? 3;
   const defaultPlanPath = defaults?.paths?.plan ?? DEFAULT_PLAN_PATH;
   const plansDir = defaults?.paths?.plans ?? ".ai-factory/plans/";
 
   const syncServerDefaultsIntoForm = useCallback(() => {
+    setAutoMode(autoModeDefault);
+    setPlannerMode(plannerModeDefault);
     setUseSubagents(useSubagentsDefault);
     setRunPlanImprove(false);
     setRunPostVerify(false);
@@ -104,29 +113,38 @@ export function AddTaskForm({ projectId }: Props) {
     setRuntimeProfileId("");
     setModelOverride("");
     setPriority(0);
-    // Apply mode-driven flag defaults; isParallel forces full mode defaults.
-    const seededMode = isParallel ? "full" : plannerMode;
+    // Apply mode-driven flag defaults; isParallel forces full mode defaults,
+    // and the project's task_defaults outrank the mode-driven ones.
+    const seededMode = isParallel ? "full" : plannerModeDefault;
     const flags = defaultsForMode(seededMode);
-    setSkipReview(flags.skipReview);
+    setSkipReview(taskDefaults?.skipReview ?? flags.skipReview);
     setPlanDocs(flags.planDocs);
-    setPlanTests(flags.planTests);
-  }, [defaultPlanPath, isParallel, maxReviewIterationsDefault, plannerMode, useSubagentsDefault]);
+    setPlanTests(taskDefaults?.planTests ?? flags.planTests);
+  }, [
+    autoModeDefault,
+    defaultPlanPath,
+    isParallel,
+    maxReviewIterationsDefault,
+    plannerModeDefault,
+    taskDefaults,
+    useSubagentsDefault,
+  ]);
 
   const resetAndCloseForm = useCallback(() => {
     setIsOpen(false);
     setTitle("");
     setDescription("");
-    setAutoMode(true);
+    setAutoMode(autoModeDefault);
     setExecutionOwner("ai");
     setAssigneeIds([]);
     setIsFix(false);
     setShowAdvanced(false);
-    setPlannerMode("fast");
+    setPlannerMode(plannerModeDefault);
     setPlanPath(defaultPlanPath);
-    const resetFlags = defaultsForMode("fast");
+    const resetFlags = defaultsForMode(plannerModeDefault);
     setPlanDocs(resetFlags.planDocs);
-    setPlanTests(resetFlags.planTests);
-    setSkipReview(resetFlags.skipReview);
+    setPlanTests(taskDefaults?.planTests ?? resetFlags.planTests);
+    setSkipReview(taskDefaults?.skipReview ?? resetFlags.skipReview);
     setUseSubagents(useSubagentsDefault);
     setRunPlanImprove(false);
     setRunPostVerify(false);
@@ -137,7 +155,14 @@ export function AddTaskForm({ projectId }: Props) {
     setModelOverride("");
     setPriority(0);
     userOverride.current = false;
-  }, [defaultPlanPath, maxReviewIterationsDefault, useSubagentsDefault]);
+  }, [
+    autoModeDefault,
+    defaultPlanPath,
+    maxReviewIterationsDefault,
+    plannerModeDefault,
+    taskDefaults,
+    useSubagentsDefault,
+  ]);
 
   const openForm = useCallback(() => {
     syncServerDefaultsIntoForm();

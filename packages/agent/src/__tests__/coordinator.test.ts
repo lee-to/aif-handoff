@@ -227,6 +227,25 @@ describe("coordinator", () => {
     expect(task!.status).toBe("done");
   });
 
+  it.each([true, false])("accepts a synchronous runner with remediation=%s", async (enabled) => {
+    verifyRemediationEnabled = enabled;
+    testDb.current
+      .insert(tasks)
+      .values({
+        id: "synchronous-stage",
+        projectId: "test-project",
+        title: "Synchronous stage",
+        status: "planning",
+        autoMode: false,
+      })
+      .run();
+    vi.mocked(runPlanner).mockImplementationOnce(vi.fn());
+    await pollAndProcess();
+    const task = testDb.current.select().from(tasks).where(eq(tasks.id, "synchronous-stage")).get();
+    expect(runPlanner).toHaveBeenCalledTimes(1);
+    expect(task?.status).toBe("plan_ready");
+  });
+
   it("commits a completed auto-queue task before the next task can start", async () => {
     const db = testDb.current;
     const rootPath = createGitRoot("coordinator-auto-commit-");

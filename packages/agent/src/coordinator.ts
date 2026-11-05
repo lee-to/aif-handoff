@@ -277,7 +277,7 @@ async function runStageWithTimeout(
 
   try {
     await withTimeout(
-      runner(taskId, projectRoot).finally(() => {
+      Promise.resolve(runner(taskId, projectRoot)).finally(() => {
         runnerSettled = true;
       }),
       STAGE_RUN_TIMEOUT_MS,

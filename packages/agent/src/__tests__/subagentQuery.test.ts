@@ -152,6 +152,7 @@ const baseMockEnv = {
   COORDINATOR_MAX_CONCURRENT_PROJECTS: 4,
   AGENT_CHAT_MAX_TURNS: 50,
   AGENT_MAX_REVIEW_ITERATIONS: 3,
+  AGENT_VERIFY_MAX_FIX_ATTEMPTS: 2,
   AGENT_USE_SUBAGENTS: true,
   AGENT_FIRST_ACTIVITY_TIMEOUT_MS: 60_000,
   AIF_USAGE_LIMITS_ENABLED: true,
@@ -2083,60 +2084,65 @@ describe("executeSubagentQuery first-activity watchdog", () => {
     vi.unstubAllGlobals();
   });
 
-  it("retries and eventually throws when agent stalls on all attempts", async () => {
-    // Use very short timeouts for the test
-    mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS = 100;
-    mockEnvOverrides.AGENT_QUERY_START_TIMEOUT_MS = 0;
+  it.each([true, false])(
+    "honours retryOnStall=%s when agent stalls",
+    async (retryOnStall) => {
+      // Use very short timeouts for the test
+      mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS = 100;
+      mockEnvOverrides.AGENT_QUERY_START_TIMEOUT_MS = 0;
 
-    // queryMock is called as queryImpl({ prompt, options }).
-    // options.abortController is the per-attempt AbortController from executionIntent.
-    // In production, SDKs use this signal to cancel HTTP requests; here we simulate
-    // the same: yield once (pass start-timeout), then hang until abort fires.
-    queryMock.mockImplementation(
-      (input: { prompt: string; options: { abortController?: AbortController } }) => {
-        const ac = input.options?.abortController;
-        async function* hangUntilAbort() {
-          yield { type: "message", message: { type: "text", text: "thinking..." } };
-          await new Promise<void>((_, reject) => {
-            if (ac?.signal.aborted) {
-              reject(new Error("first_activity_timeout"));
-              return;
-            }
-            ac?.signal.addEventListener(
-              "abort",
-              () => {
+      // queryMock is called as queryImpl({ prompt, options }).
+      // options.abortController is the per-attempt AbortController from executionIntent.
+      // In production, SDKs use this signal to cancel HTTP requests; here we simulate
+      // the same: yield once (pass start-timeout), then hang until abort fires.
+      queryMock.mockImplementation(
+        (input: { prompt: string; options: { abortController?: AbortController } }) => {
+          const ac = input.options?.abortController;
+          async function* hangUntilAbort() {
+            yield { type: "message", message: { type: "text", text: "thinking..." } };
+            await new Promise<void>((_, reject) => {
+              if (ac?.signal.aborted) {
                 reject(new Error("first_activity_timeout"));
-              },
-              { once: true },
-            );
-          });
-        }
-        return hangUntilAbort();
-      },
-    );
+                return;
+              }
+              ac?.signal.addEventListener(
+                "abort",
+                () => {
+                  reject(new Error("first_activity_timeout"));
+                },
+                { once: true },
+              );
+            });
+          }
+          return hangUntilAbort();
+        },
+      );
 
-    await expect(
-      executeSubagentQuery({
-        taskId: "task-stall",
-        projectRoot: "/tmp/project",
-        agentName: "implement-coordinator",
-        prompt: "run",
-        workflowKind: "implementer",
-      }),
-    ).rejects.toThrow(/stalled|first_activity_timeout|timed out/i);
+      await expect(
+        executeSubagentQuery({
+          taskId: "task-stall",
+          projectRoot: "/tmp/project",
+          agentName: "implement-coordinator",
+          prompt: "run",
+          workflowKind: "implementer",
+          retryOnStall,
+        }),
+      ).rejects.toThrow(/stalled|first_activity_timeout|timed out/i);
 
-    // Should have been called 3 times (1 initial + 2 retries)
-    expect(queryMock).toHaveBeenCalledTimes(3);
+      const expectedAttempts = retryOnStall ? 3 : 1;
+      expect(queryMock).toHaveBeenCalledTimes(expectedAttempts);
 
-    // Verify stall was logged in activity
-    const stallLogs = logActivityMock.mock.calls.filter(
-      (call: string[]) => call[1] === "Agent" && call[2]?.includes("stalled"),
-    );
-    expect(stallLogs.length).toBe(3);
+      // Verify stall was logged in activity
+      const stallLogs = logActivityMock.mock.calls.filter(
+        (call: string[]) => call[1] === "Agent" && call[2]?.includes("stalled"),
+      );
+      expect(stallLogs.length).toBe(expectedAttempts);
 
-    delete mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS;
-    delete mockEnvOverrides.AGENT_QUERY_START_TIMEOUT_MS;
-  }, 10_000);
+      delete mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS;
+      delete mockEnvOverrides.AGENT_QUERY_START_TIMEOUT_MS;
+    },
+    10_000,
+  );
 
   it("treats streamed runtime events as activity for tool-less workflows", async () => {
     mockEnvOverrides.AGENT_FIRST_ACTIVITY_TIMEOUT_MS = 100;

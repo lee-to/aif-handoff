@@ -61,7 +61,7 @@ import {
   type TaskNotificationInfo,
 } from "./notifier.js";
 import { handleAutoReviewGate } from "./autoReviewHandler.js";
-import { classifyStageError } from "./stageErrorHandler.js";
+import { classifyStageError, StageManualBlockError } from "./stageErrorHandler.js";
 import { setActiveStageAbortController } from "./stageAbort.js";
 import { setCoordinatorId } from "./subagentQuery.js";
 import { ensureAutoQueueTaskCommit } from "./autoQueueCommit.js";
@@ -273,10 +273,13 @@ async function runStageWithTimeout(
 ): Promise<void> {
   const abort = new AbortController();
   setActiveStageAbortController(taskId, abort);
+  let runnerSettled = false;
 
   try {
     await withTimeout(
-      runner(taskId, projectRoot),
+      runner(taskId, projectRoot).finally(() => {
+        runnerSettled = true;
+      }),
       STAGE_RUN_TIMEOUT_MS,
       `Stage ${stageLabel} timed out after ${STAGE_RUN_TIMEOUT_MS}ms`,
     );
@@ -284,6 +287,12 @@ async function runStageWithTimeout(
     if (!abort.signal.aborted) {
       abort.abort();
       log.warn({ taskId, stage: stageLabel }, "Aborted subagent process after stage timeout");
+    }
+    // Verify may be applying a fix when the outer stage timeout interrupts it.
+    if (stageLabel === "verifier" && !runnerSettled) {
+      throw new StageManualBlockError(
+        "Verify stage timed out. The working tree may contain partial remediation changes; inspect it before retrying. Automatic retry is disabled.",
+      );
     }
     throw err;
   } finally {

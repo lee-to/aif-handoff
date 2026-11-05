@@ -27,6 +27,7 @@ const testDb = { current: createTestDb() };
 const blockTaskForRuntimeGateIfEligibleMock = vi.fn();
 const claimCoordinatorTaskIfEligibleMock = vi.fn();
 const executeSubagentQueryMock = vi.fn();
+let attemptRecoveryEnabled = true;
 
 function createGitRoot(prefix: string): string {
   return createGitTestRoot(prefix, { readme: "# auto queue\n" }).rootPath;
@@ -36,7 +37,10 @@ vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
   return {
     ...actual,
-    getEnv: () => Object.assign(actual.getEnv(), { AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: true }),
+    getEnv: () =>
+      Object.assign(actual.getEnv(), {
+        AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: attemptRecoveryEnabled,
+      }),
   };
 });
 
@@ -141,6 +145,7 @@ describe("coordinator", () => {
       .values({ id: "test-project", name: "Test", rootPath: "/tmp/test" })
       .run();
     vi.clearAllMocks();
+    attemptRecoveryEnabled = true;
     executeSubagentQueryMock.mockResolvedValue({ resultText: "done" });
     resetCoordinatorRuntimeCountersForTests();
     getStageSemaphore().reset();
@@ -528,6 +533,48 @@ describe("coordinator", () => {
 
     expect(runVerifier).toHaveBeenCalledTimes(1);
   });
+
+  it.each([true, false])(
+    "manually blocks a Verify stage timeout with attempt recovery=%s",
+    async (enabled) => {
+      attemptRecoveryEnabled = enabled;
+      testDb.current
+        .insert(tasks)
+        .values({
+          id: "task-verify-timeout",
+          projectId: "test-project",
+          title: "Verify timeout",
+          status: "verify",
+          useSubagents: false,
+          runPostVerify: true,
+        })
+        .run();
+      vi.mocked(runVerifier).mockImplementationOnce(() => new Promise(() => {}));
+      vi.useFakeTimers();
+      try {
+        const poll = pollAndProcess();
+        await vi.waitFor(() => expect(runVerifier).toHaveBeenCalledTimes(1));
+        await vi.advanceTimersByTimeAsync(Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000));
+        await poll;
+        const task = testDb.current
+          .select()
+          .from(tasks)
+          .where(eq(tasks.id, "task-verify-timeout"))
+          .get();
+        expect(task).toMatchObject({
+          status: "blocked_external",
+          blockedFromStatus: "verify",
+          retryAfter: null,
+        });
+        expect(task?.blockedReason).toContain("partial remediation changes");
+        expect(runReviewer).not.toHaveBeenCalled();
+        await pollAndProcess();
+        expect(runVerifier).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     {

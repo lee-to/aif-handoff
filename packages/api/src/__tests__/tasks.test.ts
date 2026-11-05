@@ -4,7 +4,14 @@ import { eq } from "drizzle-orm";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { appSettings, projects, runtimeProfiles, taskComments, tasks } from "@aif/shared";
+import {
+  appSettings,
+  clearProjectConfigCache,
+  projects,
+  runtimeProfiles,
+  taskComments,
+  tasks,
+} from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 // Mock the shared db module to use test db
@@ -293,6 +300,71 @@ describe("tasks API", () => {
       expect(body.runPlanImprove).toBe(false);
       expect(body.runPostVerify).toBe(false);
       expect(body.status).toBe("backlog");
+    });
+
+    it("applies project task_defaults to flags the request omits", async () => {
+      // Regression: createTaskSchema used to materialize autoMode/plannerMode/
+      // useSubagents/maxReviewIterations, so createTask never saw `undefined`
+      // and the project's task_defaults could not win.
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-task-defaults-"));
+      mkdirSync(join(rootPath, ".ai-factory"), { recursive: true });
+      writeFileSync(
+        join(rootPath, ".ai-factory", "config.yaml"),
+        "task_defaults:\n  autoMode: false\n  plannerMode: full\n  useSubagents: true\n  maxReviewIterations: 5\n  skipReview: true\n  planTests: false\n",
+      );
+      clearProjectConfigCache();
+      testDb.current
+        .insert(projects)
+        .values({ id: "project-task-defaults", name: "Task Defaults", rootPath })
+        .run();
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Inherits project defaults",
+          projectId: "project-task-defaults",
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.autoMode).toBe(false);
+      expect(body.plannerMode).toBe("full");
+      expect(body.useSubagents).toBe(true);
+      expect(body.maxReviewIterations).toBe(5);
+      // task_defaults outrank the full-mode defaults for these two.
+      expect(body.skipReview).toBe(true);
+      expect(body.planTests).toBe(false);
+    });
+
+    it("lets an explicit request field override the project task_defaults", async () => {
+      const rootPath = mkdtempSync(join(tmpdir(), "aif-task-defaults-override-"));
+      mkdirSync(join(rootPath, ".ai-factory"), { recursive: true });
+      writeFileSync(
+        join(rootPath, ".ai-factory", "config.yaml"),
+        "task_defaults:\n  autoMode: false\n  plannerMode: full\n",
+      );
+      clearProjectConfigCache();
+      testDb.current
+        .insert(projects)
+        .values({ id: "project-task-defaults-override", name: "Override", rootPath })
+        .run();
+
+      const res = await app.request("/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Explicit wins",
+          projectId: "project-task-defaults-override",
+          autoMode: true,
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.autoMode).toBe(true); // explicit request field wins
+      expect(body.plannerMode).toBe("full"); // still from task_defaults
     });
 
     it("should persist improve and verify flags only for skills-mode tasks", async () => {

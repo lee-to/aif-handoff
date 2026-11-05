@@ -51,3 +51,10 @@ export function isWarmupWorkflowKind(
 ): workflowKind is WarmupWorkflowKind {
   return WARMUP_WORKFLOW_KINDS.some((kind) => kind === workflowKind);
 }
+
+/**
+ * Inclusive range for a task's `maxReviewIterations`. The task API schemas and
+ * the `.ai-factory/config.yaml` `task_defaults` normalizer share it, so a
+ * project default can never seed a value the API rejects.
+ */
+export const MAX_REVIEW_ITERATIONS_BOUNDS = { min: 1, max: 50 } as const;

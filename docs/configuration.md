@@ -714,6 +714,35 @@ The config is editable via the **Global Settings** dialog in the web UI (gear ic
 | `skip_push_after_commit` | `false`    | Skip push after /aif-commit                     |
 | `strict_base_update`     | `false`    | Hard-fail if `git pull --ff-only` of base fails |
 
+**`task_defaults`** — per-project defaults applied when a task is created without an explicit value for a flag. Resolution order: **explicit task arg → `task_defaults` → global default**. This mirrors the existing task → project → system fallback used for runtime profiles (see [Runtime Profile Defaults](#runtime-profile-defaults)). All fields are optional — a project overrides only the flags it cares about.
+
+`createTask` is the single resolution point. The REST API, MCP `handoff_create_task` and roadmap import pass omitted flags through as `undefined`, so no caller fills in a default that would hide the project value. The web form sends every flag, but it seeds them from `taskDefaults` in [`GET /projects/:id/defaults`](api.md#get-project-config-defaults) when it opens, so an untouched form submits the values `createTask` would pick. Roadmap import forces `skipReview: true`, plus `plannerMode: full` when the project runs in parallel mode. The GitHub issue sync inserts its tasks with a fixed full-mode profile and does not read `task_defaults`.
+
+| Key                   | Global default                 | Options        | Notes                                                                        |
+| --------------------- | ------------------------------ | -------------- | ---------------------------------------------------------------------------- |
+| `autoMode`            | `true`                         | boolean        | `false` parks the task at `plan_ready` for manager review.                   |
+| `plannerMode`         | `fast`                         | `fast`, `full` | `full` creates a feature branch and an iteratively polished plan.            |
+| `skipReview`          | mode-driven (`fast` → `true`)  | boolean        | Bypass the review + security sidecar stage.                                  |
+| `useSubagents`        | `AGENT_USE_SUBAGENTS`          | boolean        | Use native agent definitions instead of slash-command fallback.              |
+| `planTests`           | mode-driven (`fast` → `false`) | boolean        | Include test tasks in the generated plan.                                    |
+| `maxReviewIterations` | `AGENT_MAX_REVIEW_ITERATIONS`  | integer 1-50   | Cap on automatic review→rework cycles (autoMode only). Fractions round down. |
+
+The mode-driven defaults come from the resolved `plannerMode` — so a project that
+sets only `plannerMode: full` also gets `skipReview: false` and `planTests: true`
+unless it overrides them. `task_defaults` outrank the mode-driven layer.
+
+Invalid values (wrong type, unknown enum, a `maxReviewIterations` outside 1-50 after rounding down) are normalized to "no override" — the affected flag falls through to the global default rather than failing task creation. The 1-50 range is the one `POST /tasks` and `PUT /tasks/:id` accept, so a project default never seeds a value the API rejects.
+
+Example — a SwiftPM iOS project that always wants manager review and cannot run two parallel `swift build`:
+
+```yaml
+task_defaults:
+  autoMode: false
+  plannerMode: full
+  useSubagents: false # two parallel swift build deadlock
+  planTests: true
+```
+
 When `config.yaml` is absent, Handoff treats the base branch as repository
 discovery: it first checks the branch pointed to by `refs/remotes/origin/HEAD`,
 creating a same-named local branch from `origin/<branch>` when only the remote
@@ -749,12 +778,12 @@ The commit lifecycle is surfaced over WebSocket as `task:commit_started`, `task:
 
 ### API Endpoints
 
-| Method | Path                      | Description                                |
-| ------ | ------------------------- | ------------------------------------------ |
-| GET    | `/settings/config/status` | Check if config.yaml exists                |
-| GET    | `/settings/config`        | Read parsed config as JSON                 |
-| PUT    | `/settings/config`        | Write config (accepts JSON, saves as YAML) |
-| GET    | `/projects/:id/defaults`  | Get resolved paths/workflow for a project  |
+| Method | Path                      | Description                                                    |
+| ------ | ------------------------- | -------------------------------------------------------------- |
+| GET    | `/settings/config/status` | Check if config.yaml exists                                    |
+| GET    | `/settings/config`        | Read parsed config as JSON                                     |
+| PUT    | `/settings/config`        | Write config (accepts JSON, saves as YAML)                     |
+| GET    | `/projects/:id/defaults`  | Get resolved paths, workflow and `task_defaults` for a project |
 
 ### How It Works
 

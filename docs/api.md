@@ -668,6 +668,51 @@ If `.mcp.json` does not exist (or cannot be parsed), returns:
 { "mcpServers": {} }
 ```
 
+### Get Project Config Defaults
+
+```
+GET /projects/:id/defaults
+```
+
+Returns the resolved `.ai-factory/config.yaml` values the web UI needs before it
+creates a task: `paths` and `workflow` with built-in defaults filled in, and
+`taskDefaults` from the project's `task_defaults` section. The create-task form
+seeds its flags from `taskDefaults`, so it shows the values `createTask` would
+apply to an omitted flag.
+
+`taskDefaults` lists the flags the project sets to a valid value;
+`getProjectConfig` drops invalid ones, as it does for `createTask`. The object is
+`{}` when `config.yaml` or its `task_defaults` section is missing. The response
+leaves out global defaults, so a caller applies them for any absent flag. See
+[Configuration → `task_defaults`](configuration.md#project-config-configyaml).
+
+**Response:** `200 OK`. The example shows three `paths` keys; the real response
+carries every key from the configuration `paths` table.
+
+```json
+{
+  "paths": {
+    "plan": ".ai-factory/PLAN.md",
+    "plans": ".ai-factory/plans/",
+    "roadmap": ".ai-factory/ROADMAP.md"
+  },
+  "workflow": {
+    "auto_create_dirs": true,
+    "plan_id_format": "slug",
+    "analyze_updates_architecture": true,
+    "architecture_updates_roadmap": true,
+    "verify_mode": "normal"
+  },
+  "taskDefaults": {
+    "plannerMode": "full",
+    "useSubagents": false
+  }
+}
+```
+
+**Errors:** `404` with `{ "error": "Project not found" }` when the project does
+not exist.
+
 ### Broadcast Project Update
 
 ```
@@ -899,21 +944,32 @@ POST /tasks
 | `description` | string | no | `""` | Task description |
 | `attachments` | array | no | `[]` | File attachments (max 100) |
 | `priority` | integer | no | `0` | Priority level (0-5) |
-| `autoMode` | boolean | no | `true` | Auto-advance through agent pipeline, including automatic post-review rework loop when fixes are detected |
+| `autoMode` | boolean | no | project `task_defaults`, else `true` | Auto-advance through agent pipeline, including automatic post-review rework loop when fixes are detected |
 | `executionOwner` | `ai` \| `human` | no | `ai` | Responsible executor; independent from `autoMode` |
 | `assigneeIds` | string[] | no | `[]` | Active participant IDs for Human ownership (max 100); must be empty for AI ownership |
 | `isFix` | boolean | no | `false` | Marks the task as fix-flow task (uses FIX plan conventions) |
-| `skipReview` | boolean | no | `false` | Skip the review stage — task moves directly from implementing to done |
+| `plannerMode` | `fast` \| `full` | no | project `task_defaults`, else `fast` | `full` creates a feature branch and an iteratively polished plan. Always `full` when the project has parallel mode enabled |
+| `planTests` | boolean | no | project `task_defaults`, else mode-driven | Include test tasks in the generated plan |
+| `skipReview` | boolean | no | project `task_defaults`, else mode-driven | Skip the review stage — task moves directly from implementing to done |
 | `paused` | boolean | no | `false` | Pause agent processing — coordinator skips this task until resumed |
-| `useSubagents` | boolean | no | `false` | Run via custom subagents (`plan-coordinator`, `implement-coordinator`, sidecars). `false` uses `aif-*` skills directly |
+| `useSubagents` | boolean | no | project `task_defaults`, else `AGENT_USE_SUBAGENTS` | Run via custom subagents (`plan-coordinator`, `implement-coordinator`, sidecars). `false` uses `aif-*` skills directly |
 | `runPlanImprove` | boolean | no | `false` | Skills-mode only (`useSubagents=false`): run optional `/aif-improve` after planning and before `plan_ready`. Ignored and stored as `false` for subagent tasks |
 | `runPostVerify` | boolean | no | `false` | Skills-mode only (`useSubagents=false`): run optional `/aif-verify` after implementation and before review. With `skipReview=true`, verification moves directly to `done`. Ignored and stored as `false` for subagent tasks |
 | `autoQa` | boolean | no | `false` | Automatically run the QA pipeline (`/aif-qa --all`) when the task is approved (`approve_done`: `done → verified`) |
 | `autoQaCheck` | boolean | no | `false` | After a successful QA generation run, execute the generated cases through `/aif-qa-check agent` |
+| `maxReviewIterations` | integer | no | project `task_defaults`, else `AGENT_MAX_REVIEW_ITERATIONS` | Cap on automatic review→rework cycles (1-50, autoMode only) |
 | `runtimeProfileId` | string \| null | no | `null` | Task-specific runtime override. When absent, resolution falls back to project default, then app default, then environment fallback |
 | `roadmapAlias` | string | no | `null` | Roadmap alias for grouping (e.g., `v1.0`) |
 | `tags` | string[] | no | `[]` | Tags for filtering/categorization (max 50, each max 100 chars) |
 | `scheduledAt` | string \| null | no | `null` | ISO-8601 UTC timestamp. If set, the coordinator fires the task into planning at that time. Must be in the future; `null` clears it. Accepted on both create and update. |
+
+**Project defaults:** an omitted `autoMode`, `plannerMode`, `skipReview`,
+`useSubagents`, `planTests` or `maxReviewIterations` takes the project's
+`task_defaults` value from `.ai-factory/config.yaml` first, then the global
+default. Mode-driven defaults follow the resolved `plannerMode`: `fast` gives
+`skipReview=true` and `planTests=false`, `full` gives `skipReview=false` and
+`planTests=true`. See
+[Configuration → `task_defaults`](configuration.md#project-config-configyaml).
 
 **Attachment object:**
 | Field | Type | Description |

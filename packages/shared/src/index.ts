@@ -178,6 +178,7 @@ export {
   WARMUP_WORKFLOW_KINDS,
   DEFAULT_WARMUP_TARGET,
   isWarmupWorkflowKind,
+  MAX_REVIEW_ITERATIONS_BOUNDS,
   type WarmupTarget,
   type WarmupWorkflowKind,
   type WarmupProfileMode,

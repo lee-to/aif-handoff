@@ -171,6 +171,7 @@ export {
 } from "./taskTransitions.js";
 
 const log = createLogger("data");
+const THREAD_WORKSPACE_ENABLED = getEnv().AIF_CHAT_THREAD_WORKSPACE_ENABLED;
 const AUTO_REVIEW_STRATEGY_SET = new Set<string>(AUTO_REVIEW_STRATEGIES);
 const AUTO_REVIEW_FINDING_SOURCE_SET = new Set<string>(AUTO_REVIEW_FINDING_SOURCES);
 const APP_SETTINGS_ID = 1;
@@ -4078,7 +4079,7 @@ export function toChatSessionResponse(row: ChatSessionRow): ChatSession {
     agentSessionId: row.agentSessionId,
     runtimeProfileId: row.runtimeProfileId,
     runtimeSessionId: row.runtimeSessionId ?? row.agentSessionId,
-    status: row.status,
+    ...(THREAD_WORKSPACE_ENABLED ? { status: row.status } : {}),
     source: "web",
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -4110,7 +4111,7 @@ export function createChatSession(input: {
   runtimeProfileId?: string | null;
   runtimeSessionId?: string | null;
 }): ChatSessionRow | undefined {
-  if (input.runtimeSessionId) {
+  if (THREAD_WORKSPACE_ENABLED && input.runtimeSessionId) {
     const existing = getDb()
       .select()
       .from(chatSessions)
@@ -4183,12 +4184,12 @@ export function updateChatSession(
   const db = getDb();
   const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
   if (fields.title !== undefined) patch.title = fields.title;
-  if (fields.status !== undefined) patch.status = fields.status;
+  if (THREAD_WORKSPACE_ENABLED && fields.status !== undefined) patch.status = fields.status;
   if (fields.agentSessionId !== undefined) patch.agentSessionId = fields.agentSessionId;
   if (fields.runtimeProfileId !== undefined) patch.runtimeProfileId = fields.runtimeProfileId;
   if (fields.runtimeSessionId !== undefined) patch.runtimeSessionId = fields.runtimeSessionId;
   const updated = db.transaction((tx) => {
-    if (fields.status === "done") {
+    if (THREAD_WORKSPACE_ENABLED && fields.status === "done") {
       const incomplete = tx
         .select({ count: count() })
         .from(threadObjectives)
@@ -4247,7 +4248,7 @@ export function getThreadWorkspace(id: string): ThreadWorkspace | undefined {
     .orderBy(asc(threadTaskLinks.createdAt))
     .all();
   return {
-    thread: toChatSessionResponse(row),
+    thread: { ...toChatSessionResponse(row), status: row.status },
     objectives,
     tasks: taskRows,
   };

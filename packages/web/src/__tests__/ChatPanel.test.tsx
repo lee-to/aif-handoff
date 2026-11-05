@@ -138,10 +138,12 @@ function renderPanel(
     projectName: string | null;
     taskId: string | null;
     canManageTaskLinks: boolean;
+    threadWorkspaceEnabled: boolean;
   }> = {},
 ) {
   return render(
     <ChatPanel
+      threadWorkspaceEnabled={true}
       isOpen={true}
       projectId="p-1"
       projectName="Project One"
@@ -247,6 +249,16 @@ describe("ChatPanel", () => {
     expect(screen.getByText('Ask anything about "Project One"')).toBeDefined();
   });
 
+  it("keeps New chat local and hides workspace surfaces when the flag is off", async () => {
+    mockWorkspace = { thread: { id: "thread", status: "open" }, objectives: [], tasks: [] };
+    renderPanel({ threadWorkspaceEnabled: false });
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await waitFor(() => expect(mockClearActiveSession).toHaveBeenCalledOnce());
+    expect(mockNewSession).toHaveBeenCalledOnce();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(screen.queryByText("Objectives")).not.toBeInTheDocument();
+  });
+
   it("persists a new chat without sending a model message", async () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
@@ -296,7 +308,9 @@ describe("ChatPanel", () => {
           objectiveId: "objective-1",
           prNumber: 42,
           prUrl: "https://github.com/example/repo/pull/42",
-          prState: "open",
+          prState: "merged",
+          prChecksStatus: "failure",
+          reviewState: "changes_requested",
         },
       ],
     };
@@ -306,6 +320,10 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Ship the feature")).toBeDefined();
     expect(screen.getByText("Implement workspace")).toBeDefined();
     expect(screen.getByRole("link", { name: /PR #42/ })).toBeDefined();
+    expect(screen.getByText("PR: merged")).toBeVisible();
+    expect(screen.getByText("Checks: failure")).toBeVisible();
+    expect(screen.getByText("Review: changes requested")).toBeVisible();
+    expect(screen.getByText("Objective: Ship the feature")).toBeVisible();
   });
 
   it("keeps the chat open while using portaled status controls and the drop dialog", async () => {

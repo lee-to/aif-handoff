@@ -67,6 +67,7 @@ interface ChatPanelProps {
   onClose: () => void;
   onOpenTask?: (taskId: string) => void;
   canManageTaskLinks?: boolean;
+  threadWorkspaceEnabled?: boolean;
 }
 
 export function ChatPanel({
@@ -77,6 +78,7 @@ export function ChatPanel({
   onClose,
   onOpenTask,
   canManageTaskLinks = true,
+  threadWorkspaceEnabled = false,
 }: ChatPanelProps) {
   const [showSessions, setShowSessions] = useState(false);
 
@@ -86,6 +88,7 @@ export function ChatPanel({
     activeSessionId,
     setActiveSessionId,
     pinActiveSession,
+    clearActiveSession,
     createSession,
     claimSession,
     isClaiming,
@@ -96,7 +99,9 @@ export function ChatPanel({
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const workspaceThreadId =
-    !isClaiming && activeSession?.source === "web" ? activeSession.id : null;
+    threadWorkspaceEnabled && !isClaiming && activeSession?.source === "web"
+      ? activeSession.id
+      : null;
   const {
     workspace,
     error: workspaceError,
@@ -107,7 +112,7 @@ export function ChatPanel({
     unlinkTask,
     updateStatus,
   } = useThreadWorkspace(workspaceThreadId);
-  const { data: projectTasks } = useTasks(projectId);
+  const { data: projectTasks } = useTasks(threadWorkspaceEnabled ? projectId : null);
 
   const {
     messages,
@@ -240,6 +245,12 @@ export function ChatPanel({
   };
 
   const handleNewChat = useCallback(async () => {
+    if (!threadWorkspaceEnabled) {
+      newSession();
+      clearActiveSession();
+      setTimeout(() => textareaRef.current?.focus(), 50);
+      return;
+    }
     if (isClaiming) return;
     try {
       await createSession();
@@ -252,7 +263,7 @@ export function ChatPanel({
     } catch {
       // The session hook displays the creation error and preserves the current chat.
     }
-  }, [createSession, newSession, isClaiming]);
+  }, [createSession, newSession, isClaiming, threadWorkspaceEnabled, clearActiveSession]);
 
   const handleSessionSelect = useCallback(
     (id: string) => {
@@ -282,6 +293,9 @@ export function ChatPanel({
     [renameSession],
   );
 
+  const objectiveTitles = new Map(
+    workspace?.objectives.map((objective) => [objective.id, objective.title]) ?? [],
+  );
   const linkedTaskIds = new Set(workspace?.tasks.map((task) => task.taskId) ?? []);
   const availableTasks = projectTasks?.filter((task) => !linkedTaskIds.has(task.id)) ?? [];
 
@@ -490,29 +504,31 @@ export function ChatPanel({
         )}
       </div>
 
-      {activeSession?.source !== "web" && activeSession?.runtimeSessionId && (
-        <div className="border-b border-border bg-secondary/20 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              Track this existing chat with objectives, tasks, and pull requests.
-            </p>
-            <Button
-              size="sm"
-              disabled={isClaiming}
-              onClick={() => void claimSession(activeSession).catch(() => undefined)}
-            >
-              {isClaiming ? "Adding..." : "Add objectives and tasks"}
-            </Button>
+      {threadWorkspaceEnabled &&
+        activeSession?.source !== "web" &&
+        activeSession?.runtimeSessionId && (
+          <div className="border-b border-border bg-secondary/20 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                Track this existing chat with objectives, tasks, and pull requests.
+              </p>
+              <Button
+                size="sm"
+                disabled={isClaiming}
+                onClick={() => void claimSession(activeSession).catch(() => undefined)}
+              >
+                {isClaiming ? "Adding..." : "Add objectives and tasks"}
+              </Button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {claimError && (
+      {threadWorkspaceEnabled && claimError && (
         <p role="alert" className="px-4 py-2 text-xs text-destructive">
           {claimError}
         </p>
       )}
-      {workspace && (
+      {threadWorkspaceEnabled && workspace && (
         <fieldset
           disabled={isSaving}
           className="min-w-0 max-h-[45vh] shrink-0 overflow-y-auto border-b border-border bg-secondary/20 px-4 py-3"
@@ -643,10 +659,10 @@ export function ChatPanel({
           {workspace.tasks.length > 0 && (
             <div className="mt-2 grid gap-1">
               {workspace.tasks.map((task) => (
-                <div key={task.taskId} className="flex items-center gap-2 text-xs">
+                <div key={task.taskId} className="flex flex-wrap items-center gap-2 text-xs">
                   <button
                     type="button"
-                    className="min-w-0 flex-1 truncate text-left font-medium hover:underline"
+                    className="min-w-[160px] flex-1 truncate text-left font-medium hover:underline"
                     onClick={() => onOpenTask?.(task.taskId)}
                   >
                     {task.title}
@@ -654,16 +670,41 @@ export function ChatPanel({
                   <Badge variant="outline" size="sm">
                     {task.status}
                   </Badge>
+                  <Badge variant="outline" size="sm" className="max-w-full">
+                    <span className="truncate">
+                      Objective:{" "}
+                      {task.objectiveId
+                        ? (objectiveTitles.get(task.objectiveId) ?? "No objective")
+                        : "No objective"}
+                    </span>
+                  </Badge>
                   {task.prUrl && (
-                    <a
-                      href={task.prUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-primary hover:underline"
-                    >
-                      PR #{task.prNumber}
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
+                    <>
+                      <a
+                        href={task.prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                      >
+                        PR #{task.prNumber}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                      {task.prState && (
+                        <Badge variant="outline" size="sm">
+                          PR: {task.prState}
+                        </Badge>
+                      )}
+                      {task.prChecksStatus && (
+                        <Badge variant="outline" size="sm">
+                          Checks: {task.prChecksStatus}
+                        </Badge>
+                      )}
+                      {task.reviewState && (
+                        <Badge variant="outline" size="sm">
+                          Review: {task.reviewState.replaceAll("_", " ")}
+                        </Badge>
+                      )}
+                    </>
                   )}
                   <Button
                     variant="ghost"
@@ -681,7 +722,7 @@ export function ChatPanel({
           )}
         </fieldset>
       )}
-      {workspaceError && (
+      {threadWorkspaceEnabled && workspaceError && (
         <p role="alert" className="border-b border-border px-4 py-2 text-xs text-destructive">
           {workspaceError}
         </p>
@@ -887,6 +928,7 @@ export function ChatPanel({
       {content}
       <FormDialog
         open={Boolean(
+          threadWorkspaceEnabled &&
           droppingObjectiveId &&
           workspace?.objectives.some((objective) => objective.id === droppingObjectiveId),
         )}

@@ -3,6 +3,9 @@ import { Hono } from "hono";
 import { projects, resetEnvCache } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
+const broadcastMock = vi.hoisted(() => vi.fn());
+vi.mock("../ws.js", () => ({ broadcast: broadcastMock }));
+vi.stubEnv("AIF_CHAT_THREAD_WORKSPACE_ENABLED", "true");
 const testDb = { current: createTestDb() };
 vi.mock("@aif/shared/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared/server")>();
@@ -12,8 +15,18 @@ vi.mock("@aif/shared/server", async (importOriginal) => {
 const { githubRouter } = await import("../routes/github.js");
 const { GitHubApiError, GitHubClient, issueIsEligible, toGitHubErrorResponse } =
   await import("../services/github.js");
-const { deleteTask, findGitHubIssue, findTaskById, importGitHubIssueTask, upsertGitHubRepository } =
-  await import("@aif/data");
+const {
+  createChatSession,
+  getThreadWorkspace,
+  linkTaskToThread,
+  updateTaskStatus,
+  updateGitHubPullRequest,
+  deleteTask,
+  findGitHubIssue,
+  findTaskById,
+  importGitHubIssueTask,
+  upsertGitHubRepository,
+} = await import("@aif/data");
 
 function jsonResponse(value: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(value), {
@@ -33,6 +46,7 @@ beforeEach(() => {
   vi.stubEnv("AIF_GITHUB_ISSUE_PR_ENABLED", "true");
   resetEnvCache();
   vi.restoreAllMocks();
+  broadcastMock.mockClear();
 });
 
 afterEach(() => {
@@ -290,6 +304,112 @@ describe("GitHub project routes", () => {
     },
   );
 
+  it("broadcasts evidence-only sync changes for linked tasks without moving their stage", async () => {
+    upsertGitHubRepository({
+      projectId: "project-1",
+      owner: "owner",
+      name: "repo",
+      htmlUrl: "https://github.com/owner/repo",
+      defaultBranch: "main",
+      tokenEnvVar: "GITHUB_TEST_TOKEN",
+      enabled: true,
+      eligibility: { labels: [], assignee: null, milestone: null },
+    });
+    const remote = {
+      number: 154,
+      node_id: "I_154",
+      html_url: "https://github.com/owner/repo/issues/154",
+      state: "open" as const,
+      title: "Evidence",
+      body: "Implement",
+      user: { login: "author" },
+      labels: [],
+      assignees: [],
+      milestone: null,
+      comments: 0,
+      updated_at: "2026-11-05T00:00:00Z",
+    };
+    const imported = importGitHubIssueTask({
+      projectId: "project-1",
+      owner: "owner",
+      repository: "repo",
+      issueNumber: 154,
+      nodeId: "I_154",
+      htmlUrl: remote.html_url,
+      state: "open",
+      sourceUpdatedAt: remote.updated_at,
+      snapshot: {
+        title: "Evidence",
+        body: "Implement",
+        author: "author",
+        labels: [],
+        assignees: [],
+        milestone: null,
+        comments: [],
+      },
+    });
+    updateTaskStatus(
+      imported.taskId,
+      "review",
+      {},
+      { kind: "system", id: "test", displayNameSnapshot: "Test" },
+    );
+    updateGitHubPullRequest({
+      projectId: "project-1",
+      issueNumber: 154,
+      prNumber: 200,
+      prUrl: "https://github.com/owner/repo/pull/200",
+      prState: "open",
+      prChecksStatus: "pending",
+      reviewState: "pending",
+    });
+    const thread = createChatSession({ projectId: "project-1" })!;
+    expect(linkTaskToThread({ threadId: thread.id, taskId: imported.taskId })).toBe(true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("Unexpected network request");
+      }),
+    );
+    vi.spyOn(GitHubClient.prototype, "listIssues").mockResolvedValue([remote]);
+    vi.spyOn(GitHubClient.prototype, "getPullRequest").mockResolvedValue({
+      number: 200,
+      html_url: "https://github.com/owner/repo/pull/200",
+      state: "open",
+      merged_at: null,
+      body: "Closes #154",
+      head: { sha: "abc" },
+    });
+    vi.spyOn(GitHubClient.prototype, "listReviews").mockResolvedValue([
+      {
+        id: 5,
+        state: "CHANGES_REQUESTED",
+        body: "Fix checks",
+        submitted_at: "2026-11-05T00:00:00Z",
+      },
+    ]);
+    vi.spyOn(GitHubClient.prototype, "getCommitChecks").mockResolvedValue("failure");
+    const app = new Hono();
+    app.route("/projects", githubRouter);
+    const response = await app.request("/projects/project-1/github/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(response.status).toBe(200);
+    expect(findTaskById(imported.taskId)?.status).toBe("review");
+    expect(getThreadWorkspace(thread.id)?.tasks[0]).toMatchObject({
+      prChecksStatus: "failure",
+      reviewState: "changes_requested",
+    });
+    expect(broadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task:updated",
+        payload: expect.objectContaining({ id: imported.taskId }),
+      }),
+    );
+  });
+
   it("skips closed orphaned issues and links pull requests to existing tasks", async () => {
     upsertGitHubRepository({
       projectId: "project-1",
@@ -475,6 +595,13 @@ describe("GitHub project routes", () => {
 
     expect(await (await publish()).json()).toMatchObject({ prNumber: 200, prState: "open" });
     expect(await (await publish()).json()).toMatchObject({ prNumber: 200, prState: "open" });
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(broadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task:updated",
+        payload: expect.objectContaining({ id: imported.taskId }),
+      }),
+    );
     const createCalls = fetchMock.mock.calls.filter(
       ([url, init]) => String(url).endsWith("/pulls") && init?.method === "POST",
     );

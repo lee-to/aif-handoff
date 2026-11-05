@@ -933,7 +933,7 @@ export interface ChatSession {
   agentSessionId: string | null;
   runtimeProfileId?: string | null;
   runtimeSessionId?: string | null;
-  status: ThreadStatus;
+  status?: ThreadStatus;
   source: ChatSessionSource;
   createdAt: string;
   updatedAt: string;
@@ -979,7 +979,7 @@ export interface ThreadTaskReference {
 }
 
 export interface ThreadWorkspace {
-  thread: ChatSession;
+  thread: ChatSession & { status: ThreadStatus };
   objectives: ThreadObjective[];
   tasks: ThreadTaskReference[];
 }

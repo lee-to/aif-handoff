@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_REVIEW_ITERATIONS_BOUNDS, TASK_EVENTS, TASK_STATUSES, getEnv } from "@aif/shared";
+import { MAX_REVIEW_ITERATIONS_BOUNDS, TASK_EVENTS, TASK_STATUSES } from "@aif/shared";
 
 export const participantLoginSchema = z.object({
   username: z.string().trim().min(1).max(200),

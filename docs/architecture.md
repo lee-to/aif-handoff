@@ -536,7 +536,7 @@ Runtime index bootstrap creates the following indexes via `CREATE INDEX IF NOT E
 
 ### Chat objectives and task links
 
-Persisted chats can track a status and required or optional objectives. The existing chat panel
+With `AIF_CHAT_THREAD_WORKSPACE_ENABLED=true`, persisted chats can track a status and required or optional objectives. The existing chat panel
 creates empty chats without runtime execution and links same-project tasks to objectives.
 Each task can be linked to one chat; moving it requires an explicit unlink. Task stages and
 GitHub PR evidence remain owned by their existing workflows.

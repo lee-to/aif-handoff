@@ -197,6 +197,7 @@ export function reportWebSocketAuthenticationFailure(): void {
 }
 
 export interface SettingsResponse {
+  chatThreadWorkspaceEnabled?: boolean;
   useSubagents: boolean;
   maxReviewIterations: number;
   autoReviewStrategy: "full_re_review" | "closure_first";

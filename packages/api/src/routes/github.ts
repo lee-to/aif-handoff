@@ -16,6 +16,8 @@ import {
   updateTaskStatus,
   upsertGitHubRepository,
 } from "@aif/data";
+import { broadcast } from "../ws.js";
+import { toTaskBroadcastPayload } from "../repositories/tasks.js";
 import { jsonValidator } from "../middleware/zodValidator.js";
 import { githubConnectSchema, githubPublishSchema, githubSyncSchema } from "../schemas.js";
 import {
@@ -32,6 +34,7 @@ import {
 import type { ParticipantApiEnv } from "../middleware/participantAuth.js";
 
 const log = logger("github-routes");
+const THREAD_WORKSPACE_ENABLED = getEnv().AIF_CHAT_THREAD_WORKSPACE_ENABLED;
 const REVIEW_MARKER = "<!-- aif-github-review -->";
 
 export const githubRouter = new Hono<ParticipantApiEnv>();
@@ -228,6 +231,13 @@ githubRouter.post("/:id/github/sync", jsonValidator(githubSyncSchema), async (c)
           );
         }
       }
+      if (THREAD_WORKSPACE_ENABLED) {
+        const task = findTaskById(result.taskId);
+        if (task) {
+          broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(task) });
+          log.debug({ projectId, taskId: task.id }, "Broadcast GitHub task evidence after sync");
+        }
+      }
     }
     for (const existing of existingByNumber.values()) {
       if (!synchronizedNumbers.has(existing.issueNumber)) {
@@ -326,6 +336,10 @@ githubRouter.post(
         reviewState: "pending",
         reviewFingerprint: fingerprint,
       });
+      if (THREAD_WORKSPACE_ENABLED) {
+        broadcast({ type: "task:updated", payload: toTaskBroadcastPayload(task) });
+        log.debug({ projectId, taskId }, "Broadcast GitHub task evidence after publication");
+      }
       return c.json(linked);
     } catch (error) {
       return githubErrorResponse(c, error);

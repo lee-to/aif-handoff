@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { githubIssues, projects, tasks } from "@aif/shared";
+import { githubIssues, projects, tasks, resetEnvCache } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 
 const testDb = { current: createTestDb() };
@@ -10,6 +10,13 @@ vi.mock("@aif/shared/server", async (importOriginal) => {
     ...actual,
     getDb: () => testDb.current,
   };
+});
+
+vi.stubEnv("AIF_CHAT_THREAD_WORKSPACE_ENABLED", "true");
+resetEnvCache();
+afterAll(() => {
+  vi.unstubAllEnvs();
+  resetEnvCache();
 });
 
 const {

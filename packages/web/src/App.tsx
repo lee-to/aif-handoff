@@ -10,6 +10,7 @@ import { useProjectTaskOverviews, useProjects } from "./hooks/useProjects";
 import { useTasks } from "./hooks/useTasks";
 import { useAuth } from "./hooks/useAuth";
 import { useTheme } from "./hooks/useTheme";
+import { useSettings } from "./hooks/useSettings";
 import { useKeyboardShortcut } from "./hooks/useKeyboardShortcut";
 import { ChatBubble } from "./components/chat/ChatBubble";
 import { ChatPanel } from "./components/chat/ChatPanel";
@@ -66,6 +67,7 @@ function AppContent({
   useWebSocket(true);
   useCommitToasts();
   const { theme, toggleTheme } = useTheme();
+  const { data: settings } = useSettings();
   const { data: projects } = useProjects();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     () => readInitialSelection().projectId,
@@ -260,6 +262,7 @@ function AppContent({
         <>
           <ChatPanel
             key={project.id}
+            threadWorkspaceEnabled={settings?.chatThreadWorkspaceEnabled ?? false}
             canManageTaskLinks={canManageConfiguration}
             isOpen={chatOpen}
             projectId={project.id}

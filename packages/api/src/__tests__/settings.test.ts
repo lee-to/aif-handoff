@@ -589,3 +589,17 @@ describe("settings overview — GitHub project clone flag", () => {
     expect((await buildSettingsOverview()).githubProjectCloneEnabled).toBe(false);
   });
 });
+
+describe("chat workspace feature setting", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetEnvCache();
+  });
+  it("reports the server-owned rollout setting", async () => {
+    for (const enabled of [true, false]) {
+      vi.stubEnv("AIF_CHAT_THREAD_WORKSPACE_ENABLED", String(enabled));
+      resetEnvCache();
+      expect((await buildSettingsOverview()).chatThreadWorkspaceEnabled).toBe(enabled);
+    }
+  });
+});

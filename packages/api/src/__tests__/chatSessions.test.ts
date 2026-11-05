@@ -123,6 +123,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
   return {
     ...actual,
     getEnv: () => ({
+      AIF_CHAT_THREAD_WORKSPACE_ENABLED: true,
       AGENT_BYPASS_PERMISSIONS: false,
       AIF_DEFAULT_RUNTIME_ID: "claude",
       AIF_DEFAULT_PROVIDER_ID: "anthropic",

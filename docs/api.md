@@ -62,6 +62,7 @@ Returns frontend-visible defaults and runtime readiness metadata.
   "useSubagents": false,
   "maxReviewIterations": 3,
   "autoReviewStrategy": "full_re_review",
+  "chatThreadWorkspaceEnabled": false,
   "githubProjectCloneEnabled": false,
   "githubIssuePrEnabled": false,
   "runtimeReadiness": {
@@ -88,6 +89,7 @@ Returns frontend-visible defaults and runtime readiness metadata.
 ```
 
 `autoReviewStrategy` is the resolved global auto-review mode (`full_re_review` or `closure_first`).
+`chatThreadWorkspaceEnabled` reflects the server rollout flag and controls the chat workspace UI.
 
 ### App Runtime Defaults
 
@@ -1606,7 +1608,7 @@ For local Codex runtimes, session discovery uses the indexed `codex_sessions` re
 
 `POST` and `PUT` accept `runtimeProfileId` as an optional field. The value must be either a global profile or one owned by the same project.
 
-The project workspace treats persisted chat sessions as threads. A thread has an independent
+When `AIF_CHAT_THREAD_WORKSPACE_ENABLED=true` (default `false`), the project workspace treats persisted chat sessions as threads. Workspace routes return `403 feature_disabled` while disabled; existing session creation skips runtime discovery, and session metadata updates ignore `status`. A thread has an independent
 `status` (`open`, `wip`, `waiting`, `blocked`, or `done`), ordered objectives, and optional task
 links. A task can belong to at most one thread; unlink it before linking it to another thread.
 Linking rejects tasks from another project and objectives from another thread. `GET .../workspace` returns each linked task together with any
@@ -1639,9 +1641,9 @@ reopen a required objective.
 
 `chat:workspace_updated` carries `{ id: <chat session ID> }` after objective, task-link,
 or persisted chat metadata changes. Clients invalidate chat-session lists and workspace queries.
-Task update, move, and deletion events also refresh linked task/PR evidence.
-The existing chat panel exposes objectives and task links; Kanban remains the default project view.
-“New chat” saves an empty session immediately, without invoking a runtime.
+Task update, move, and deletion events also refresh linked task/PR evidence. GitHub sync and PR publication emit `task:updated` after evidence writes when the workspace flag is enabled, including changes to checks/reviews that leave the task stage unchanged.
+With the flag enabled, the existing chat panel exposes objectives and task links; Kanban remains the default project view.
+With the flag enabled, “New chat” saves an empty session immediately, without invoking a runtime.
 
 ### Permissions
 

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { jsonValidator } from "../middleware/zodValidator.js";
 import { z } from "zod";
 import {
@@ -181,6 +181,7 @@ Set "isFix" to true when the user describes a bug, defect, or asks to fix/repair
 `.trim();
 
 const log = logger("chat-route");
+const THREAD_WORKSPACE_ENABLED = getEnv().AIF_CHAT_THREAD_WORKSPACE_ENABLED;
 const API_RUNTIME_LOG = "api-runtime";
 type CreateChatSessionPayload = z.infer<typeof createChatSessionSchema>;
 type UpdateChatSessionPayload = z.infer<typeof updateChatSessionSchema>;
@@ -349,7 +350,7 @@ async function loadIndexedCodexVirtualSession(input: {
     agentSessionId: null,
     runtimeProfileId: input.runtimeProfileId,
     runtimeSessionId: meta.id,
-    status: "open",
+    ...(THREAD_WORKSPACE_ENABLED ? { status: "open" as const } : {}),
     source: "agent",
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
@@ -824,11 +825,11 @@ chatRouter.get("/sessions", async (c) => {
             context.resolvedProfile.transport,
           ),
           projectId,
-          title: (session.title || session.previewText || "Untitled").slice(0, 200),
+          title: session.title || session.previewText || "Untitled",
           agentSessionId: null,
           runtimeProfileId: context.resolvedProfile.profileId,
           runtimeSessionId: session.sessionId,
-          status: "open",
+          ...(THREAD_WORKSPACE_ENABLED ? { status: "open" as const } : {}),
           source: runtimeSourceFromTransport(context.resolvedProfile.transport),
           createdAt: session.sourceCreatedAt ?? session.createdAt,
           updatedAt: session.sourceUpdatedAt ?? session.updatedAt,
@@ -897,11 +898,11 @@ chatRouter.get("/sessions", async (c) => {
               context.resolvedProfile.transport,
             ),
             projectId,
-            title: (session.title || "Untitled").slice(0, 200),
+            title: session.title || "Untitled",
             agentSessionId: null,
             runtimeProfileId: context.resolvedProfile.profileId,
             runtimeSessionId: session.id,
-            status: "open",
+            ...(THREAD_WORKSPACE_ENABLED ? { status: "open" as const } : {}),
             source: runtimeSourceFromTransport(context.resolvedProfile.transport),
             createdAt: session.createdAt,
             updatedAt: session.updatedAt,
@@ -948,7 +949,7 @@ chatRouter.post("/sessions", jsonValidator(createChatSessionSchema), async (c) =
   if (runtimeValidation) {
     return c.json(runtimeValidation, 400);
   }
-  if (body.runtimeSessionId) {
+  if (THREAD_WORKSPACE_ENABLED && body.runtimeSessionId) {
     const project = findProjectById(body.projectId);
     if (!project) return c.json({ error: "Project not found" }, 404);
     const { context } = await resolveChatRuntimeAdapter(
@@ -1065,7 +1066,7 @@ chatRouter.get("/sessions/:id", async (c) => {
         agentSessionId: null,
         runtimeProfileId: lookupContext.runtimeProfileId,
         runtimeSessionId: info.id,
-        status: "open",
+        ...(THREAD_WORKSPACE_ENABLED ? { status: "open" as const } : {}),
         source: runtimeSourceFromTransport(lookupContext.transport ?? RuntimeTransport.API),
         createdAt: info.createdAt,
         updatedAt: info.updatedAt,
@@ -1084,25 +1085,40 @@ chatRouter.get("/sessions/:id", async (c) => {
   return c.json(toChatSessionResponse(row));
 });
 
+const requireThreadWorkspace: MiddlewareHandler = async (c, next) => {
+  if (!THREAD_WORKSPACE_ENABLED) {
+    log.debug({ path: c.req.path }, "Chat workspace route disabled by rollout flag");
+    return c.json({ error: "Chat thread workspace is disabled", code: "feature_disabled" }, 403);
+  }
+  await next();
+};
+
 // GET /chat/sessions/:id/workspace
-chatRouter.get("/sessions/:id/workspace", (c) => {
+chatRouter.get("/sessions/:id/workspace", requireThreadWorkspace, (c) => {
   const workspace = getThreadWorkspace(c.req.param("id"));
   return workspace ? c.json(workspace) : c.json({ error: "Thread not found" }, 404);
 });
 
 // POST /chat/sessions/:id/objectives
-chatRouter.post("/sessions/:id/objectives", jsonValidator(createThreadObjectiveSchema), (c) => {
-  const objective = createThreadObjective({
-    threadId: c.req.param("id"),
-    ...(c.req.valid("json") as CreateThreadObjectivePayload),
-  });
-  if (objective) broadcast({ type: "chat:workspace_updated", payload: { id: c.req.param("id") } });
-  return objective ? c.json(objective, 201) : c.json({ error: "Thread not found" }, 404);
-});
+chatRouter.post(
+  "/sessions/:id/objectives",
+  requireThreadWorkspace,
+  jsonValidator(createThreadObjectiveSchema),
+  (c) => {
+    const objective = createThreadObjective({
+      threadId: c.req.param("id"),
+      ...(c.req.valid("json") as CreateThreadObjectivePayload),
+    });
+    if (objective)
+      broadcast({ type: "chat:workspace_updated", payload: { id: c.req.param("id") } });
+    return objective ? c.json(objective, 201) : c.json({ error: "Thread not found" }, 404);
+  },
+);
 
 // PUT /chat/sessions/:id/objectives/:objectiveId
 chatRouter.put(
   "/sessions/:id/objectives/:objectiveId",
+  requireThreadWorkspace,
   jsonValidator(updateThreadObjectiveSchema),
   (c) => {
     const objective = updateThreadObjective(
@@ -1117,33 +1133,38 @@ chatRouter.put(
 );
 
 // PUT /chat/sessions/:id/tasks/:taskId
-chatRouter.put("/sessions/:id/tasks/:taskId", jsonValidator(linkThreadTaskSchema), (c) => {
-  const thread = findChatSessionById(c.req.param("id"));
-  const task = findTaskById(c.req.param("taskId"));
-  if (!thread || !task) return c.json({ error: "Thread or task not found" }, 404);
-  if (thread.projectId !== task.projectId) {
-    return c.json({ error: "Task and thread must belong to the same project" }, 400);
-  }
-  const body = c.req.valid("json") as LinkThreadTaskPayload;
-  const linked = linkTaskToThread({
-    threadId: thread.id,
-    taskId: task.id,
-    objectiveId: body.objectiveId,
-  });
-  if (linked) broadcast({ type: "chat:workspace_updated", payload: { id: thread.id } });
-  return linked
-    ? c.json(getThreadWorkspace(thread.id))
-    : c.json(
-        {
-          error:
-            "Task is already linked to another thread or objective does not belong to this thread",
-        },
-        400,
-      );
-});
+chatRouter.put(
+  "/sessions/:id/tasks/:taskId",
+  requireThreadWorkspace,
+  jsonValidator(linkThreadTaskSchema),
+  (c) => {
+    const thread = findChatSessionById(c.req.param("id"));
+    const task = findTaskById(c.req.param("taskId"));
+    if (!thread || !task) return c.json({ error: "Thread or task not found" }, 404);
+    if (thread.projectId !== task.projectId) {
+      return c.json({ error: "Task and thread must belong to the same project" }, 400);
+    }
+    const body = c.req.valid("json") as LinkThreadTaskPayload;
+    const linked = linkTaskToThread({
+      threadId: thread.id,
+      taskId: task.id,
+      objectiveId: body.objectiveId,
+    });
+    if (linked) broadcast({ type: "chat:workspace_updated", payload: { id: thread.id } });
+    return linked
+      ? c.json(getThreadWorkspace(thread.id))
+      : c.json(
+          {
+            error:
+              "Task is already linked to another thread or objective does not belong to this thread",
+          },
+          400,
+        );
+  },
+);
 
 // DELETE /chat/sessions/:id/tasks/:taskId
-chatRouter.delete("/sessions/:id/tasks/:taskId", (c) => {
+chatRouter.delete("/sessions/:id/tasks/:taskId", requireThreadWorkspace, (c) => {
   const removed = unlinkTaskFromThread(c.req.param("id"), c.req.param("taskId"));
   if (removed) broadcast({ type: "chat:workspace_updated", payload: { id: c.req.param("id") } });
   return removed ? c.body(null, 204) : c.json({ error: "Task link not found" }, 404);
@@ -1311,35 +1332,44 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 });
 
 // PUT /chat/sessions/:id
-chatRouter.put("/sessions/:id", jsonValidator(updateChatSessionSchema), async (c) => {
-  const id = c.req.param("id");
-  const body = c.req.valid("json") as UpdateChatSessionPayload;
-  log.debug("PUT /chat/sessions/%s title=%s", id, body.title);
-  const existing = findChatSessionById(id);
-  if (!existing) {
-    return c.json({ error: "Chat session not found" }, 404);
-  }
+chatRouter.put(
+  "/sessions/:id",
+  jsonValidator(
+    THREAD_WORKSPACE_ENABLED
+      ? updateChatSessionSchema
+      : updateChatSessionSchema.omit({ status: true }),
+  ),
+  async (c) => {
+    const id = c.req.param("id");
+    const body = c.req.valid("json") as UpdateChatSessionPayload;
+    log.debug("PUT /chat/sessions/%s title=%s", id, body.title);
+    const existing = findChatSessionById(id);
+    if (!existing) {
+      return c.json({ error: "Chat session not found" }, 404);
+    }
 
-  const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
-    projectId: existing.projectId,
-    selections: { runtimeProfileId: body.runtimeProfileId },
-  });
-  if (runtimeValidation) {
-    return c.json(runtimeValidation, 400);
-  }
+    const runtimeValidation = validateProjectScopedRuntimeProfileSelections({
+      projectId: existing.projectId,
+      selections: { runtimeProfileId: body.runtimeProfileId },
+    });
+    if (runtimeValidation) {
+      return c.json(runtimeValidation, 400);
+    }
 
-  const row = updateChatSession(id, {
-    title: body.title,
-    status: body.status,
-    runtimeProfileId: body.runtimeProfileId,
-    runtimeSessionId: body.runtimeSessionId,
-  });
-  if (!row && body.status === "done") {
-    return c.json({ error: "Complete or drop required objectives before closing" }, 409);
-  }
-  if (row) broadcast({ type: "chat:workspace_updated", payload: { id } });
-  return c.json(row ? toChatSessionResponse(row) : null);
-});
+    const row = updateChatSession(id, {
+      title: body.title,
+      status: THREAD_WORKSPACE_ENABLED ? body.status : undefined,
+      runtimeProfileId: body.runtimeProfileId,
+      runtimeSessionId: body.runtimeSessionId,
+    });
+    if (THREAD_WORKSPACE_ENABLED && !row && body.status === "done") {
+      return c.json({ error: "Complete or drop required objectives before closing" }, 409);
+    }
+    if (THREAD_WORKSPACE_ENABLED && row)
+      broadcast({ type: "chat:workspace_updated", payload: { id } });
+    return c.json(row ? toChatSessionResponse(row) : null);
+  },
+);
 
 // DELETE /chat/sessions/:id
 chatRouter.delete("/sessions/:id", async (c) => {

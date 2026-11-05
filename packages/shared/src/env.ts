@@ -193,6 +193,7 @@ const envSchema = z.object({
       return value;
     }, z.boolean())
     .default(false),
+  AIF_CHAT_THREAD_WORKSPACE_ENABLED: booleanEnvSchema.default(false),
   AIF_USAGE_LIMITS_ENABLED: z
     .preprocess((value) => {
       if (typeof value === "string") {

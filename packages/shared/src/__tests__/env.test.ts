@@ -6,6 +6,16 @@ describe("env validation", () => {
     vi.resetModules();
   });
 
+  it("defaults the chat workspace off and accepts explicit boolean rollout values", () => {
+    expect(validateEnv({}).AIF_CHAT_THREAD_WORKSPACE_ENABLED).toBe(false);
+    expect(
+      validateEnv({ AIF_CHAT_THREAD_WORKSPACE_ENABLED: "true" }).AIF_CHAT_THREAD_WORKSPACE_ENABLED,
+    ).toBe(true);
+    expect(
+      validateEnv({ AIF_CHAT_THREAD_WORKSPACE_ENABLED: "false" }).AIF_CHAT_THREAD_WORKSPACE_ENABLED,
+    ).toBe(false);
+  });
+
   it("should pass with valid config", () => {
     const result = validateEnv({
       ANTHROPIC_API_KEY: "sk-ant-test-key",

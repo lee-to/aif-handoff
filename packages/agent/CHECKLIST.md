@@ -20,5 +20,6 @@ Run through this list whenever you touch anything under `packages/agent/`.
 - [ ] Exercise both states of `AIF_AGENT_ATTEMPT_RECOVERY_ENABLED` (default false): unscoped execution/backoff reset when off; attempt-scoped execution and retained retry debt when on. Started-stage tracking and queue exclusion must work in both modes. Superseded first-activity retries must not invoke the adapter again.
 - [ ] Recovery tests must start/claim executions before making them stale, preserve retry debt across automatic backoff, and prove old results/heartbeats/cleanup cannot alter a newer attempt. Queue age alone is not execution liveness.
 - [ ] If you touched first-activity watchdog logic, verify streamed runtime events (not only tool/subagent hooks) count as activity for tool-less workflows.
+- [ ] Verify remediation must ship behind `AIF_AGENT_VERIFY_REMEDIATION_ENABLED=false`, preserving legacy Verify behavior while disabled. When enabled, read only the final gate, allow only the exact `/aif-fix` command, preserve all reports, use fresh sessions, and manually block failed mutating runs without automatic retries.
 - [ ] `npm run lint`
 - [ ] `npm test`

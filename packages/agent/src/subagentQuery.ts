@@ -372,6 +372,8 @@ export interface SubagentQueryOptions {
   queryStartTimeoutMs?: number;
   /** Optional override for tests/tuning: delay before retrying after query_start_timeout. */
   queryStartRetryDelayMs?: number;
+  /** Disable watchdog restarts for workflows that may have partially modified files. */
+  retryOnStall?: boolean;
   /** AbortController for cancelling a running query from outside (e.g. stage timeout). */
   abortController?: AbortController;
   /** Optional explicit workflow spec. If omitted, a default one is generated from options. */
@@ -993,8 +995,9 @@ export async function executeSubagentQuery(
           : baseFirstActivityTimeoutMs;
     let result: Awaited<ReturnType<RuntimeAdapter["run"]>> | undefined;
 
+    const maxStallRetries = options.retryOnStall === false ? 0 : FIRST_ACTIVITY_MAX_RETRIES;
     // Retry loop: if agent stalls (no runtime activity after start), kill and restart
-    for (let attempt = 0; attempt <= FIRST_ACTIVITY_MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxStallRetries; attempt++) {
       latestLimitSnapshot = null;
       // Fresh AbortController per attempt — AbortController is single-use
       const attemptAbort = new AbortController();
@@ -1033,11 +1036,11 @@ export async function executeSubagentQuery(
         logActivity(
           taskId,
           "Agent",
-          `${agentName} stalled — no runtime activity within ${timeoutSec}s after start (attempt ${attempt + 1}/${FIRST_ACTIVITY_MAX_RETRIES + 1}), restarting`,
+          `${agentName} stalled — no runtime activity within ${timeoutSec}s after start (attempt ${attempt + 1}/${maxStallRetries + 1})`,
         );
         log.warn(
           { taskId, agentName, firstActivityTimeoutMs, attempt: attempt + 1 },
-          "First-activity watchdog triggered: killing and restarting agent",
+          "First-activity watchdog triggered: aborting agent",
         );
       });
 
@@ -1129,10 +1132,10 @@ export async function executeSubagentQuery(
         watchdog.clear();
         assertTaskAttemptCurrent(taskId);
         if (err instanceof SupersededTaskAttemptError) throw err;
-        if (stalledByWatchdog && attempt < FIRST_ACTIVITY_MAX_RETRIES) {
+        if (stalledByWatchdog && attempt < maxStallRetries) {
           // Agent stalled — kill and retry
           log.info(
-            { taskId, agentName, attempt: attempt + 1, maxRetries: FIRST_ACTIVITY_MAX_RETRIES },
+            { taskId, agentName, attempt: attempt + 1, maxRetries: maxStallRetries },
             "Restarting agent after first-activity stall",
           );
           continue;
@@ -1144,7 +1147,7 @@ export async function executeSubagentQuery(
 
     if (!result) {
       throw new Error(
-        `${agentName}: all ${FIRST_ACTIVITY_MAX_RETRIES + 1} attempts stalled without runtime activity`,
+        `${agentName}: all ${maxStallRetries + 1} attempts stalled without runtime activity`,
       );
     }
 

@@ -48,6 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Opt-in same-project admission across stages for isolated task worktrees, with per-project and global capacity checks.
+
 - Sheet portal rendering and dialog overflow on small viewports
 - Auto-focus chat input on new session creation
 - Hide empty message bubble when response is only an action block

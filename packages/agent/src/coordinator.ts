@@ -1,3 +1,5 @@
+import { existsSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import {
   clearTaskActiveRuntimeSelection,
   clearTaskRuntimeLimitSnapshot,
@@ -276,10 +278,21 @@ async function runStageWithTimeout(
   let runnerSettled = false;
 
   try {
+    const stagePromise = Promise.resolve(runner(taskId, projectRoot)).finally(() => {
+      runnerSettled = true;
+    });
+    const runningTask = runningTasks.get(taskId);
+    if (runningTask && !runningTask.worktreePath) {
+      // Full planning provisions its worktree synchronously before its first AI await.
+      try {
+        runningTask.worktreePath = findTaskById(taskId)?.worktreePath ?? null;
+      } catch (err) {
+        // Keep the running stage awaited; a missing snapshot conservatively prevents overlap.
+        log.warn({ taskId, err }, "Could not capture the running task worktree");
+      }
+    }
     await withTimeout(
-      Promise.resolve(runner(taskId, projectRoot)).finally(() => {
-        runnerSettled = true;
-      }),
+      stagePromise,
       STAGE_RUN_TIMEOUT_MS,
       `Stage ${stageLabel} timed out after ${STAGE_RUN_TIMEOUT_MS}ms`,
     );
@@ -1099,6 +1112,99 @@ export function processAutoQueueAdvance(): number {
 let activePollPromise: Promise<void> | null = null;
 let followUpPollRequested = false;
 let activePollCycles = 0;
+const runningTasks = new Map<string, Pick<TaskRow, "id" | "projectId" | "worktreePath">>();
+
+function isIsolatedProjectAdmissionEnabled(): boolean {
+  return (
+    env.AIF_AGENT_ISOLATED_PROJECT_ADMISSION_ENABLED &&
+    env.AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED &&
+    env.AIF_TASK_WORKTREES_ENABLED
+  );
+}
+
+function isolatedWorktreePath(worktreePath: string | null, projectRoot: string): string | null {
+  if (!worktreePath) return null;
+  try {
+    const path = realpathSync(worktreePath);
+    return path !== realpathSync(projectRoot) && existsSync(join(path, ".git")) ? path : null;
+  } catch (err) {
+    log.debug(
+      { worktreePath, projectRoot, err },
+      "Task worktree is unavailable for concurrent admission",
+    );
+    return null;
+  }
+}
+
+function projectAdmissionFilter(
+  projectId: string,
+): ((task: TaskRow, stage: StatusTransition) => boolean) | null {
+  if (!isIsolatedProjectAdmissionEnabled()) return () => true;
+  const project = findProjectById(projectId);
+  const activeTasks = [...runningTasks.values()].filter((active) => active.projectId === projectId);
+  if (activeTasks.length === 0) return () => true;
+  if (
+    !project?.parallelEnabled ||
+    !projectSupportsTaskWorktrees(project.rootPath) ||
+    activeTasks.length >= env.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT
+  )
+    return null;
+  const activePaths = activeTasks.map((active) =>
+    isolatedWorktreePath(active.worktreePath, project.rootPath),
+  );
+  if (
+    activePaths.some((path) => path === null) ||
+    new Set(activePaths).size !== activePaths.length
+  ) {
+    return null;
+  }
+  return (task, stage) => {
+    // An expired DB claim must not start a second local execution of the same task.
+    if (runningTasks.has(task.id)) return false;
+    if (task.worktreePath) {
+      const path = isolatedWorktreePath(task.worktreePath, project.rootPath);
+      return path !== null && !activePaths.includes(path);
+    }
+    // Only full, unbound non-fix planning provisions a worktree before running AI.
+    return (
+      stage.label === "planner" && !task.isFix && task.plannerMode === "full" && !task.branchName
+    );
+  };
+}
+
+function findRunnableProjectCandidates(
+  projectId: string,
+  stage: StatusTransition,
+  pageSize: number,
+  accepts: (task: TaskRow) => boolean,
+): TaskRow[] {
+  const paginate = isIsolatedProjectAdmissionEnabled();
+  for (let offset = 0; ; offset += pageSize) {
+    const page = findCoordinatorTaskCandidatesForProject(projectId, stage.label, pageSize, offset);
+    const runnable = page.filter(accepts);
+    if (!paginate || runnable.length > 0 || page.length < pageSize) return runnable;
+  }
+}
+
+function canAdmitBusyProject(projectId: string): boolean {
+  if (!isIsolatedProjectAdmissionEnabled()) return false;
+  const project = findProjectById(projectId);
+  if (
+    !project?.parallelEnabled ||
+    !projectSupportsTaskWorktrees(project.rootPath) ||
+    projectRequiresSerialExecution(project)
+  )
+    return false;
+  const candidateWindow = Math.min(env.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT * 5, 50);
+  const canRun = projectAdmissionFilter(projectId);
+  if (!canRun) return false;
+  return PIPELINE.some(
+    (stage) =>
+      findRunnableProjectCandidates(projectId, stage, candidateWindow, (task) =>
+        canRun(task, stage),
+      ).length > 0,
+  );
+}
 
 /**
  * A poll cycle only settles once every stage it started has finished, and an
@@ -1109,8 +1215,8 @@ let activePollCycles = 0;
  * while stage slots are free — `stageSemaphore` stays the real concurrency
  * limit, claims are atomic, and lanes revalidate candidates after acquiring a
  * permit, so overlapping cycles cannot double-claim a task. Project-local stage
- * order still holds: an overlapping cycle skips every project that already
- * holds a stage (see `runPollCycle`), so only idle projects are picked up.
+ * order still holds for shared checkouts. Busy projects may opt into concurrent
+ * admission only when their tasks have distinct worktrees (see `runPollCycle`).
  */
 const MAX_CONCURRENT_POLL_CYCLES = 8;
 
@@ -1195,15 +1301,12 @@ async function runPollCycle(
     return cached;
   }
 
-  // An overlapping cycle runs while an earlier cycle still drains its stages.
-  // Skipping projects that already hold a stage keeps project-local stage order
-  // intact — a planner and an implementer of the same project must never share
-  // one working tree. The skip happens inside the query: filtering a fixed
-  // window afterwards would let busy projects consume every row and hide an
-  // idle project behind them, so a free global slot would stay unused until a
-  // long stage finished. The snapshot is exact — reading it and running the
-  // query are synchronous, with no await in between for a stage to settle.
-  const excludeProjectIds = options.overlapping ? stageSemaphore.activeProjectIds() : [];
+  // Exclude busy projects before the SQL limit so they cannot hide an idle lane.
+  // The isolated-admission rollout permits only work that can run in a distinct
+  // task worktree; shared checkouts preserve project-local stage order.
+  const excludeProjectIds = options.overlapping
+    ? stageSemaphore.activeProjectIds().filter((projectId) => !canAdmitBusyProject(projectId))
+    : [];
   const projectIds = listCoordinatorActionableProjectIds(maxProjectLanes, { excludeProjectIds });
   if (projectIds.length === 0) {
     log.debug({ overlapping: options.overlapping }, "No actionable project lanes");
@@ -1228,11 +1331,15 @@ async function runPollCycle(
       const stageKey = `${projectId}:${stage.label}`;
 
       const candidateWindow = Math.min(Math.max(projectMax * 5, projectMax), 50);
-      const candidates = findCoordinatorTaskCandidatesForProject(
-        projectId,
-        stage.label,
-        candidateWindow,
-      ).filter((t) => !failedInCycle.has(t.id));
+      const canRun = projectAdmissionFilter(projectId);
+      const candidates = canRun
+        ? findRunnableProjectCandidates(
+            projectId,
+            stage,
+            candidateWindow,
+            (task) => !failedInCycle.has(task.id) && canRun(task, stage),
+          )
+        : [];
 
       if (candidates.length === 0) {
         log.debug({ stage: stage.label, projectId }, "No tasks to process in project lane");
@@ -1300,6 +1407,7 @@ async function runPollCycle(
                 "[FIX:149] Failed to release coordinator task claim",
               );
             } finally {
+              if (claimedTask) runningTasks.delete(claimedTask.id);
               stageSemaphore.release(stageKey);
             }
           };
@@ -1319,6 +1427,17 @@ async function runPollCycle(
             }
 
             if (blockCandidateIfRuntimeLimited(task, stage)) {
+              continue;
+            }
+
+            // Re-read isolation after waiting for capacity; queued candidates may have changed.
+            const currentTask = isIsolatedProjectAdmissionEnabled() ? findTaskById(task.id) : task;
+            const canRunNow = projectAdmissionFilter(projectId);
+            if (!currentTask || !canRunNow || !canRunNow(currentTask, stage)) {
+              log.debug(
+                { taskId: task.id, projectId, stage: stage.label },
+                "Task is waiting for an isolated project slot",
+              );
               continue;
             }
 
@@ -1351,6 +1470,13 @@ async function runPollCycle(
               "[FIX:149] Task revalidated and claimed for processing",
             );
 
+            if (isIsolatedProjectAdmissionEnabled()) {
+              runningTasks.set(executionTask.id, {
+                id: executionTask.id,
+                projectId,
+                worktreePath: executionTask.worktreePath,
+              });
+            }
             const execute = () => processOneTask(executionTask, stage);
             const execution = ATTEMPT_RECOVERY_ENABLED
               ? withTaskAttempt(

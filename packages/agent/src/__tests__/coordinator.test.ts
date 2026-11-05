@@ -7,14 +7,16 @@ import {
   runtimeProfiles,
   getEnv,
   resetEnvCache,
+  ensureTaskWorktree,
 } from "@aif/shared";
 import { createTestDb } from "@aif/shared/server";
 import { RuntimeExecutionError } from "@aif/runtime";
 import { eq } from "drizzle-orm";
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createGitTestRoot } from "./gitTestUtils.js";
+import { startPollScheduler, type PollScheduler } from "../pollScheduler.js";
 
 // Flag defaults to false (opt-in). Coordinator tests assert on persisted
 // limitSnapshot, which requires the gate to be open.
@@ -2156,6 +2158,247 @@ describe("coordinator", () => {
       restoreOverlap();
     }
   });
+
+  it.each([
+    { scenario: "new full planner", admitted: true },
+    { scenario: "mixed planners beyond two windows", admitted: true },
+    { scenario: "timer-only full planner", admitted: true },
+    { scenario: "expired active claim", admitted: true },
+    { scenario: "persisted worktree", admitted: true },
+    { scenario: "rollout off", admitted: false },
+    { scenario: "worktrees off", admitted: false },
+    { scenario: "overlap off", admitted: false },
+    { scenario: "sequential project", admitted: false },
+    { scenario: "legacy active task", admitted: false },
+    { scenario: "shared active task", admitted: false },
+    { scenario: "missing task worktree", admitted: false },
+    { scenario: "isolation changed after permit", admitted: false },
+    { scenario: "active path changed in DB", admitted: false },
+    { scenario: "fast planner", admitted: false },
+    { scenario: "fix planner", admitted: false },
+    { scenario: "shared task worktree", admitted: false },
+    { scenario: "aliased task worktree", admitted: false },
+    { scenario: "project root as worktree", admitted: false },
+    { scenario: "project cap reached", admitted: false },
+    { scenario: "global cap reached", admitted: false },
+  ])(
+    "should admit same-project work only with isolation: $scenario",
+    async ({ scenario, admitted }) => {
+      const db = testDb.current;
+      const coordinatorEnv = getEnv();
+      const previous = { ...coordinatorEnv };
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(null, { status: 200 }));
+      Object.assign(coordinatorEnv, {
+        AIF_AGENT_ISOLATED_PROJECT_ADMISSION_ENABLED: scenario !== "rollout off",
+        AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: scenario !== "overlap off",
+        AIF_TASK_WORKTREES_ENABLED: scenario !== "worktrees off",
+        COORDINATOR_MAX_CONCURRENT_TASKS: scenario === "global cap reached" ? 1 : 4,
+        COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT: scenario === "project cap reached" ? 1 : 3,
+      });
+      const rootPath = createGitRoot("coordinator-isolated-admission-");
+      const busy = ensureTaskWorktree({ projectRoot: rootPath, taskId: "busy", title: "Busy" });
+      const next = ensureTaskWorktree({ projectRoot: rootPath, taskId: "next", title: "Next" });
+      const alias = `${rootPath}-alias`;
+      symlinkSync(busy.worktreePath!, alias);
+      db.insert(projects)
+        .values({
+          id: "isolated-project",
+          name: "Isolated",
+          rootPath,
+          parallelEnabled: scenario !== "sequential project",
+          autoQueueMode: true,
+        })
+        .run();
+      db.insert(tasks)
+        .values({
+          id: "busy",
+          projectId: "isolated-project",
+          title: "Busy",
+          status: "plan_ready",
+          branchName: scenario === "shared active task" ? null : busy.branchName,
+          worktreePath: ["legacy active task", "shared active task"].includes(scenario)
+            ? null
+            : busy.worktreePath,
+        })
+        .run();
+      let releaseBusy!: () => void;
+      const busyGate = new Promise<void>((resolve) => {
+        releaseBusy = resolve;
+      });
+      vi.mocked(runImplementer).mockImplementation(async (id) => {
+        if (id === "busy") await busyGate;
+      });
+      vi.mocked(runPlanner).mockImplementation(async (id) => {
+        if (id !== "next") return;
+        // Match the real planner's synchronous worktree provisioning before its AI call.
+        const task = db.select().from(tasks).where(eq(tasks.id, id)).get()!;
+        if (!task.worktreePath && !task.isFix && task.plannerMode === "full") {
+          db.update(tasks)
+            .set({ branchName: next.branchName, worktreePath: next.worktreePath })
+            .where(eq(tasks.id, id))
+            .run();
+        }
+      });
+      const firstPoll = pollAndProcess();
+      let secondPoll: Promise<void> | undefined;
+      let scheduler: PollScheduler | undefined;
+      const dispatchErrors: unknown[] = [];
+      try {
+        await vi.waitFor(() =>
+          expect(runImplementer).toHaveBeenCalledWith(
+            "busy",
+            ["legacy active task", "shared active task"].includes(scenario)
+              ? rootPath
+              : busy.worktreePath,
+          ),
+        );
+        const worktreePath = ["persisted worktree", "isolation changed after permit"].includes(
+          scenario,
+        )
+          ? next.worktreePath
+          : scenario === "missing task worktree"
+            ? `${rootPath}-missing`
+            : ["shared task worktree", "active path changed in DB"].includes(scenario)
+              ? busy.worktreePath
+              : scenario === "aliased task worktree"
+                ? alias
+                : scenario === "project root as worktree"
+                  ? rootPath
+                  : null;
+        if (scenario === "mixed planners beyond two windows") {
+          db.insert(tasks)
+            .values(
+              Array.from({ length: 31 }, (_, index) => ({
+                id: `unprepared-${index}`,
+                projectId: "isolated-project",
+                title: "Wait for shared checkout",
+                status: "planning" as const,
+                position: index,
+                plannerMode: index % 2 === 0 ? "fast" : "full",
+                isFix: index % 2 !== 0,
+              })),
+            )
+            .run();
+        }
+        db.insert(tasks)
+          .values({
+            id: "next",
+            projectId: "isolated-project",
+            title: "Next",
+            position: 100,
+            status: scenario === "mixed planners beyond two windows" ? "planning" : "backlog",
+            plannerMode: scenario === "fast planner" ? "fast" : "full",
+            isFix: scenario === "fix planner",
+            worktreePath,
+            branchName: worktreePath ? next.branchName : null,
+          })
+          .run();
+        if (scenario === "expired active claim") {
+          db.update(tasks)
+            .set({ lockedUntil: new Date(Date.now() - 1_000).toISOString() })
+            .where(eq(tasks.id, "busy"))
+            .run();
+        }
+        if (scenario === "active path changed in DB") {
+          db.update(tasks)
+            .set({ worktreePath: next.worktreePath })
+            .where(eq(tasks.id, "busy"))
+            .run();
+        }
+        const semaphore = getStageSemaphore();
+        const acquire = semaphore.acquire.bind(semaphore);
+        const acquireSpy =
+          scenario === "isolation changed after permit"
+            ? vi.spyOn(semaphore, "acquire").mockImplementationOnce(async (...args) => {
+                await acquire(...args);
+                db.update(tasks)
+                  .set({ worktreePath: busy.worktreePath })
+                  .where(eq(tasks.id, "next"))
+                  .run();
+              })
+            : undefined;
+        if (scenario === "timer-only full planner") {
+          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+          scheduler = startPollScheduler(
+            async () => {
+              secondPoll = pollAndProcess();
+              try {
+                await secondPoll;
+              } catch (err) {
+                dispatchErrors.push(err);
+              }
+            },
+            10_000,
+            { awaitCallback: !coordinatorEnv.AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED },
+          );
+          await vi.advanceTimersByTimeAsync(10_000);
+        } else {
+          secondPoll = pollAndProcess();
+        }
+        if (admitted) {
+          await vi.waitFor(() =>
+            expect(runPlanner).toHaveBeenCalledWith(
+              "next",
+              scenario === "persisted worktree" ? next.worktreePath : rootPath,
+            ),
+          );
+          await vi.waitFor(() =>
+            expect(db.select().from(tasks).where(eq(tasks.id, "next")).get()?.status).toBe("done"),
+          );
+          expect(vi.mocked(runImplementer).mock.calls.filter(([id]) => id === "busy")).toHaveLength(
+            1,
+          );
+          await secondPoll;
+          expect(db.select().from(tasks).where(eq(tasks.id, "busy")).get()?.status).toBe(
+            "implementing",
+          );
+          expect(runImplementer).toHaveBeenCalledWith("next", next.worktreePath);
+          expect(vi.mocked(runPlanner).mock.calls.filter(([id]) => id === "next")).toHaveLength(1);
+          expect(dispatchErrors).toEqual([]);
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          expect(runPlanner).not.toHaveBeenCalled();
+          if (acquireSpy) {
+            expect(acquireSpy).toHaveBeenCalled();
+            acquireSpy.mockRestore();
+          }
+          // Unsafe oldest work must not hide an idle project behind a one-lane window.
+          if (scenario !== "overlap off" && scenario !== "global cap reached") {
+            Object.assign(coordinatorEnv, { COORDINATOR_MAX_CONCURRENT_PROJECTS: 1 });
+            db.insert(projects)
+              .values({ id: "idle-project", name: "Idle", rootPath: "/tmp/idle" })
+              .run();
+            db.insert(tasks)
+              .values({
+                id: "idle-task",
+                projectId: "idle-project",
+                title: "Idle",
+                status: "review",
+              })
+              .run();
+            await pollAndProcess();
+            expect(runReviewer).toHaveBeenCalledWith("idle-task", "/tmp/idle");
+          }
+        }
+      } finally {
+        scheduler?.stop();
+        if (scheduler) vi.useRealTimers();
+        releaseBusy();
+        await Promise.allSettled([firstPoll, ...(secondPoll ? [secondPoll] : [])]);
+        vi.mocked(runImplementer).mockResolvedValue(undefined);
+        vi.mocked(runPlanner).mockResolvedValue(undefined);
+        Object.assign(coordinatorEnv, previous);
+        fetchSpy.mockRestore();
+        for (const path of [alias, busy.worktreePath!, next.worktreePath!, rootPath]) {
+          rmSync(path, { recursive: true, force: true });
+        }
+      }
+      expect(getActivePollCycleCount()).toBe(0);
+      expect(getStageSemaphore().totalActive()).toBe(0);
+    },
+  );
 
   it("should keep the single-flight poll loop while the rollout flag is off", async () => {
     const db = testDb.current;

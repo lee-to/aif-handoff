@@ -1008,6 +1008,41 @@ describe("data layer", () => {
       expect(candidates[0].id).toBe("p1-task");
     });
 
+    it("pages project candidates deterministically after filtering locked tasks", () => {
+      const db = testDb.current;
+      db.insert(tasks)
+        .values([
+          ...["page-c", "page-a", "page-b"].map((id) => ({
+            id,
+            projectId: "proj-1",
+            title: id,
+            status: "planning" as const,
+            position: 10,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          })),
+          {
+            id: "locked-page-task",
+            projectId: "proj-1",
+            title: "Locked",
+            status: "planning",
+            position: 0,
+            lockedBy: "other",
+            lockedUntil: new Date(Date.now() + 60_000).toISOString(),
+          },
+        ])
+        .run();
+      expect(
+        findCoordinatorTaskCandidatesForProject("proj-1", "planner", 1).map((task) => task.id),
+      ).toEqual(["page-a"]);
+      expect(
+        findCoordinatorTaskCandidatesForProject("proj-1", "planner", 1, 1).map((task) => task.id),
+      ).toEqual(["page-b"]);
+      expect(
+        findCoordinatorTaskCandidatesForProject("proj-1", "planner", 1, 2).map((task) => task.id),
+      ).toEqual(["page-c"]);
+      expect(findCoordinatorTaskCandidatesForProject("proj-1", "planner", 1, 3)).toEqual([]);
+    });
+
     it("lists actionable project lanes ordered by oldest waiting task", () => {
       const db = testDb.current;
       const oldest = "2026-01-01T00:00:00.000Z";

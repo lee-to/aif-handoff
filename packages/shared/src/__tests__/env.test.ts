@@ -72,6 +72,7 @@ describe("env validation", () => {
     expect(result.AIF_WARMUP_ENABLED).toBe(false);
     expect(result.AIF_STAGE_RUNTIME_PIN_ENABLED).toBe(false);
     expect(result.AIF_TASK_WORKTREES_ENABLED).toBe(false);
+    expect(result.AIF_AGENT_ISOLATED_PROJECT_ADMISSION_ENABLED).toBe(false);
     expect(result.AIF_RUNTIME_SESSION_FORK_ENABLED).toBe(false);
     expect(result.AIF_RUNTIME_CODEX_NATIVE_SUBAGENTS_ENABLED).toBe(false);
     expect(result.AIF_RUNTIME_OPENCODE_LONG_RUNNING_DISPATCHER_ENABLED).toBe(false);

@@ -2213,6 +2213,7 @@ export function findCoordinatorTaskCandidatesForProject(
   projectId: string,
   stage: CoordinatorStage,
   limit: number,
+  offset = 0,
 ): TaskRow[] {
   const nowIso = new Date().toISOString();
 
@@ -2227,8 +2228,9 @@ export function findCoordinatorTaskCandidatesForProject(
         unlockedCoordinatorTaskFilter(nowIso),
       ),
     )
-    .orderBy(asc(tasks.position), asc(tasks.createdAt))
+    .orderBy(asc(tasks.position), asc(tasks.createdAt), asc(tasks.id))
     .limit(limit)
+    .offset(offset)
     .all();
 }
 

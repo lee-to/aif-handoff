@@ -63,7 +63,7 @@ import {
   type TaskNotificationInfo,
 } from "./notifier.js";
 import { handleAutoReviewGate } from "./autoReviewHandler.js";
-import { classifyStageError } from "./stageErrorHandler.js";
+import { classifyStageError, StageManualBlockError } from "./stageErrorHandler.js";
 import { setActiveStageAbortController } from "./stageAbort.js";
 import { setCoordinatorId } from "./subagentQuery.js";
 import { ensureAutoQueueTaskCommit } from "./autoQueueCommit.js";
@@ -275,9 +275,12 @@ async function runStageWithTimeout(
 ): Promise<void> {
   const abort = new AbortController();
   setActiveStageAbortController(taskId, abort);
+  let runnerSettled = false;
 
   try {
-    const stagePromise = runner(taskId, projectRoot);
+    const stagePromise = Promise.resolve(runner(taskId, projectRoot)).finally(() => {
+      runnerSettled = true;
+    });
     const runningTask = runningTasks.get(taskId);
     if (runningTask && !runningTask.worktreePath) {
       // Full planning provisions its worktree synchronously before its first AI await.
@@ -297,6 +300,16 @@ async function runStageWithTimeout(
     if (!abort.signal.aborted) {
       abort.abort();
       log.warn({ taskId, stage: stageLabel }, "Aborted subagent process after stage timeout");
+    }
+    // Verify may be applying a fix when the outer stage timeout interrupts it.
+    if (
+      getEnv().AIF_AGENT_VERIFY_REMEDIATION_ENABLED &&
+      stageLabel === "verifier" &&
+      !runnerSettled
+    ) {
+      throw new StageManualBlockError(
+        "Verify stage timed out. The working tree may contain partial remediation changes; inspect it before retrying. Automatic retry is disabled.",
+      );
     }
     throw err;
   } finally {

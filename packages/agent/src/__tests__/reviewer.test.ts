@@ -137,6 +137,11 @@ describe("runReviewer", () => {
   });
 
   it("preserves verification output when review comments are rewritten", async () => {
+    const verificationHistory = [
+      '## Verification\n\nBlocking report\n\n```aif-gate-result\n{"status":"fail","blocking":true}\n```',
+      "## Verify remediation 1\n\nAdded missing test",
+      '## Verification\n\nVerification passed with advisory\n\n```aif-gate-result\n{"status":"warn","blocking":false}\n```',
+    ].join("\n\n");
     testDb.current
       .insert(tasks)
       .values({
@@ -147,8 +152,7 @@ describe("runReviewer", () => {
         status: "review",
         useSubagents: false,
         implementationLog: "Implemented",
-        reviewComments:
-          '## Verification\n\nVerification passed with advisory\n\n```aif-gate-result\n{"status":"warn","blocking":false}\n```',
+        reviewComments: verificationHistory,
       })
       .run();
 
@@ -174,5 +178,6 @@ describe("runReviewer", () => {
     expect(updatedTask?.reviewComments).toContain("## Verification");
     expect(updatedTask?.reviewComments).toContain("Verification passed with advisory");
     expect(updatedTask?.reviewComments).toContain('"status":"warn"');
+    expect(updatedTask?.reviewComments).toContain(verificationHistory);
   });
 });

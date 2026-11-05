@@ -182,6 +182,7 @@ const envSchema = z.object({
   COORDINATOR_MAX_CONCURRENT_PROJECTS: z.coerce.number().min(1).max(10).default(4),
   AGENT_CHAT_MAX_TURNS: z.coerce.number().min(1).default(50),
   AGENT_MAX_REVIEW_ITERATIONS: z.coerce.number().min(1).default(3),
+  AGENT_VERIFY_MAX_FIX_ATTEMPTS: z.coerce.number().int().min(0).max(10).default(2),
   AGENT_AUTO_REVIEW_STRATEGY: z.enum(AUTO_REVIEW_STRATEGIES).default("full_re_review"),
   AGENT_USE_SUBAGENTS: z
     .preprocess((value) => {
@@ -276,6 +277,7 @@ const envSchema = z.object({
   AIF_AGENT_OVERLAPPING_POLL_CYCLES_ENABLED: booleanEnvSchema.default(false),
   AIF_AGENT_ISOLATED_PROJECT_ADMISSION_ENABLED: booleanEnvSchema.default(false),
   AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: booleanEnvSchema.default(false),
+  AIF_AGENT_VERIFY_REMEDIATION_ENABLED: booleanEnvSchema.default(false),
   AIF_GITHUB_PROJECT_CLONE_ENABLED: booleanEnvSchema.default(false),
   AIF_GITHUB_ISSUE_PR_ENABLED: booleanEnvSchema.default(false),
   AIF_RUNTIME_ANTIGRAVITY_ENABLED: booleanEnvSchema.default(false),

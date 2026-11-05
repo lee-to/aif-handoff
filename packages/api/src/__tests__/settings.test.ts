@@ -326,6 +326,8 @@ describe("settings API — config routes", () => {
     const codexConfigPath = join(fakeHome, ".codex", "config.toml");
 
     beforeEach(() => {
+      vi.stubEnv("DATABASE_URL", "./data/aif.sqlite");
+      resetEnvCache();
       delete process.env.MCP_PORT;
       try {
         rmSync(claudeConfigPath);
@@ -337,6 +339,11 @@ describe("settings API — config routes", () => {
       } catch {
         /* ok */
       }
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      resetEnvCache();
     });
 
     it("GET /settings/mcp returns installed: false when no config", async () => {

@@ -29,6 +29,8 @@ const testDb = { current: createTestDb() };
 const blockTaskForRuntimeGateIfEligibleMock = vi.fn();
 const claimCoordinatorTaskIfEligibleMock = vi.fn();
 const executeSubagentQueryMock = vi.fn();
+let attemptRecoveryEnabled = true;
+let verifyRemediationEnabled = false;
 
 function createGitRoot(prefix: string): string {
   return createGitTestRoot(prefix, { readme: "# auto queue\n" }).rootPath;
@@ -38,7 +40,11 @@ vi.mock("@aif/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@aif/shared")>();
   return {
     ...actual,
-    getEnv: () => Object.assign(actual.getEnv(), { AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: true }),
+    getEnv: () =>
+      Object.assign(actual.getEnv(), {
+        AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: attemptRecoveryEnabled,
+        AIF_AGENT_VERIFY_REMEDIATION_ENABLED: verifyRemediationEnabled,
+      }),
   };
 });
 
@@ -143,6 +149,8 @@ describe("coordinator", () => {
       .values({ id: "test-project", name: "Test", rootPath: "/tmp/test" })
       .run();
     vi.clearAllMocks();
+    attemptRecoveryEnabled = true;
+    verifyRemediationEnabled = false;
     executeSubagentQueryMock.mockResolvedValue({ resultText: "done" });
     resetCoordinatorRuntimeCountersForTests();
     getStageSemaphore().reset();
@@ -219,6 +227,25 @@ describe("coordinator", () => {
     expect(runVerifier).not.toHaveBeenCalled();
     const task = db.select().from(tasks).where(eq(tasks.id, "task-1")).get();
     expect(task!.status).toBe("done");
+  });
+
+  it.each([true, false])("accepts a synchronous runner with remediation=%s", async (enabled) => {
+    verifyRemediationEnabled = enabled;
+    testDb.current
+      .insert(tasks)
+      .values({
+        id: "synchronous-stage",
+        projectId: "test-project",
+        title: "Synchronous stage",
+        status: "planning",
+        autoMode: false,
+      })
+      .run();
+    vi.mocked(runPlanner).mockImplementationOnce(vi.fn());
+    await pollAndProcess();
+    const task = testDb.current.select().from(tasks).where(eq(tasks.id, "synchronous-stage")).get();
+    expect(runPlanner).toHaveBeenCalledTimes(1);
+    expect(task?.status).toBe("plan_ready");
   });
 
   it("commits a completed auto-queue task before the next task can start", async () => {
@@ -530,6 +557,58 @@ describe("coordinator", () => {
 
     expect(runVerifier).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ])(
+    "handles a Verify stage timeout with remediation=%s and attempt recovery=%s",
+    async (remediationEnabled, recoveryEnabled) => {
+      attemptRecoveryEnabled = recoveryEnabled;
+      verifyRemediationEnabled = remediationEnabled;
+      testDb.current
+        .insert(tasks)
+        .values({
+          id: "task-verify-timeout",
+          projectId: "test-project",
+          title: "Verify timeout",
+          status: "verify",
+          useSubagents: false,
+          runPostVerify: true,
+        })
+        .run();
+      vi.mocked(runVerifier).mockImplementationOnce(() => new Promise(() => {}));
+      vi.useFakeTimers();
+      try {
+        const poll = pollAndProcess();
+        await vi.waitFor(() => expect(runVerifier).toHaveBeenCalledTimes(1));
+        await vi.advanceTimersByTimeAsync(Math.max(getEnv().AGENT_STAGE_RUN_TIMEOUT_MS, 60_000));
+        await poll;
+        const task = testDb.current
+          .select()
+          .from(tasks)
+          .where(eq(tasks.id, "task-verify-timeout"))
+          .get();
+        expect(task).toMatchObject({
+          status: remediationEnabled ? "blocked_external" : "verify",
+          blockedFromStatus: remediationEnabled ? "verify" : null,
+          retryAfter: null,
+        });
+        if (remediationEnabled)
+          expect(task?.blockedReason).toContain("partial remediation changes");
+        else expect(task?.blockedReason).toBeNull();
+        expect(runReviewer).not.toHaveBeenCalled();
+        if (remediationEnabled) {
+          await pollAndProcess();
+          expect(runVerifier).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     {

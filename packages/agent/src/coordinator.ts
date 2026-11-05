@@ -1123,17 +1123,19 @@ function isolatedWorktreePath(worktreePath: string | null, projectRoot: string):
   }
 }
 
-function canRunAlongsideProject(task: TaskRow, stage: StatusTransition): boolean {
-  if (!isIsolatedProjectAdmissionEnabled()) return true;
-  // An expired DB claim must not start a second local execution of the same task.
-  if (runningTasks.has(task.id)) return false;
-  const project = findProjectById(task.projectId);
-  const activeTasks = [...runningTasks.values()].filter(
-    (active) => active.projectId === task.projectId,
-  );
-  if (activeTasks.length === 0) return true;
-  if (!project?.parallelEnabled || !projectSupportsTaskWorktrees(project.rootPath)) return false;
-  if (activeTasks.length >= env.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT) return false;
+function projectAdmissionFilter(
+  projectId: string,
+): ((task: TaskRow, stage: StatusTransition) => boolean) | null {
+  if (!isIsolatedProjectAdmissionEnabled()) return () => true;
+  const project = findProjectById(projectId);
+  const activeTasks = [...runningTasks.values()].filter((active) => active.projectId === projectId);
+  if (activeTasks.length === 0) return () => true;
+  if (
+    !project?.parallelEnabled ||
+    !projectSupportsTaskWorktrees(project.rootPath) ||
+    activeTasks.length >= env.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT
+  )
+    return null;
   const activePaths = activeTasks.map((active) =>
     isolatedWorktreePath(active.worktreePath, project.rootPath),
   );
@@ -1141,16 +1143,34 @@ function canRunAlongsideProject(task: TaskRow, stage: StatusTransition): boolean
     activePaths.some((path) => path === null) ||
     new Set(activePaths).size !== activePaths.length
   ) {
-    return false;
+    return null;
   }
-  if (task.worktreePath) {
-    const path = isolatedWorktreePath(task.worktreePath, project.rootPath);
-    return path !== null && !activePaths.includes(path);
+  return (task, stage) => {
+    // An expired DB claim must not start a second local execution of the same task.
+    if (runningTasks.has(task.id)) return false;
+    if (task.worktreePath) {
+      const path = isolatedWorktreePath(task.worktreePath, project.rootPath);
+      return path !== null && !activePaths.includes(path);
+    }
+    // Only full, unbound non-fix planning provisions a worktree before running AI.
+    return (
+      stage.label === "planner" && !task.isFix && task.plannerMode === "full" && !task.branchName
+    );
+  };
+}
+
+function findRunnableProjectCandidates(
+  projectId: string,
+  stage: StatusTransition,
+  pageSize: number,
+  accepts: (task: TaskRow) => boolean,
+): TaskRow[] {
+  const paginate = isIsolatedProjectAdmissionEnabled();
+  for (let offset = 0; ; offset += pageSize) {
+    const page = findCoordinatorTaskCandidatesForProject(projectId, stage.label, pageSize, offset);
+    const runnable = page.filter(accepts);
+    if (!paginate || runnable.length > 0 || page.length < pageSize) return runnable;
   }
-  // Only full, unbound non-fix planning provisions a worktree before running AI.
-  return (
-    stage.label === "planner" && !task.isFix && task.plannerMode === "full" && !task.branchName
-  );
 }
 
 function canAdmitBusyProject(projectId: string): boolean {
@@ -1163,10 +1183,13 @@ function canAdmitBusyProject(projectId: string): boolean {
   )
     return false;
   const candidateWindow = Math.min(env.COORDINATOR_MAX_CONCURRENT_TASKS_PER_PROJECT * 5, 50);
-  return PIPELINE.some((stage) =>
-    findCoordinatorTaskCandidatesForProject(projectId, stage.label, candidateWindow).some((task) =>
-      canRunAlongsideProject(task, stage),
-    ),
+  const canRun = projectAdmissionFilter(projectId);
+  if (!canRun) return false;
+  return PIPELINE.some(
+    (stage) =>
+      findRunnableProjectCandidates(projectId, stage, candidateWindow, (task) =>
+        canRun(task, stage),
+      ).length > 0,
   );
 }
 
@@ -1295,11 +1318,15 @@ async function runPollCycle(
       const stageKey = `${projectId}:${stage.label}`;
 
       const candidateWindow = Math.min(Math.max(projectMax * 5, projectMax), 50);
-      const candidates = findCoordinatorTaskCandidatesForProject(
-        projectId,
-        stage.label,
-        candidateWindow,
-      ).filter((t) => !failedInCycle.has(t.id));
+      const canRun = projectAdmissionFilter(projectId);
+      const candidates = canRun
+        ? findRunnableProjectCandidates(
+            projectId,
+            stage,
+            candidateWindow,
+            (task) => !failedInCycle.has(task.id) && canRun(task, stage),
+          )
+        : [];
 
       if (candidates.length === 0) {
         log.debug({ stage: stage.label, projectId }, "No tasks to process in project lane");
@@ -1392,7 +1419,8 @@ async function runPollCycle(
 
             // Re-read isolation after waiting for capacity; queued candidates may have changed.
             const currentTask = isIsolatedProjectAdmissionEnabled() ? findTaskById(task.id) : task;
-            if (!currentTask || !canRunAlongsideProject(currentTask, stage)) {
+            const canRunNow = projectAdmissionFilter(projectId);
+            if (!currentTask || !canRunNow || !canRunNow(currentTask, stage)) {
               log.debug(
                 { taskId: task.id, projectId, stage: stage.label },
                 "Task is waiting for an isolated project slot",

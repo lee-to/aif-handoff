@@ -2082,6 +2082,7 @@ describe("coordinator", () => {
 
   it.each([
     { scenario: "new full planner", admitted: true },
+    { scenario: "mixed planners beyond two windows", admitted: true },
     { scenario: "timer-only full planner", admitted: true },
     { scenario: "expired active claim", admitted: true },
     { scenario: "persisted worktree", admitted: true },
@@ -2187,12 +2188,28 @@ describe("coordinator", () => {
                 : scenario === "project root as worktree"
                   ? rootPath
                   : null;
+        if (scenario === "mixed planners beyond two windows") {
+          db.insert(tasks)
+            .values(
+              Array.from({ length: 31 }, (_, index) => ({
+                id: `unprepared-${index}`,
+                projectId: "isolated-project",
+                title: "Wait for shared checkout",
+                status: "planning" as const,
+                position: index,
+                plannerMode: index % 2 === 0 ? "fast" : "full",
+                isFix: index % 2 !== 0,
+              })),
+            )
+            .run();
+        }
         db.insert(tasks)
           .values({
             id: "next",
             projectId: "isolated-project",
             title: "Next",
-            status: "backlog",
+            position: 100,
+            status: scenario === "mixed planners beyond two windows" ? "planning" : "backlog",
             plannerMode: scenario === "fast planner" ? "fast" : "full",
             isFix: scenario === "fix planner",
             worktreePath,

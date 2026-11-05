@@ -71,11 +71,12 @@
     "@esbuild-kit/core-utils": {
       "esbuild": "^0.28.1"
     },
-    "@hono/node-server": "2.0.11",
-    "body-parser": "2.3.0",
-    "fast-uri": "3.1.8",
-    "ip-address": "10.7.2",
-    "qs": "6.16.0"
+    "@hono/node-server": "2.1.6",
+    "body-parser": "2.4.0",
+    "fast-uri": "3.1.9",
+    "ip-address": "10.7.6",
+    "qs": "6.16.1",
+    "vite": "8.1.6"
   },
   "packageManager": "npm@11.12.1",
   "allowScripts": {

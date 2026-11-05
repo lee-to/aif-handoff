@@ -96,6 +96,7 @@ export function recoverStaleInProgressTasks(): void {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const candidates = listStaleInProgressTasks();
+  log.debug({ candidateCount: candidates.length }, "Scanning started stages for stale execution");
 
   for (const task of candidates) {
     const heartbeatMs = task.lastHeartbeatAt ? parseUpdatedAtMs(task.lastHeartbeatAt) : null;

@@ -28,6 +28,7 @@ const blockTaskForRuntimeGateIfEligibleMock = vi.fn();
 const claimCoordinatorTaskIfEligibleMock = vi.fn();
 const executeSubagentQueryMock = vi.fn();
 let attemptRecoveryEnabled = true;
+let verifyRemediationEnabled = false;
 
 function createGitRoot(prefix: string): string {
   return createGitTestRoot(prefix, { readme: "# auto queue\n" }).rootPath;
@@ -40,6 +41,7 @@ vi.mock("@aif/shared", async (importOriginal) => {
     getEnv: () =>
       Object.assign(actual.getEnv(), {
         AIF_AGENT_ATTEMPT_RECOVERY_ENABLED: attemptRecoveryEnabled,
+        AIF_AGENT_VERIFY_REMEDIATION_ENABLED: verifyRemediationEnabled,
       }),
   };
 });
@@ -146,6 +148,7 @@ describe("coordinator", () => {
       .run();
     vi.clearAllMocks();
     attemptRecoveryEnabled = true;
+    verifyRemediationEnabled = false;
     executeSubagentQueryMock.mockResolvedValue({ resultText: "done" });
     resetCoordinatorRuntimeCountersForTests();
     getStageSemaphore().reset();
@@ -534,10 +537,16 @@ describe("coordinator", () => {
     expect(runVerifier).toHaveBeenCalledTimes(1);
   });
 
-  it.each([true, false])(
-    "manually blocks a Verify stage timeout with attempt recovery=%s",
-    async (enabled) => {
-      attemptRecoveryEnabled = enabled;
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ])(
+    "handles a Verify stage timeout with remediation=%s and attempt recovery=%s",
+    async (remediationEnabled, recoveryEnabled) => {
+      attemptRecoveryEnabled = recoveryEnabled;
+      verifyRemediationEnabled = remediationEnabled;
       testDb.current
         .insert(tasks)
         .values({
@@ -562,14 +571,18 @@ describe("coordinator", () => {
           .where(eq(tasks.id, "task-verify-timeout"))
           .get();
         expect(task).toMatchObject({
-          status: "blocked_external",
-          blockedFromStatus: "verify",
+          status: remediationEnabled ? "blocked_external" : "verify",
+          blockedFromStatus: remediationEnabled ? "verify" : null,
           retryAfter: null,
         });
-        expect(task?.blockedReason).toContain("partial remediation changes");
+        if (remediationEnabled)
+          expect(task?.blockedReason).toContain("partial remediation changes");
+        else expect(task?.blockedReason).toBeNull();
         expect(runReviewer).not.toHaveBeenCalled();
-        await pollAndProcess();
-        expect(runVerifier).toHaveBeenCalledTimes(1);
+        if (remediationEnabled) {
+          await pollAndProcess();
+          expect(runVerifier).toHaveBeenCalledTimes(1);
+        }
       } finally {
         vi.useRealTimers();
       }

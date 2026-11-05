@@ -53,6 +53,7 @@ function savedReview(): string | null | undefined {
 
 describe("runVerifier", () => {
   beforeEach(() => {
+    vi.stubEnv("AIF_AGENT_VERIFY_REMEDIATION_ENABLED", "true");
     vi.stubEnv("AGENT_VERIFY_MAX_FIX_ATTEMPTS", "2");
     resetEnvCache();
     testDb.current = createTestDb();
@@ -386,5 +387,74 @@ describe("runVerifier", () => {
     await runVerifier("task-loop", "/tmp/verifier-test");
     expect(savedReview()).toContain(previousReview);
     expect(savedReview()).toContain(passingReport);
+  });
+
+  describe("with remediation disabled", () => {
+    beforeEach(() => {
+      vi.stubEnv("AIF_AGENT_VERIFY_REMEDIATION_ENABLED", "false");
+      resetEnvCache();
+    });
+
+    it("manually blocks a qualifying gate without invoking the fixer", async () => {
+      executeSubagentQueryMock.mockResolvedValue({ resultText: blockingReport });
+      await expect(runVerifier("task-loop", "/tmp/verifier-test")).rejects.toThrow(
+        "Verify stage returned a blocking gate result",
+      );
+      expect(executeSubagentQueryMock).toHaveBeenCalledTimes(1);
+      expect(savedReview()).toContain(blockingReport);
+    });
+
+    it.each([
+      "Verification complete without a structured gate",
+      "```aif-gate-result\n{broken}\n```",
+    ])(
+      "preserves legacy non-blocking behavior for a missing or invalid gate",
+      async (resultText) => {
+        executeSubagentQueryMock.mockResolvedValueOnce({ resultText });
+        await expect(runVerifier("task-loop", "/tmp/verifier-test")).resolves.toBeUndefined();
+        expect(executeSubagentQueryMock).toHaveBeenCalledTimes(1);
+        expect(savedReview()).toContain(resultText);
+      },
+    );
+
+    it("preserves legacy first-gate selection", async () => {
+      executeSubagentQueryMock.mockResolvedValueOnce({
+        resultText: `${blockingReport}\n${passingReport}`,
+      });
+      await expect(runVerifier("task-loop", "/tmp/verifier-test")).rejects.toBeInstanceOf(
+        StageManualBlockError,
+      );
+      expect(executeSubagentQueryMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([passingReport, "```aif-gate-result\n{broken}\n```"])(
+      "ignores later gates when the first gate did not block",
+      async (firstReport) => {
+        executeSubagentQueryMock.mockResolvedValueOnce({
+          resultText: `${firstReport}\n${blockingReport}`,
+        });
+        await expect(runVerifier("task-loop", "/tmp/verifier-test")).resolves.toBeUndefined();
+        expect(executeSubagentQueryMock).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("still blocks a gate with blocking=true and a missing status", async () => {
+      executeSubagentQueryMock.mockResolvedValueOnce({
+        resultText: gateResult({ blocking: true }),
+      });
+      await expect(runVerifier("task-loop", "/tmp/verifier-test")).rejects.toBeInstanceOf(
+        StageManualBlockError,
+      );
+      expect(executeSubagentQueryMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves previous comments when verification changes branches", async () => {
+      assertCurrentBranchMock.mockImplementationOnce(() => {
+        throw new Error("Branch drift");
+      });
+      executeSubagentQueryMock.mockResolvedValueOnce({ resultText: passingReport });
+      await expect(runVerifier("task-loop", "/tmp/verifier-test")).rejects.toThrow("Branch drift");
+      expect(savedReview()).toBe("Existing review");
+    });
   });
 });

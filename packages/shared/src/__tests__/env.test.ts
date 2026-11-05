@@ -67,6 +67,7 @@ describe("env validation", () => {
     expect(result.AGENT_CHAT_MAX_TURNS).toBe(50);
     expect(result.AGENT_MAX_REVIEW_ITERATIONS).toBe(3);
     expect(result.AGENT_VERIFY_MAX_FIX_ATTEMPTS).toBe(2);
+    expect(result.AIF_AGENT_VERIFY_REMEDIATION_ENABLED).toBe(false);
     expect(result.AGENT_USE_SUBAGENTS).toBe(false);
     expect(result.AIF_WARMUP_ENABLED).toBe(false);
     expect(result.AIF_STAGE_RUNTIME_PIN_ENABLED).toBe(false);
@@ -139,6 +140,24 @@ describe("env validation", () => {
     expect(validateEnv({ AIF_WARMUP_ENABLED: "1" }).AIF_WARMUP_ENABLED).toBe(true);
     expect(validateEnv({ AIF_WARMUP_ENABLED: "false" }).AIF_WARMUP_ENABLED).toBe(false);
     expect(validateEnv({ AIF_WARMUP_ENABLED: "0" }).AIF_WARMUP_ENABLED).toBe(false);
+  });
+
+  it.each(["true", "1", "yes", "on"])("enables Verify remediation with %s", (value) => {
+    expect(
+      validateEnv({ AIF_AGENT_VERIFY_REMEDIATION_ENABLED: value })
+        .AIF_AGENT_VERIFY_REMEDIATION_ENABLED,
+    ).toBe(true);
+  });
+
+  it.each(["false", "0", "no", "off"])("disables Verify remediation with %s", (value) => {
+    expect(
+      validateEnv({ AIF_AGENT_VERIFY_REMEDIATION_ENABLED: value })
+        .AIF_AGENT_VERIFY_REMEDIATION_ENABLED,
+    ).toBe(false);
+  });
+
+  it("rejects an invalid Verify remediation rollout flag", () => {
+    expect(() => validateEnv({ AIF_AGENT_VERIFY_REMEDIATION_ENABLED: "maybe" })).toThrow();
   });
 
   it("should parse the Telegram project-name rollout flag", () => {

@@ -289,7 +289,11 @@ async function runStageWithTimeout(
       log.warn({ taskId, stage: stageLabel }, "Aborted subagent process after stage timeout");
     }
     // Verify may be applying a fix when the outer stage timeout interrupts it.
-    if (stageLabel === "verifier" && !runnerSettled) {
+    if (
+      getEnv().AIF_AGENT_VERIFY_REMEDIATION_ENABLED &&
+      stageLabel === "verifier" &&
+      !runnerSettled
+    ) {
       throw new StageManualBlockError(
         "Verify stage timed out. The working tree may contain partial remediation changes; inspect it before retrying. Automatic retry is disabled.",
       );

@@ -9,6 +9,11 @@ import {
 import { createPortal } from "react-dom";
 import { useOutsideClick } from "@/hooks/useOutsideClick";
 import {
+  createOverlayLayerId,
+  isTopOverlayLayer,
+  pushOverlayLayer,
+} from "@/components/ui/overlayStack";
+import {
   Send,
   Trash2,
   Bot,
@@ -19,6 +24,8 @@ import {
   PanelLeftOpen,
   Paperclip,
   Square,
+  ExternalLink,
+  Link2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -26,10 +33,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { FormDialog } from "@/components/ui/form-dialog";
 import { AttachmentChip } from "@/components/ui/attachment-chip";
 import { useChat } from "@/hooks/useChat";
 import { useChatSessions } from "@/hooks/useChatSessions";
-import { useTask } from "@/hooks/useTasks";
+import { useTask, useTasks } from "@/hooks/useTasks";
+import { useThreadWorkspace } from "@/hooks/useThreadWorkspace";
 import { useEffectiveChatRuntime, useRuntimeProfiles } from "@/hooks/useRuntimeProfiles";
 import { useUsageLimitsEnabled } from "@/hooks/useSettings";
 import {
@@ -55,6 +66,7 @@ interface ChatPanelProps {
   taskId: string | null;
   onClose: () => void;
   onOpenTask?: (taskId: string) => void;
+  canManageTaskLinks?: boolean;
 }
 
 export function ChatPanel({
@@ -64,6 +76,7 @@ export function ChatPanel({
   taskId,
   onClose,
   onOpenTask,
+  canManageTaskLinks = true,
 }: ChatPanelProps) {
   const [showSessions, setShowSessions] = useState(false);
 
@@ -73,12 +86,28 @@ export function ChatPanel({
     activeSessionId,
     setActiveSessionId,
     pinActiveSession,
-    clearActiveSession,
+    createSession,
+    claimSession,
+    isClaiming,
+    claimError,
     deleteSession,
     renameSession,
   } = useChatSessions(projectId);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const workspaceThreadId =
+    !isClaiming && activeSession?.source === "web" ? activeSession.id : null;
+  const {
+    workspace,
+    error: workspaceError,
+    isSaving,
+    createObjective,
+    updateObjective,
+    linkTask,
+    unlinkTask,
+    updateStatus,
+  } = useThreadWorkspace(workspaceThreadId);
+  const { data: projectTasks } = useTasks(projectId);
 
   const {
     messages,
@@ -104,12 +133,24 @@ export function ChatPanel({
   const { data: effectiveChatRuntime } = useEffectiveChatRuntime(projectId);
   const { data: runtimeProfiles } = useRuntimeProfiles(projectId, true);
   const [input, setInput] = useState("");
+  const [objectiveTitle, setObjectiveTitle] = useState("");
+  const [taskToLink, setTaskToLink] = useState("");
+  const [taskObjectiveId, setTaskObjectiveId] = useState("");
+  const [droppingObjectiveId, setDroppingObjectiveId] = useState<string | null>(null);
+  const [dropReason, setDropReason] = useState("");
   const [pendingFiles, setPendingFiles] = useState<ChatAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const handleTaskCreated = useCallback(() => {
     // Task created via action card — react-query invalidation happens in useCreateTask
   }, []);
   const panelRef = useRef<HTMLDivElement>(null);
+  const overlayLayerId = useRef(createOverlayLayerId("chat"));
+  useEffect(() => {
+    if (isOpen) return pushOverlayLayer(overlayLayerId.current);
+  }, [isOpen]);
+  const closeTopChat = useCallback(() => {
+    if (isTopOverlayLayer(overlayLayerId.current)) onClose();
+  }, [onClose]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -126,7 +167,7 @@ export function ChatPanel({
   }, [isOpen]);
 
   // Close chat on Escape key or outside click while open
-  useOutsideClick(panelRef, onClose, isOpen);
+  useOutsideClick(panelRef, closeTopChat, isOpen);
 
   const handleSend = () => {
     if (!input.trim() || isStreaming) return;
@@ -198,16 +239,28 @@ export function ChatPanel({
     }
   };
 
-  const handleNewChat = useCallback(() => {
-    newSession();
-    clearActiveSession();
-    console.debug("[ChatPanel] New chat started");
-    setTimeout(() => textareaRef.current?.focus(), 50);
-  }, [newSession, clearActiveSession]);
+  const handleNewChat = useCallback(async () => {
+    if (isClaiming) return;
+    try {
+      await createSession();
+      newSession();
+      setInput("");
+      setObjectiveTitle("");
+      setTaskToLink("");
+      setTaskObjectiveId("");
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    } catch {
+      // The session hook displays the creation error and preserves the current chat.
+    }
+  }, [createSession, newSession, isClaiming]);
 
   const handleSessionSelect = useCallback(
     (id: string) => {
       console.debug("[ChatPanel] Session switched to %s", id);
+      setObjectiveTitle("");
+      setTaskToLink("");
+      setTaskObjectiveId("");
+      setDroppingObjectiveId(null);
       setActiveSessionId(id);
     },
     [setActiveSessionId],
@@ -228,6 +281,31 @@ export function ChatPanel({
     },
     [renameSession],
   );
+
+  const linkedTaskIds = new Set(workspace?.tasks.map((task) => task.taskId) ?? []);
+  const availableTasks = projectTasks?.filter((task) => !linkedTaskIds.has(task.id)) ?? [];
+
+  const handleAddObjective = async () => {
+    const title = objectiveTitle.trim();
+    if (!title) return;
+    try {
+      await createObjective({ title });
+      setObjectiveTitle("");
+    } catch {
+      // Keep the draft for retry; the workspace hook displays the error.
+    }
+  };
+
+  const handleLinkTask = async () => {
+    if (!taskToLink) return;
+    try {
+      await linkTask({ taskId: taskToLink, objectiveId: taskObjectiveId || null });
+      setTaskToLink("");
+      setTaskObjectiveId("");
+    } catch {
+      // Keep the selection for retry; the workspace hook displays the error.
+    }
+  };
 
   const sessionProfileId = activeSession?.runtimeProfileId ?? null;
 
@@ -302,8 +380,7 @@ export function ChatPanel({
     <div
       ref={panelRef}
       className={cn(
-        "fixed bottom-0 left-0 flex w-[800px] flex-col",
-        "border-r border-border bg-background",
+        "fixed bottom-0 left-0 flex w-full max-w-[800px] flex-col border-r border-border bg-background",
         "transition-transform duration-300 ease-in-out",
         isOpen ? "translate-x-0" : "-translate-x-full",
       )}
@@ -335,7 +412,8 @@ export function ChatPanel({
             <Button
               variant="ghost"
               size="icon"
-              onClick={handleNewChat}
+              onClick={() => void handleNewChat()}
+              disabled={isClaiming || !projectId}
               className="h-7 w-7 border-0 text-muted-foreground"
               aria-label="New chat"
             >
@@ -412,6 +490,203 @@ export function ChatPanel({
         )}
       </div>
 
+      {activeSession?.source !== "web" && activeSession?.runtimeSessionId && (
+        <div className="border-b border-border bg-secondary/20 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              Track this existing chat with objectives, tasks, and pull requests.
+            </p>
+            <Button
+              size="sm"
+              disabled={isClaiming}
+              onClick={() => void claimSession(activeSession).catch(() => undefined)}
+            >
+              {isClaiming ? "Adding..." : "Add objectives and tasks"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {claimError && (
+        <p role="alert" className="px-4 py-2 text-xs text-destructive">
+          {claimError}
+        </p>
+      )}
+      {workspace && (
+        <fieldset
+          disabled={isSaving}
+          className="min-w-0 max-h-[45vh] shrink-0 overflow-y-auto border-b border-border bg-secondary/20 px-4 py-3"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide">Objectives</span>
+            <label>
+              <span className="sr-only">Thread status</span>
+              <Select
+                value={workspace.thread.status}
+                selectSize="sm"
+                options={[
+                  { value: "open", label: "Open" },
+                  { value: "wip", label: "In progress" },
+                  { value: "waiting", label: "Waiting" },
+                  { value: "blocked", label: "Blocked" },
+                  { value: "done", label: "Done" },
+                ]}
+                onChange={(event) =>
+                  void updateStatus(event.target.value as typeof workspace.thread.status).catch(
+                    () => undefined,
+                  )
+                }
+              />
+            </label>
+            <div className="flex min-w-[260px] flex-1 gap-2">
+              <Input
+                aria-label="Objective title"
+                maxLength={300}
+                disabled={workspace.thread.status === "done"}
+                value={objectiveTitle}
+                onChange={(event) => setObjectiveTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void handleAddObjective();
+                }}
+                placeholder="Add an objective"
+                inputSize="sm"
+              />
+              <Button
+                size="sm"
+                onClick={() => void handleAddObjective()}
+                disabled={!objectiveTitle.trim() || workspace.thread.status === "done"}
+              >
+                Add
+              </Button>
+            </div>
+          </div>
+          {workspace.objectives.length > 0 && (
+            <div className="mt-2 grid gap-1">
+              {workspace.objectives.map((objective) => (
+                <div key={objective.id} className="flex items-center gap-2 text-xs">
+                  <Checkbox
+                    checked={objective.status === "done"}
+                    disabled={objective.status === "dropped" || workspace.thread.status === "done"}
+                    aria-label={`Complete ${objective.title}`}
+                    onChange={(event) =>
+                      void updateObjective({
+                        objectiveId: objective.id,
+                        status: event.target.checked ? "done" : "open",
+                      }).catch(() => undefined)
+                    }
+                  />
+                  <span
+                    className={cn(
+                      "flex-1",
+                      objective.status !== "open" && "line-through opacity-60",
+                    )}
+                  >
+                    {objective.title}
+                    {objective.dropReason ? ` — ${objective.dropReason}` : ""}
+                  </span>
+                  {objective.status !== "dropped" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 border-0 px-2 text-[10px] text-muted-foreground"
+                      onClick={() => {
+                        setDropReason("");
+                        setDroppingObjectiveId(objective.id);
+                      }}
+                    >
+                      Drop
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-2">
+            <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-xs font-semibold">Tasks and PRs</span>
+            {canManageTaskLinks && availableTasks.length > 0 && (
+              <>
+                <label>
+                  <span className="sr-only">Task to link</span>
+                  <Select
+                    value={taskToLink}
+                    selectSize="sm"
+                    searchable
+                    placeholder="Select a task"
+                    onChange={(event) => setTaskToLink(event.target.value)}
+                    options={availableTasks.map((task) => ({ value: task.id, label: task.title }))}
+                    className="min-w-[180px]"
+                  />
+                </label>
+                <label>
+                  <span className="sr-only">Objective for task</span>
+                  <Select
+                    value={taskObjectiveId}
+                    selectSize="sm"
+                    onChange={(event) => setTaskObjectiveId(event.target.value)}
+                    options={[
+                      { value: "", label: "No objective" },
+                      ...workspace.objectives.map((objective) => ({
+                        value: objective.id,
+                        label: objective.title,
+                      })),
+                    ]}
+                  />
+                </label>
+                <Button size="sm" onClick={() => void handleLinkTask()} disabled={!taskToLink}>
+                  Link
+                </Button>
+              </>
+            )}
+          </div>
+          {workspace.tasks.length > 0 && (
+            <div className="mt-2 grid gap-1">
+              {workspace.tasks.map((task) => (
+                <div key={task.taskId} className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left font-medium hover:underline"
+                    onClick={() => onOpenTask?.(task.taskId)}
+                  >
+                    {task.title}
+                  </button>
+                  <Badge variant="outline" size="sm">
+                    {task.status}
+                  </Badge>
+                  {task.prUrl && (
+                    <a
+                      href={task.prUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-primary hover:underline"
+                    >
+                      PR #{task.prNumber}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 border-0 text-muted-foreground"
+                    disabled={!canManageTaskLinks}
+                    aria-label={`Unlink ${task.title}`}
+                    onClick={() => void unlinkTask(task.taskId).catch(() => undefined)}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </fieldset>
+      )}
+      {workspaceError && (
+        <p role="alert" className="border-b border-border px-4 py-2 text-xs text-destructive">
+          {workspaceError}
+        </p>
+      )}
+
       {/* Content area: sessions sidebar + messages */}
       <div className="flex flex-1 overflow-hidden">
         {/* Session sidebar */}
@@ -422,7 +697,7 @@ export function ChatPanel({
               activeSessionId={activeSessionId}
               projectName={projectName}
               onSelect={handleSessionSelect}
-              onCreate={handleNewChat}
+              onCreate={() => void handleNewChat()}
               onDelete={handleDeleteSession}
               onRename={handleRenameSession}
             />
@@ -607,5 +882,46 @@ export function ChatPanel({
     </div>
   );
 
-  return createPortal(content, document.body);
+  return createPortal(
+    <>
+      {content}
+      <FormDialog
+        open={Boolean(
+          droppingObjectiveId &&
+          workspace?.objectives.some((objective) => objective.id === droppingObjectiveId),
+        )}
+        onOpenChange={(open) => {
+          if (!open) setDroppingObjectiveId(null);
+        }}
+        title="Drop objective"
+        error={workspaceError ?? undefined}
+        actions={
+          <Button
+            disabled={isSaving || !dropReason.trim()}
+            onClick={() => {
+              if (!droppingObjectiveId) return;
+              void updateObjective({
+                objectiveId: droppingObjectiveId,
+                status: "dropped",
+                dropReason: dropReason.trim(),
+              })
+                .then(() => setDroppingObjectiveId(null))
+                .catch(() => undefined);
+            }}
+          >
+            Drop objective
+          </Button>
+        }
+      >
+        <Input
+          aria-label="Reason for dropping objective"
+          placeholder="Why is this objective being dropped?"
+          maxLength={1000}
+          value={dropReason}
+          onChange={(event) => setDropReason(event.target.value)}
+        />
+      </FormDialog>
+    </>,
+    document.body,
+  );
 }

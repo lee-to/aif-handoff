@@ -1594,12 +1594,54 @@ GET /chat/sessions?projectId=<uuid>
 POST /chat/sessions
 PUT /chat/sessions/:id
 DELETE /chat/sessions/:id
+GET /chat/sessions/:id/workspace
+POST /chat/sessions/:id/objectives
+PUT /chat/sessions/:id/objectives/:objectiveId
+PUT /chat/sessions/:id/tasks/:taskId
+DELETE /chat/sessions/:id/tasks/:taskId
 ```
 
 Chat sessions persist the runtime profile chosen when the session starts. This keeps older conversations tied to the runtime they were created with even if the project's current default changes later.
 For local Codex runtimes, session discovery uses the indexed `codex_sessions` read-model. Session detail/message reads resolve `sessionId -> filePath` from the same index before compatibility fallback to runtime-adapter lookups.
 
 `POST` and `PUT` accept `runtimeProfileId` as an optional field. The value must be either a global profile or one owned by the same project.
+
+The project workspace treats persisted chat sessions as threads. A thread has an independent
+`status` (`open`, `wip`, `waiting`, `blocked`, or `done`), ordered objectives, and optional task
+links. A task can belong to at most one thread; unlink it before linking it to another thread.
+Linking rejects tasks from another project and objectives from another thread. `GET .../workspace` returns each linked task together with any
+GitHub pull-request number, URL, state, checks, and review evidence already synchronized for that
+task. Pull requests remain evidence for a task; they do not replace the thread or objective. When
+Participants Mode is enabled, linking or unlinking a task requires an administrator session.
+Discovered Codex or Claude sessions can be claimed as managed threads without sending a new model
+message. A claim is accepted only when the runtime session is visible in that project's current
+runtime discovery, and repeated claims return the existing managed thread.
+
+| Endpoint                                         | Request body                                           | Success response                    |
+| ------------------------------------------------ | ------------------------------------------------------ | ----------------------------------- |
+| `GET /chat/sessions/:id/workspace`               | —                                                      | `200 { thread, objectives, tasks }` |
+| `POST /chat/sessions/:id/objectives`             | `{ title, required? }` (`required` defaults to `true`) | `201` objective                     |
+| `PUT /chat/sessions/:id/objectives/:objectiveId` | `{ title?, status?, required?, dropReason? }`          | `200` objective                     |
+| `PUT /chat/sessions/:id/tasks/:taskId`           | `{ objectiveId? }`                                     | `200` workspace                     |
+| `DELETE /chat/sessions/:id/tasks/:taskId`        | —                                                      | `204`                               |
+
+An omitted or null `objectiveId` links the task to the chat without an objective.
+Objective titles must contain 1–300 non-whitespace characters. Objective status is `open`,
+`done`, or `dropped`; drop reasons contain 1–1000 characters. Missing resources return `404`,
+invalid bodies or task-link boundaries return `400`, and closing a chat with open required
+objectives returns `409`. `PUT /chat/sessions/:id` accepts the optional thread `status`.
+
+Required objectives must be `done` or `dropped` before the thread can move to `done`. Dropping an
+objective requires a non-empty `dropReason`. A completed thread cannot receive a new objective or
+reopen a required objective.
+
+### Chat workspace live updates
+
+`chat:workspace_updated` carries `{ id: <chat session ID> }` after objective, task-link,
+or persisted chat metadata changes. Clients invalidate chat-session lists and workspace queries.
+Task update, move, and deletion events also refresh linked task/PR evidence.
+The existing chat panel exposes objectives and task links; Kanban remains the default project view.
+“New chat” saves an empty session immediately, without invoking a runtime.
 
 ### Permissions
 

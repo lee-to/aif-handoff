@@ -186,6 +186,30 @@ describe("useWebSocket authentication lifecycle", () => {
     );
   });
 
+  it.each([
+    "task:updated",
+    "task:moved",
+    "task:deleted",
+    "chat:workspace_updated",
+    "chat:session_deleted",
+  ])("refreshes linked tasks and objectives on %s", (type) => {
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    renderHook(() => useWebSocket(), { wrapper: createWrapper(queryClient) });
+    act(() => {
+      FakeWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type,
+          payload: { id: "task-or-thread", projectId: "project", status: "done" },
+        }),
+      } as MessageEvent);
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["threadWorkspace"] });
+    if (type === "chat:workspace_updated") {
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["chatSessions"] });
+    }
+  });
+
   it("invalidates the current participant session when it is revoked", () => {
     const queryClient = new QueryClient();
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");

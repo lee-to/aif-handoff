@@ -533,3 +533,15 @@ Runtime index bootstrap creates the following indexes via `CREATE INDEX IF NOT E
 
 - [Getting Started](getting-started.md) — installation and setup
 - [API Reference](api.md) — REST endpoints and WebSocket protocol
+
+### Chat objectives and task links
+
+Persisted chats can track a status and required or optional objectives. The existing chat panel
+creates empty chats without runtime execution and links same-project tasks to objectives.
+Each task can be linked to one chat; moving it requires an explicit unlink. Task stages and
+GitHub PR evidence remain owned by their existing workflows.
+
+The shared schema stores `chat_sessions.status`, `thread_objectives`, and `thread_task_links`.
+`@aif/data` enforces objective closure and project boundaries; API routes validate requests and
+require administrators for task-link changes in Participants Mode.
+`chat:workspace_updated` and task lifecycle events invalidate workspace queries in the web client.

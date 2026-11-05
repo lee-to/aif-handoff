@@ -9,6 +9,12 @@ const mockListCodexSessionsByProjectRoot = vi.fn();
 const mockFindCodexSessionFilePathBySessionId = vi.fn();
 const mockUpdateChatSession = vi.fn();
 const mockDeleteChatSession = vi.fn();
+const mockCreateThreadObjective = vi.fn();
+const mockUpdateThreadObjective = vi.fn();
+const mockGetThreadWorkspace = vi.fn();
+const mockLinkTaskToThread = vi.fn();
+const mockUnlinkTaskFromThread = vi.fn();
+const mockFindTaskById = vi.fn();
 const mockListChatMessages = vi.fn();
 const mockToChatSessionResponse = vi.fn((row: Record<string, unknown>) => row);
 const mockToChatMessageResponse = vi.fn((row: Record<string, unknown>) => row);
@@ -65,11 +71,16 @@ vi.mock("@aif/data", () => ({
     mockFindCodexSessionFilePathBySessionId(...args),
   updateChatSession: (...args: unknown[]) => mockUpdateChatSession(...args),
   deleteChatSession: (...args: unknown[]) => mockDeleteChatSession(...args),
+  createThreadObjective: (...args: unknown[]) => mockCreateThreadObjective(...args),
+  updateThreadObjective: (...args: unknown[]) => mockUpdateThreadObjective(...args),
+  getThreadWorkspace: (...args: unknown[]) => mockGetThreadWorkspace(...args),
+  linkTaskToThread: (...args: unknown[]) => mockLinkTaskToThread(...args),
+  unlinkTaskFromThread: (...args: unknown[]) => mockUnlinkTaskFromThread(...args),
   listChatMessages: (...args: unknown[]) => mockListChatMessages(...args),
   toChatSessionResponse: (row: Record<string, unknown>) => mockToChatSessionResponse(row),
   toChatMessageResponse: (row: Record<string, unknown>) => mockToChatMessageResponse(row),
   findProjectById: (id: string) => mockFindProjectById(id),
-  findTaskById: vi.fn(),
+  findTaskById: (...args: unknown[]) => mockFindTaskById(...args),
   toTaskResponse: vi.fn(),
   createChatMessage: vi.fn(),
   updateChatSessionTimestamp: vi.fn(),
@@ -176,9 +187,174 @@ describe("chat session API", () => {
     mockReadCodexSessionMetaFromFile.mockResolvedValue(null);
     mockReadCodexSessionEventsFromFile.mockResolvedValue([]);
     mockShouldUseSessionCacheForRuntime.mockReturnValue(true);
+    mockGetThreadWorkspace.mockReturnValue({
+      thread: { ...SESSION_ROW, status: "open", source: "web" },
+      objectives: [],
+      tasks: [],
+    });
+    mockLinkTaskToThread.mockReturnValue(true);
+    mockUnlinkTaskFromThread.mockReturnValue(true);
     mockFindRuntimeProfileById.mockImplementation((id: string) =>
       id === "profile-1" ? { id, projectId: "proj-1" } : null,
     );
+  });
+
+  describe("thread workspace routes", () => {
+    it("returns objectives, linked tasks, and PR evidence", async () => {
+      mockGetThreadWorkspace.mockReturnValueOnce({
+        thread: { ...SESSION_ROW, status: "wip", source: "web" },
+        objectives: [{ id: "objective-1", title: "Deliver", status: "open" }],
+        tasks: [{ taskId: "task-1", prNumber: 42, prState: "open" }],
+      });
+
+      const res = await app.request("/chat/sessions/session-1/workspace");
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(
+        expect.objectContaining({
+          tasks: [expect.objectContaining({ prNumber: 42 })],
+        }),
+      );
+    });
+
+    it("rejects linking a task from another project", async () => {
+      mockFindChatSessionById.mockReturnValueOnce({ ...SESSION_ROW, projectId: "proj-1" });
+      mockFindTaskById.mockReturnValueOnce({ id: "task-2", projectId: "proj-2" });
+
+      const res = await app.request("/chat/sessions/session-1/tasks/task-2", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ objectiveId: null }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(mockLinkTaskToThread).not.toHaveBeenCalled();
+    });
+
+    it("creates and updates objectives and broadcasts workspace changes", async () => {
+      mockCreateThreadObjective.mockReturnValueOnce({
+        id: "objective",
+        threadId: "session-1",
+        title: "Deliver",
+      });
+      const created = await app.request("/chat/sessions/session-1/objectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Deliver" }),
+      });
+      expect(created.status).toBe(201);
+      expect(mockCreateThreadObjective).toHaveBeenCalledWith({
+        threadId: "session-1",
+        title: "Deliver",
+      });
+      mockUpdateThreadObjective.mockReturnValueOnce({ id: "objective", status: "done" });
+      const updated = await app.request("/chat/sessions/session-1/objectives/objective", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "done" }),
+      });
+      expect(updated.status).toBe(200);
+      expect(mockBroadcast).toHaveBeenCalledWith({
+        type: "chat:workspace_updated",
+        payload: { id: "session-1" },
+      });
+    });
+
+    it("validates objective titles and drop reasons", async () => {
+      for (const [method, path, body] of [
+        ["POST", "/chat/sessions/session-1/objectives", { title: "   " }],
+        ["PUT", "/chat/sessions/session-1/objectives/objective", { status: "dropped" }],
+      ] as const) {
+        const response = await app.request(path, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(mockCreateThreadObjective).not.toHaveBeenCalled();
+      expect(mockUpdateThreadObjective).not.toHaveBeenCalled();
+    });
+
+    it("returns 404 for missing workspaces and objectives", async () => {
+      mockGetThreadWorkspace.mockReturnValueOnce(undefined);
+      expect((await app.request("/chat/sessions/missing/workspace")).status).toBe(404);
+      mockCreateThreadObjective.mockReturnValueOnce(undefined);
+      expect(
+        (
+          await app.request("/chat/sessions/missing/objectives", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: "Deliver" }),
+          })
+        ).status,
+      ).toBe(404);
+      mockUpdateThreadObjective.mockReturnValueOnce(undefined);
+      expect(
+        (
+          await app.request("/chat/sessions/session-1/objectives/missing", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "done" }),
+          })
+        ).status,
+      ).toBe(404);
+    });
+
+    it("links and unlinks tasks without running a model", async () => {
+      mockFindChatSessionById.mockReturnValueOnce(SESSION_ROW);
+      mockFindTaskById.mockReturnValueOnce({ id: "task-1", projectId: "proj-1" });
+      expect(
+        (
+          await app.request("/chat/sessions/session-1/tasks/task-1", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          })
+        ).status,
+      ).toBe(200);
+      expect(mockLinkTaskToThread).toHaveBeenCalledWith({
+        threadId: "session-1",
+        taskId: "task-1",
+        objectiveId: undefined,
+      });
+      expect(
+        (await app.request("/chat/sessions/session-1/tasks/task-1", { method: "DELETE" })).status,
+      ).toBe(204);
+      mockUnlinkTaskFromThread.mockReturnValueOnce(false);
+      expect(
+        (await app.request("/chat/sessions/session-1/tasks/missing", { method: "DELETE" })).status,
+      ).toBe(404);
+    });
+
+    it("rejects invalid task links without broadcasting", async () => {
+      mockFindChatSessionById.mockReturnValueOnce(SESSION_ROW);
+      mockFindTaskById.mockReturnValueOnce({ id: "task-1", projectId: "proj-1" });
+      mockLinkTaskToThread.mockReturnValueOnce(false);
+      expect(
+        (
+          await app.request("/chat/sessions/session-1/tasks/task-1", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ objectiveId: "foreign" }),
+          })
+        ).status,
+      ).toBe(400);
+      expect(mockBroadcast).not.toHaveBeenCalled();
+    });
+
+    it("returns a conflict when required objectives block closure", async () => {
+      mockFindChatSessionById.mockReturnValueOnce(SESSION_ROW);
+      mockUpdateChatSession.mockReturnValueOnce(undefined);
+
+      const res = await app.request("/chat/sessions/session-1", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "done" }),
+      });
+
+      expect(res.status).toBe(409);
+    });
   });
 
   describe("GET /chat/sessions", () => {
@@ -341,6 +517,14 @@ describe("chat session API", () => {
   describe("POST /chat/sessions", () => {
     it("creates session and returns 201", async () => {
       mockCreateChatSession.mockReturnValue(SESSION_ROW);
+      mockListSessions.mockResolvedValue([
+        {
+          id: "runtime-session-1",
+          title: "New Chat",
+          createdAt: "2026-04-01T00:00:00Z",
+          updatedAt: "2026-04-01T00:00:00Z",
+        },
+      ]);
 
       const res = await app.request("/chat/sessions", {
         method: "POST",
@@ -362,6 +546,100 @@ describe("chat session API", () => {
       });
       expect(mockBroadcast).toHaveBeenCalledWith(
         expect.objectContaining({ type: "chat:session_created" }),
+      );
+    });
+
+    it("rejects claiming a runtime session outside the project discovery scope", async () => {
+      mockListSessions.mockResolvedValue([]);
+
+      const res = await app.request("/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          title: "Foreign chat",
+          runtimeProfileId: "profile-1",
+          runtimeSessionId: "runtime-session-foreign",
+        }),
+      });
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "Runtime session not found in this project" });
+      expect(mockCreateChatSession).not.toHaveBeenCalled();
+    });
+
+    it("rejects claiming a session under a different runtime profile", async () => {
+      mockFindRuntimeProfileById.mockReturnValue({ id: "profile-other", projectId: null });
+
+      const res = await app.request("/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          title: "Mismatched runtime",
+          runtimeProfileId: "profile-other",
+          runtimeSessionId: "runtime-session-1",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "Runtime profile does not match project session discovery",
+      });
+      expect(mockCreateChatSession).not.toHaveBeenCalled();
+    });
+
+    it("claims an indexed Codex session from the same project", async () => {
+      mockFindRuntimeProfileById.mockImplementation((id: string) =>
+        id === "profile-codex-app-server" ? { id, projectId: "proj-1" } : null,
+      );
+      mockCreateChatSession.mockReturnValue({
+        ...SESSION_ROW,
+        runtimeProfileId: "profile-codex-app-server",
+        runtimeSessionId: "codex-idx-1",
+      });
+      mockResolveApiRuntimeContext.mockResolvedValue({
+        project: { id: "proj-1", rootPath: "/tmp/proj" },
+        adapter: runtimeAdapter,
+        resolvedProfile: {
+          source: "project_default",
+          profileId: "profile-codex-app-server",
+          runtimeId: "codex",
+          providerId: "openai",
+          transport: "app_server",
+          model: null,
+          baseUrl: null,
+          apiKey: null,
+          apiKeyEnvVar: null,
+          headers: {},
+          options: {},
+        },
+        selectionSource: "project_default",
+      });
+      mockListCodexSessionsByProjectRoot.mockReturnValue([
+        {
+          sessionId: "codex-idx-1",
+          title: "Existing Codex chat",
+          previewText: "Existing Codex chat",
+          sourceCreatedAt: "2026-04-01T00:00:00Z",
+          sourceUpdatedAt: "2026-04-01T00:00:00Z",
+        },
+      ]);
+
+      const res = await app.request("/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          title: "Existing Codex chat",
+          runtimeProfileId: "profile-codex-app-server",
+          runtimeSessionId: "codex-idx-1",
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockCreateChatSession).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeSessionId: "codex-idx-1" }),
       );
     });
 

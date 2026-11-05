@@ -260,6 +260,7 @@ function AppContent({
         <>
           <ChatPanel
             key={project.id}
+            canManageTaskLinks={canManageConfiguration}
             isOpen={chatOpen}
             projectId={project.id}
             projectName={project.name}

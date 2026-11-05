@@ -94,10 +94,15 @@ export {
   type RuntimeLimitEventPayload,
   type WarmupBroadcastPayload,
   type ChatSessionSource,
+  type ThreadStatus,
+  type ThreadObjectiveStatus,
   type ChatSession,
   type CreateChatSessionInput,
   type UpdateChatSessionInput,
   type ChatSessionMessage,
+  type ThreadObjective,
+  type ThreadTaskReference,
+  type ThreadWorkspace,
 } from "./types.js";
 
 export {

@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { chatSessions } from "../schema.js";
 import { closeDb, createTestDb, getDb } from "../db.js";
 
-const CURRENT_SCHEMA_VERSION = 30;
+const CURRENT_SCHEMA_VERSION = 31;
 
 function removeSqliteArtifacts(dbPath: string): void {
   for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
@@ -45,13 +45,61 @@ describe("db", () => {
       getDb(dbPath);
       closeDb();
       const upgraded = new Database(dbPath, { readonly: true });
-      expect(upgraded.pragma("user_version", { simple: true })).toBe(30);
+      expect(upgraded.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
       expect(
         upgraded
           .prepare("SELECT stage_attempt_id, stage_started_at, status FROM tasks WHERE id = ?")
           .get("task"),
       ).toEqual({ stage_attempt_id: null, stage_started_at: null, status: "review" });
       upgraded.close();
+    } finally {
+      closeDb();
+      removeSqliteArtifacts(dbPath);
+    }
+  });
+
+  it("upgrades a v30 chat without losing history and preserves thread links after restart", () => {
+    closeDb();
+    const dbPath = join(tmpdir(), `aif-thread-upgrade-${Date.now()}-${Math.random()}.sqlite`);
+    try {
+      getDb(dbPath);
+      closeDb();
+      const legacy = new Database(dbPath);
+      legacy.exec("DROP TABLE thread_task_links");
+      legacy.exec("DROP TABLE thread_objectives");
+      legacy.exec("ALTER TABLE chat_sessions DROP COLUMN status");
+      legacy.pragma("user_version = 30");
+      legacy.exec(`
+        INSERT INTO projects (id, name, root_path) VALUES ('project', 'Upgrade', '/tmp/upgrade');
+        INSERT INTO tasks (id, project_id, title) VALUES ('task', 'project', 'Linked task');
+        INSERT INTO chat_sessions (id, project_id, title) VALUES ('thread', 'project', 'Existing chat');
+        INSERT INTO chat_messages (id, session_id, role, content) VALUES ('message', 'thread', 'user', 'Keep this');
+      `);
+      legacy.close();
+      getDb(dbPath);
+      closeDb();
+      const upgraded = new Database(dbPath);
+      expect(upgraded.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+      expect(
+        upgraded.prepare("SELECT title, status FROM chat_sessions WHERE id = 'thread'").get(),
+      ).toEqual({ title: "Existing chat", status: "open" });
+      expect(
+        upgraded.prepare("SELECT content FROM chat_messages WHERE id = 'message'").get(),
+      ).toEqual({ content: "Keep this" });
+      upgraded.exec(`
+        INSERT INTO thread_objectives (id, thread_id, title) VALUES ('objective', 'thread', 'Deliver');
+        INSERT INTO thread_task_links (task_id, thread_id, objective_id) VALUES ('task', 'thread', 'objective');
+      `);
+      upgraded.close();
+      getDb(dbPath);
+      closeDb();
+      const restarted = new Database(dbPath, { readonly: true });
+      expect(
+        restarted
+          .prepare("SELECT objective_id FROM thread_task_links WHERE task_id = 'task'")
+          .get(),
+      ).toEqual({ objective_id: "objective" });
+      restarted.close();
     } finally {
       closeDb();
       removeSqliteArtifacts(dbPath);

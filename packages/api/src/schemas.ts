@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_REVIEW_ITERATIONS_BOUNDS, TASK_EVENTS, TASK_STATUSES, getEnv } from "@aif/shared";
+import { MAX_REVIEW_ITERATIONS_BOUNDS, TASK_EVENTS, TASK_STATUSES } from "@aif/shared";
 
 export const participantLoginSchema = z.object({
   username: z.string().trim().min(1).max(200),
@@ -288,8 +288,30 @@ export const createChatSessionSchema = z.object({
 
 export const updateChatSessionSchema = z.object({
   title: z.string().min(1).max(200).optional(),
+  status: z.enum(["open", "wip", "waiting", "blocked", "done"]).optional(),
   runtimeProfileId: z.string().min(1).nullable().optional(),
   runtimeSessionId: z.string().min(1).nullable().optional(),
+});
+
+export const createThreadObjectiveSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  required: z.boolean().optional(),
+});
+
+export const updateThreadObjectiveSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300).optional(),
+    status: z.enum(["open", "done", "dropped"]).optional(),
+    required: z.boolean().optional(),
+    dropReason: z.string().trim().min(1).max(1000).nullable().optional(),
+  })
+  .refine((value) => value.status !== "dropped" || Boolean(value.dropReason), {
+    message: "dropReason is required when an objective is dropped",
+    path: ["dropReason"],
+  });
+
+export const linkThreadTaskSchema = z.object({
+  objectiveId: z.string().min(1).nullable().optional(),
 });
 
 export const updateAppRuntimeDefaultsSchema = z

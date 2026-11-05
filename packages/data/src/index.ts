@@ -56,6 +56,9 @@ import {
   runtimeProfiles,
   chatSessions,
   chatMessages,
+  threadObjectives,
+  threadTaskLinks,
+  githubIssues,
   usageEvents,
   runtimeWarmupSessions,
   codexSessions,
@@ -96,6 +99,10 @@ import {
   type ChatSessionRow,
   type ChatMessageRow,
   type ChatMessageAttachment,
+  type ThreadObjective,
+  type ThreadObjectiveStatus,
+  type ThreadStatus,
+  type ThreadWorkspace,
 } from "@aif/shared";
 import { getDb } from "@aif/shared/server";
 import {
@@ -164,6 +171,7 @@ export {
 } from "./taskTransitions.js";
 
 const log = createLogger("data");
+const THREAD_WORKSPACE_ENABLED = getEnv().AIF_CHAT_THREAD_WORKSPACE_ENABLED;
 const AUTO_REVIEW_STRATEGY_SET = new Set<string>(AUTO_REVIEW_STRATEGIES);
 const AUTO_REVIEW_FINDING_SOURCE_SET = new Set<string>(AUTO_REVIEW_FINDING_SOURCES);
 const APP_SETTINGS_ID = 1;
@@ -4069,6 +4077,7 @@ export function toChatSessionResponse(row: ChatSessionRow): ChatSession {
     agentSessionId: row.agentSessionId,
     runtimeProfileId: row.runtimeProfileId,
     runtimeSessionId: row.runtimeSessionId ?? row.agentSessionId,
+    ...(THREAD_WORKSPACE_ENABLED ? { status: row.status } : {}),
     source: "web",
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -4100,6 +4109,19 @@ export function createChatSession(input: {
   runtimeProfileId?: string | null;
   runtimeSessionId?: string | null;
 }): ChatSessionRow | undefined {
+  if (THREAD_WORKSPACE_ENABLED && input.runtimeSessionId) {
+    const existing = getDb()
+      .select()
+      .from(chatSessions)
+      .where(
+        and(
+          eq(chatSessions.projectId, input.projectId),
+          eq(chatSessions.runtimeSessionId, input.runtimeSessionId),
+        ),
+      )
+      .get();
+    if (existing) return existing;
+  }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   log.debug(
@@ -4143,6 +4165,7 @@ export function updateChatSession(
   id: string,
   fields: {
     title?: string;
+    status?: ThreadStatus;
     agentSessionId?: string | null;
     runtimeProfileId?: string | null;
     runtimeSessionId?: string | null;
@@ -4156,20 +4179,197 @@ export function updateChatSession(
     },
     "Updating chat session runtime metadata",
   );
+  const db = getDb();
   const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
   if (fields.title !== undefined) patch.title = fields.title;
+  if (THREAD_WORKSPACE_ENABLED && fields.status !== undefined) patch.status = fields.status;
   if (fields.agentSessionId !== undefined) patch.agentSessionId = fields.agentSessionId;
   if (fields.runtimeProfileId !== undefined) patch.runtimeProfileId = fields.runtimeProfileId;
   if (fields.runtimeSessionId !== undefined) patch.runtimeSessionId = fields.runtimeSessionId;
-  getDb().update(chatSessions).set(patch).where(eq(chatSessions.id, id)).run();
+  const updated = db.transaction((tx) => {
+    if (THREAD_WORKSPACE_ENABLED && fields.status === "done") {
+      const incomplete = tx
+        .select({ count: count() })
+        .from(threadObjectives)
+        .where(
+          and(
+            eq(threadObjectives.threadId, id),
+            eq(threadObjectives.required, true),
+            eq(threadObjectives.status, "open"),
+          ),
+        )
+        .get();
+      if ((incomplete?.count ?? 0) > 0) return false;
+    }
+    tx.update(chatSessions).set(patch).where(eq(chatSessions.id, id)).run();
+    return true;
+  });
+  if (!updated) return undefined;
   return findChatSessionById(id);
 }
 
 export function deleteChatSession(id: string): void {
   log.debug("deleteChatSession id=%s", id);
+  getDb().transaction((tx) => {
+    tx.delete(chatMessages).where(eq(chatMessages.sessionId, id)).run();
+    tx.delete(threadTaskLinks).where(eq(threadTaskLinks.threadId, id)).run();
+    tx.delete(threadObjectives).where(eq(threadObjectives.threadId, id)).run();
+    tx.delete(chatSessions).where(eq(chatSessions.id, id)).run();
+  });
+}
+
+export function getThreadWorkspace(id: string): ThreadWorkspace | undefined {
+  const row = findChatSessionById(id);
+  if (!row) return undefined;
+  const objectives = getDb()
+    .select()
+    .from(threadObjectives)
+    .where(eq(threadObjectives.threadId, id))
+    .orderBy(asc(threadObjectives.position), asc(threadObjectives.createdAt))
+    .all();
+  const taskRows = getDb()
+    .select({
+      taskId: tasks.id,
+      title: tasks.title,
+      status: tasks.status,
+      objectiveId: threadTaskLinks.objectiveId,
+      prNumber: githubIssues.prNumber,
+      prUrl: githubIssues.prUrl,
+      prState: githubIssues.prState,
+      prChecksStatus: githubIssues.prChecksStatus,
+      reviewState: githubIssues.reviewState,
+    })
+    .from(threadTaskLinks)
+    .innerJoin(tasks, eq(threadTaskLinks.taskId, tasks.id))
+    .leftJoin(githubIssues, eq(githubIssues.taskId, tasks.id))
+    .where(eq(threadTaskLinks.threadId, id))
+    .orderBy(asc(threadTaskLinks.createdAt))
+    .all();
+  return {
+    thread: { ...toChatSessionResponse(row), status: row.status },
+    objectives,
+    tasks: taskRows,
+  };
+}
+
+export function createThreadObjective(input: {
+  threadId: string;
+  title: string;
+  required?: boolean;
+}): ThreadObjective | undefined {
   const db = getDb();
-  db.delete(chatMessages).where(eq(chatMessages.sessionId, id)).run();
-  db.delete(chatSessions).where(eq(chatSessions.id, id)).run();
+  return db.transaction((tx) => {
+    const thread = tx
+      .select({ status: chatSessions.status })
+      .from(chatSessions)
+      .where(eq(chatSessions.id, input.threadId))
+      .get();
+    if (!thread || thread.status === "done") return undefined;
+    const now = new Date().toISOString();
+    const last = tx
+      .select({ position: max(threadObjectives.position) })
+      .from(threadObjectives)
+      .where(eq(threadObjectives.threadId, input.threadId))
+      .get();
+    const id = crypto.randomUUID();
+    tx.insert(threadObjectives)
+      .values({
+        id,
+        threadId: input.threadId,
+        title: input.title,
+        required: input.required ?? true,
+        position: (last?.position ?? 900) + 100,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    return tx.select().from(threadObjectives).where(eq(threadObjectives.id, id)).get();
+  });
+}
+
+export function updateThreadObjective(
+  threadId: string,
+  objectiveId: string,
+  fields: {
+    title?: string;
+    status?: ThreadObjectiveStatus;
+    required?: boolean;
+    dropReason?: string | null;
+  },
+): ThreadObjective | undefined {
+  return getDb().transaction((tx) => {
+    const existing = tx
+      .select()
+      .from(threadObjectives)
+      .where(and(eq(threadObjectives.id, objectiveId), eq(threadObjectives.threadId, threadId)))
+      .get();
+    if (!existing) return undefined;
+    const nextStatus = fields.status ?? existing.status;
+    const nextRequired = fields.required ?? existing.required;
+    const nextDropReason = fields.dropReason ?? existing.dropReason;
+    if (nextStatus === "dropped" && !nextDropReason?.trim()) return undefined;
+    const thread = tx
+      .select({ status: chatSessions.status })
+      .from(chatSessions)
+      .where(eq(chatSessions.id, threadId))
+      .get();
+    if (thread?.status === "done" && nextRequired && nextStatus === "open") return undefined;
+    tx.update(threadObjectives)
+      .set({
+        ...fields,
+        dropReason: nextStatus === "dropped" ? nextDropReason!.trim() : null,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(threadObjectives.id, objectiveId))
+      .run();
+    return tx.select().from(threadObjectives).where(eq(threadObjectives.id, objectiveId)).get();
+  });
+}
+
+export function linkTaskToThread(input: {
+  threadId: string;
+  taskId: string;
+  objectiveId?: string | null;
+}): boolean {
+  const thread = findChatSessionById(input.threadId);
+  const task = findTaskById(input.taskId);
+  if (!thread || !task || thread.projectId !== task.projectId) return false;
+  if (input.objectiveId) {
+    const objective = getDb()
+      .select({ id: threadObjectives.id })
+      .from(threadObjectives)
+      .where(
+        and(
+          eq(threadObjectives.id, input.objectiveId),
+          eq(threadObjectives.threadId, input.threadId),
+        ),
+      )
+      .get();
+    if (!objective) return false;
+  }
+  const result = getDb()
+    .insert(threadTaskLinks)
+    .values({
+      taskId: input.taskId,
+      threadId: input.threadId,
+      objectiveId: input.objectiveId ?? null,
+    })
+    .onConflictDoUpdate({
+      target: threadTaskLinks.taskId,
+      set: { objectiveId: input.objectiveId ?? null },
+      setWhere: eq(threadTaskLinks.threadId, input.threadId),
+    })
+    .run();
+  return result.changes > 0;
+}
+
+export function unlinkTaskFromThread(threadId: string, taskId: string): boolean {
+  return (
+    getDb()
+      .delete(threadTaskLinks)
+      .where(and(eq(threadTaskLinks.threadId, threadId), eq(threadTaskLinks.taskId, taskId)))
+      .run().changes > 0
+  );
 }
 
 export function createChatMessage(input: {

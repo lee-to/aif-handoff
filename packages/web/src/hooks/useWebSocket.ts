@@ -198,6 +198,8 @@ export function useWebSocket(enabled = true) {
         raw.type === "chat:session_created" ||
         raw.type === "chat:session_deleted"
       ) {
+        if (raw.type === "chat:session_deleted")
+          queryClient.invalidateQueries({ queryKey: ["threadWorkspace"] });
         window.dispatchEvent(new CustomEvent(raw.type, { detail: raw.payload }));
         if (
           (raw.type === "chat:done" || raw.type === "chat:error") &&
@@ -233,6 +235,15 @@ export function useWebSocket(enabled = true) {
           queryClient.invalidateQueries({ queryKey: ["task", raw.payload.taskId] });
         }
         return;
+      }
+
+      if (raw.type === "chat:workspace_updated" && hasIdPayload(raw.payload)) {
+        queryClient.invalidateQueries({ queryKey: ["threadWorkspace"] });
+        queryClient.invalidateQueries({ queryKey: ["chatSessions"] });
+        return;
+      }
+      if (raw.type === "task:moved" || raw.type === "task:updated" || raw.type === "task:deleted") {
+        queryClient.invalidateQueries({ queryKey: ["threadWorkspace"] });
       }
 
       const data = raw as unknown as WsEvent;

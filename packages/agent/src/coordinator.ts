@@ -593,7 +593,7 @@ async function processOneTask(task: TaskRow, stage: StatusTransition): Promise<b
   updateTaskStatus(
     task.id,
     stage.inProgress,
-    ATTEMPT_RECOVERY_ENABLED ? { stageStartedAt: task.stageStartedAt } : {},
+    { stageStartedAt: task.stageStartedAt },
     { title: taskTitle, fromStatus: sourceStatus },
   );
 

@@ -229,7 +229,7 @@ export function transitionTaskStatus(
       const updated = tx
         .update(tasks)
         .set({
-          ...(isTaskAttemptRecoveryEnabled() && task.status !== input.status
+          ...(task.status !== input.status
             ? { stageStartedAt: null }
             : {}),
           ...normalizeExtra(input.extra ?? {}),
@@ -360,9 +360,9 @@ export function applyTaskAction(input: ApplyTaskActionInput): TaskTransitionResu
         .set({
           ...normalizeExtra(input.extra ?? {}),
           ...normalizeExtra(resolution.patch),
+          stageStartedAt: null,
           ...(isTaskAttemptRecoveryEnabled()
             ? {
-                stageStartedAt: null,
                 stageAttemptId: null,
                 lockedBy: null,
                 lockedUntil: null,

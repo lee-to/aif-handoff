@@ -2284,14 +2284,10 @@ export function claimCoordinatorTaskIfEligible(
     .set({
       lockedBy: input.coordinatorId,
       lockedUntil,
-      ...(isTaskAttemptRecoveryEnabled()
-        ? {
-            stageAttemptId: crypto.randomUUID(),
-            stageStartedAt: nowIso,
-            lastHeartbeatAt: nowIso,
-            updatedAt: nowIso,
-          }
-        : {}),
+      stageStartedAt: nowIso,
+      lastHeartbeatAt: nowIso,
+      updatedAt: nowIso,
+      ...(isTaskAttemptRecoveryEnabled() ? { stageAttemptId: crypto.randomUUID() } : {}),
     })
     .where(and(...conditions))
     .returning()
@@ -2747,7 +2743,7 @@ export function listStaleInProgressTasks(): TaskRow[] {
         inArray(tasks.status, ["planning", "improve", "implementing", "review", "verify"]),
         eq(tasks.executionOwner, "ai"),
         eq(tasks.paused, false),
-        isTaskAttemptRecoveryEnabled() ? isNotNull(tasks.stageStartedAt) : undefined,
+        isNotNull(tasks.stageStartedAt),
         // Skip tasks with active (non-expired) locks — they're being processed
         or(
           sql`${tasks.lockedBy} IS NULL`,

@@ -15506,6 +15506,836 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "Vvt3x",
+      "x": 7180,
+      "y": 0,
+      "name": "Swarm Control Plane — Dark",
+      "theme": {
+        "mode": "dark"
+      },
+      "clip": true,
+      "width": 1120,
+      "fill": "$background",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 24,
+      "children": [
+        {
+          "type": "text",
+          "id": "QmWHm",
+          "name": "SwarmPanel title",
+          "fill": "$foreground",
+          "content": "SWARM  /  Documentation Cleanup",
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 22,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "bGP6O",
+          "name": "Connection state",
+          "fill": "$primary",
+          "content": "LIVE · Last sync 09:01:00 · Role: owner",
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "q9cCAc",
+          "name": "SwarmPanel — Runs",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "o7Pf7",
+              "name": "Runs heading",
+              "fill": "$foreground",
+              "content": "Runs  /  Project: Documentation  /  Status: All",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "E5OuH",
+              "name": "Run row",
+              "fill": "$foreground",
+              "content": "Documentation Cleanup     RUNNING     18 / 31 tasks     5 / 5 workers",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "H9CLt0",
+              "name": "Run metrics",
+              "fill": "$foreground",
+              "content": "Started 09:00  ·  Tokens 1.2M  ·  Cost unknown  ·  Budget $5",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "SfnlU",
+              "type": "ref",
+              "ref": "3CI7c",
+              "name": "Create run action",
+              "descendants": {
+                "wMRLg": {
+                  "content": "New Swarm run"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Pf4Yz",
+          "name": "SwarmRunDetail — Overview",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "XLaSY",
+              "name": "Overview heading",
+              "fill": "$foreground",
+              "content": "RUNNING  ·  Acceptance: Documentation links pass",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "ole6I",
+              "name": "Overview metrics",
+              "fill": "$foreground",
+              "content": "Workers 5 / 5   Tasks 18 / 31   Elapsed 24m   Tokens 1.2M   Cost unknown",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "SL4sk",
+              "name": "Sandbox state",
+              "fill": "$foreground",
+              "content": "Sandbox: workspace-write  ·  Policy: integration",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "TozLm",
+              "name": "Attention state",
+              "fill": "$destructive",
+              "content": "Blocked: TASK-21 needs approval  ·  Integration: 2 pending, 1 conflict",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "FhPXm",
+              "name": "Confirmed controls",
+              "gap": 12,
+              "children": [
+                {
+                  "id": "gp1wE",
+                  "type": "ref",
+                  "ref": "3CI7c",
+                  "name": "Pause",
+                  "descendants": {
+                    "wMRLg": {
+                      "content": "Pause"
+                    }
+                  }
+                },
+                {
+                  "id": "RzLBq",
+                  "type": "ref",
+                  "ref": "3CI7c",
+                  "name": "Resume",
+                  "descendants": {
+                    "wMRLg": {
+                      "content": "Resume"
+                    }
+                  }
+                },
+                {
+                  "id": "xXYq5",
+                  "type": "ref",
+                  "ref": "3CI7c",
+                  "name": "Cancel",
+                  "descendants": {
+                    "wMRLg": {
+                      "content": "Cancel"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "IbsJu",
+              "name": "Tabs",
+              "fill": "$primary",
+              "content": "Overview  /  Tasks  /  Task graph  /  Agents  /  Integration & review  /  Events",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "A7jqX",
+          "name": "SwarmTaskGraph — hierarchy and dependencies",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "KaHXO",
+              "name": "Graph filters",
+              "fill": "$foreground",
+              "content": "Search tasks…   Status: All   Relation: Parent-child / Dependencies",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "XIVes",
+              "name": "Parent tree",
+              "fill": "$foreground",
+              "content": "▾ TASK-1 Documentation audit\n    ▾ TASK-17 Check links   [integrated]\n    ▸ TASK-21 Remove secrets   [blocked]",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "Fyegz",
+              "name": "Dependency DAG",
+              "fill": "$foreground",
+              "content": "TASK-17 → TASK-19 → TASK-23\n           TASK-21 → TASK-23",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "ssxIB",
+              "name": "Task details",
+              "fill": "$foreground",
+              "content": "TASK-17 · Worker 1 · 60s · Result: Updated links\nGit: refs/heads/swarm/task-17 · Tests: links passed",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rVE0J",
+          "name": "SwarmRunDetail — Agents",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "V1t81M",
+              "name": "Agents table",
+              "fill": "$foreground",
+              "content": "AGENT       ROLE      PROVIDER / MODEL      TASK      HEARTBEAT    TOKENS\nWorker 1    worker    openai / model-1      TASK-17   09:01:00     1200",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "sprdr",
+              "name": "Agent detail and logs",
+              "fill": "$foreground",
+              "content": "▾ Worker 1: task history TASK-17  /  Logs: Submitted TASK-17",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "dOyMD",
+          "name": "SwarmRunDetail — Integration and approvals",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "Yo7o4",
+              "name": "Integration evidence",
+              "fill": "$foreground",
+              "content": "Documentation patch  ·  pending  ·  refs/heads/swarm/task-17\nCI: passed  ·  Tests: links passed  ·  Conflicts: none\n▾ Diff: - old link / + new link",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "GUEJe",
+              "name": "Approval request",
+              "fill": "$primary",
+              "content": "APPROVAL: Integrate documentation patch  /  integration",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "vfdhr",
+              "name": "Approval decisions",
+              "fill": "$foreground",
+              "content": "[Approve]  [Reject]  [Request changes]  →  Confirm with reason",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "BmeES",
+          "name": "SwarmRunDetail — Events",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "NoV4y",
+              "name": "Events filters",
+              "fill": "$foreground",
+              "content": "Filter by event / task / agent",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "X2hlOL",
+              "name": "Event timeline",
+              "fill": "$foreground",
+              "content": "#122 09:00 run.started        Lead\n#123 09:01 task.submitted     TASK-17 / Worker 1\n#124 09:02 approval.requested Integration",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "p71mhQ",
+          "name": "Swarm forms — create and confirm",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "Re39e",
+              "name": "Create fields",
+              "fill": "$foreground",
+              "content": "NEW RUN: Goal / Acceptance criteria / Workers / Budget / Approval policy",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "Y1DjLc",
+              "name": "Confirm action dialog",
+              "fill": "$foreground",
+              "content": "CONFIRM PAUSE: Runtime will pause new work. In-flight work follows Runtime policy.\n[Back] [Confirm pause]  ·  Retry retains command ID",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "j3sW3d",
+              "name": "Stale state",
+              "fill": "$destructive",
+              "content": "STALE — Runtime unavailable. Last snapshot: 09:01:00. Controls disabled.",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "x6Ld9o",
+      "x": 8380,
+      "y": 0,
+      "name": "Swarm Control Plane — Light",
+      "theme": {
+        "mode": "light"
+      },
+      "clip": true,
+      "width": 1120,
+      "fill": "$background",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 24,
+      "children": [
+        {
+          "type": "text",
+          "id": "i2f9D",
+          "name": "SwarmPanel title",
+          "fill": "$foreground",
+          "content": "SWARM  /  Documentation Cleanup",
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 22,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "XZMhL",
+          "name": "Connection state",
+          "fill": "$primary",
+          "content": "LIVE · Last sync 09:01:00 · Role: owner",
+          "fontFamily": "IBM Plex Mono",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "bBruz",
+          "name": "SwarmPanel — Runs",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "jCJyO",
+              "name": "Runs heading",
+              "fill": "$foreground",
+              "content": "Runs  /  Project: Documentation  /  Status: All",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "w8tUa",
+              "name": "Run row",
+              "fill": "$foreground",
+              "content": "Documentation Cleanup     RUNNING     18 / 31 tasks     5 / 5 workers",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "VK3YF",
+              "name": "Run metrics",
+              "fill": "$foreground",
+              "content": "Started 09:00  ·  Tokens 1.2M  ·  Cost unknown  ·  Budget $5",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "NugNO",
+              "type": "ref",
+              "ref": "3CI7c",
+              "name": "Create run action",
+              "descendants": {
+                "wMRLg": {
+                  "content": "New Swarm run"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "E2b5LO",
+          "name": "SwarmRunDetail — Overview",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "V1CPJ5",
+              "name": "Overview heading",
+              "fill": "$foreground",
+              "content": "RUNNING  ·  Acceptance: Documentation links pass",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "KbqDw",
+              "name": "Overview metrics",
+              "fill": "$foreground",
+              "content": "Workers 5 / 5   Tasks 18 / 31   Elapsed 24m   Tokens 1.2M   Cost unknown",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "heBJL",
+              "name": "Sandbox state",
+              "fill": "$foreground",
+              "content": "Sandbox: workspace-write  ·  Policy: integration",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "U2EKF",
+              "name": "Attention state",
+              "fill": "$destructive",
+              "content": "Blocked: TASK-21 needs approval  ·  Integration: 2 pending, 1 conflict",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "PWOdz",
+              "name": "Confirmed controls",
+              "gap": 12,
+              "children": [
+                {
+                  "id": "vCcmc",
+                  "type": "ref",
+                  "ref": "3CI7c",
+                  "name": "Pause",
+                  "descendants": {
+                    "wMRLg": {
+                      "content": "Pause"
+                    }
+                  }
+                },
+                {
+                  "id": "hDw7h",
+                  "type": "ref",
+                  "ref": "3CI7c",
+                  "name": "Resume",
+                  "descendants": {
+                    "wMRLg": {
+                      "content": "Resume"
+                    }
+                  }
+                },
+                {
+                  "id": "rsPnZ",
+                  "type": "ref",
+                  "ref": "3CI7c",
+                  "name": "Cancel",
+                  "descendants": {
+                    "wMRLg": {
+                      "content": "Cancel"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "UNnjy",
+              "name": "Tabs",
+              "fill": "$primary",
+              "content": "Overview  /  Tasks  /  Task graph  /  Agents  /  Integration & review  /  Events",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rqheh",
+          "name": "SwarmTaskGraph — hierarchy and dependencies",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "IBYzP",
+              "name": "Graph filters",
+              "fill": "$foreground",
+              "content": "Search tasks…   Status: All   Relation: Parent-child / Dependencies",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "qcy20",
+              "name": "Parent tree",
+              "fill": "$foreground",
+              "content": "▾ TASK-1 Documentation audit\n    ▾ TASK-17 Check links   [integrated]\n    ▸ TASK-21 Remove secrets   [blocked]",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "hUhL1",
+              "name": "Dependency DAG",
+              "fill": "$foreground",
+              "content": "TASK-17 → TASK-19 → TASK-23\n           TASK-21 → TASK-23",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "fyFu4",
+              "name": "Task details",
+              "fill": "$foreground",
+              "content": "TASK-17 · Worker 1 · 60s · Result: Updated links\nGit: refs/heads/swarm/task-17 · Tests: links passed",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "S9kBj",
+          "name": "SwarmRunDetail — Agents",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "rWbhZ",
+              "name": "Agents table",
+              "fill": "$foreground",
+              "content": "AGENT       ROLE      PROVIDER / MODEL      TASK      HEARTBEAT    TOKENS\nWorker 1    worker    openai / model-1      TASK-17   09:01:00     1200",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "vIR5N",
+              "name": "Agent detail and logs",
+              "fill": "$foreground",
+              "content": "▾ Worker 1: task history TASK-17  /  Logs: Submitted TASK-17",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "JcSU6",
+          "name": "SwarmRunDetail — Integration and approvals",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "TQ6Rw",
+              "name": "Integration evidence",
+              "fill": "$foreground",
+              "content": "Documentation patch  ·  pending  ·  refs/heads/swarm/task-17\nCI: passed  ·  Tests: links passed  ·  Conflicts: none\n▾ Diff: - old link / + new link",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "OF0pq",
+              "name": "Approval request",
+              "fill": "$primary",
+              "content": "APPROVAL: Integrate documentation patch  /  integration",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "duyp9",
+              "name": "Approval decisions",
+              "fill": "$foreground",
+              "content": "[Approve]  [Reject]  [Request changes]  →  Confirm with reason",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "tnFmH",
+          "name": "SwarmRunDetail — Events",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "sjSYt",
+              "name": "Events filters",
+              "fill": "$foreground",
+              "content": "Filter by event / task / agent",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "YGCRr",
+              "name": "Event timeline",
+              "fill": "$foreground",
+              "content": "#122 09:00 run.started        Lead\n#123 09:01 task.submitted     TASK-17 / Worker 1\n#124 09:02 approval.requested Integration",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "G8xRVQ",
+          "name": "Swarm forms — create and confirm",
+          "width": "fill_container",
+          "fill": "$card",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "K3HvE",
+              "name": "Create fields",
+              "fill": "$foreground",
+              "content": "NEW RUN: Goal / Acceptance criteria / Workers / Budget / Approval policy",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "i8oO8c",
+              "name": "Confirm action dialog",
+              "fill": "$foreground",
+              "content": "CONFIRM PAUSE: Runtime will pause new work. In-flight work follows Runtime policy.\n[Back] [Confirm pause]  ·  Retry retains command ID",
+              "lineHeight": 1.8,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "PVkYF",
+              "name": "Stale state",
+              "fill": "$destructive",
+              "content": "STALE — Runtime unavailable. Last snapshot: 09:01:00. Controls disabled.",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
     }
   ],
   "themes": {

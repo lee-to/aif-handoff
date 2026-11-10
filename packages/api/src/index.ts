@@ -15,6 +15,7 @@ import { codexAuthRouter } from "./routes/codexAuth.js";
 import { authRouter } from "./routes/auth.js";
 import { participantsRouter } from "./routes/participants.js";
 import { githubRouter } from "./routes/github.js";
+import { swarmRouter } from "./routes/swarm.js";
 import { setupWebSocket, closeAllWebSocketClients } from "./ws.js";
 import { requestLogger } from "./middleware/logger.js";
 import { trackApiLoad } from "./middleware/apiLoad.js";
@@ -93,6 +94,7 @@ app.route("/tasks", tasksRouter);
 app.route("/chat", chatRouter);
 app.route("/settings", settingsRoutes);
 app.route("/runtime-profiles", runtimeProfilesRouter);
+app.route("/swarm", swarmRouter);
 
 // Codex OAuth login proxy (feature-flagged; see AIF_ENABLE_CODEX_LOGIN_PROXY).
 // The /auth/codex/capabilities endpoint is always registered so the frontend can

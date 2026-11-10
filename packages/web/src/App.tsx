@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Header } from "./components/layout/Header";
 import { Board } from "./components/kanban/Board";
@@ -25,6 +25,10 @@ import { LoginPage } from "./components/auth/LoginPage";
 import { ParticipantManagementDialog } from "./components/participants/ParticipantManagementDialog";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
+import { Tabs } from "./components/ui/tabs";
+const SwarmPanel = lazy(() =>
+  import("./components/swarm/SwarmPanel").then((module) => ({ default: module.SwarmPanel })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,6 +83,7 @@ function AppContent({
   const [chatOpen, setChatOpen] = useState(false);
   const [runtimeSettingsOpen, setRuntimeSettingsOpen] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  const [projectView, setProjectView] = useState("tasks");
   const [density, setDensity] = useState<"comfortable" | "compact">(() => {
     const saved = readStorage(STORAGE_KEYS.DENSITY);
     return saved === "compact" ? "compact" : "comfortable";
@@ -225,6 +230,17 @@ function AppContent({
       />
 
       <main className={`mx-auto w-full ${density === "compact" ? "p-4 md:p-5" : "p-6 md:p-8"}`}>
+        {project && (
+          <Tabs
+            className="mb-4"
+            items={[
+              { value: "tasks", label: "Tasks" },
+              { value: "swarm", label: "Swarm" },
+            ]}
+            value={projectView}
+            onValueChange={setProjectView}
+          />
+        )}
         {project && canManageConfiguration && (
           <ProjectRuntimeSettings
             key={project.id}
@@ -234,7 +250,11 @@ function AppContent({
             hideTrigger
           />
         )}
-        {project ? (
+        {project && projectView === "swarm" ? (
+          <Suspense fallback={<p role="status">Loading Swarm…</p>}>
+            <SwarmPanel key={project.id} projectId={project.id} />
+          </Suspense>
+        ) : project ? (
           <Board
             projectId={project.id}
             onTaskClick={handleTaskOpen}

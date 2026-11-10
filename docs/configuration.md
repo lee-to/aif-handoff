@@ -798,3 +798,12 @@ The `getProjectConfig(projectRoot)` utility in `@aif/shared` reads and caches co
 
 - [Getting Started](getting-started.md) — installation and first run
 - [Architecture](architecture.md) — how the agent pipeline uses these settings
+
+## Swarm Runtime connection
+
+Optional server settings connect the Swarm tab to one separately managed Runtime:
+`SWARM_RUNTIME_URL`, `SWARM_RUNTIME_TOKEN`, `SWARM_PROJECT_ID` and comma-separated
+`SWARM_OPERATOR_IDS`. URL/token/project are required together; credentials are
+server-only. Use HTTPS remotely or local HTTP. Administrators are Swarm owners;
+named members are operators; other members are viewers. See [Swarm](swarm.md) for
+Docker addresses, permissions, reconnection behavior and the v1 contract fixture.

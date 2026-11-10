@@ -1775,3 +1775,38 @@ See [MCP Sync Server](mcp-sync.md) for full documentation.
 - [Architecture](architecture.md) — system overview and data flow
 - [Configuration](configuration.md) — server port and environment settings
 - [MCP Sync Server](mcp-sync.md) — MCP tools and sync protocol
+
+## Swarm control plane
+
+All endpoints below use existing participant authentication and CSRF middleware.
+Owner/operator/viewer permissions and the external Runtime v1 contract are described
+in [Swarm](swarm.md). Only the server-configured project is accessible.
+
+| Method | Path                                                | Role / response                                                   |
+| ------ | --------------------------------------------------- | ----------------------------------------------------------------- |
+| GET    | `/swarm/connection`                                 | Viewer; `{enabled,projectId,role,schemaVersion}` (no credentials) |
+| GET    | `/swarm/runs`                                       | Viewer; v1 run list                                               |
+| GET    | `/swarm/runs/:runId`                                | Viewer; v1 atomic snapshot                                        |
+| POST   | `/swarm/runs`                                       | Owner; validated create input; 202 command acknowledgement        |
+| POST   | `/swarm/runs/:runId/pause`                          | Operator/owner; `{command_id,confirmed:true}`                     |
+| POST   | `/swarm/runs/:runId/resume`                         | Operator/owner; `{command_id,confirmed:true}`                     |
+| POST   | `/swarm/runs/:runId/cancel`                         | Operator/owner; `{command_id,confirmed:true}`                     |
+| POST   | `/swarm/runs/:runId/instructions`                   | Operator/owner; control input + `instruction`                     |
+| POST   | `/swarm/runs/:runId/approvals/:approvalId/decision` | Owner; control input + `decision`, `reason`                       |
+| GET    | `/swarm/runs/:runId/events?after=0`                 | Viewer; ordered v1 events                                         |
+| GET    | `/swarm/runs/:runId/events/stream?after=0`          | Viewer; SSE, numeric `Last-Event-ID` overrides query cursor       |
+
+Create input: UUID `command_id`, nonempty `goal`, nonempty `acceptance_criteria[]`,
+`worker_limit` (1–32), nullable positive `budget_usd`, and
+`policy` (`manual|integration|restricted-actions`). Project/path/actor are resolved
+on the server. Decision is `approve|reject|request_changes`; reason is mandatory.
+Commands return `{schema_version:1,command_id,run_id,accepted:true}` with HTTP 202.
+Audit persists `swarm.<action>.requested`, `.accepted` or `.unconfirmed`; denied
+roles persist `swarm.command.denied`. An unconfirmed command may have executed:
+retry the same command ID. Runtime owns durable idempotency and final outcomes.
+
+Structured errors include `swarm_disabled`/`swarm_unavailable` (503),
+`swarm_contract_error` (502, or 503 for invalid server configuration),
+`swarm_not_found` (404), `swarm_conflict` (409, including expired replay cursor),
+`swarm_forbidden`/`forbidden` (403). A stale UI must not issue controls. Swarm uses
+its own SSE stream; no new Kanban WebSocket event is introduced.

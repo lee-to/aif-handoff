@@ -60,3 +60,12 @@ Pattern: Modular Monolith (Turborepo workspaces)
 ## Business Context
 
 Commercial product — UI quality and polish are critical.
+
+## Swarm control plane integration
+
+Handoff connects to one separately managed Swarm Runtime and one configured project
+through authenticated v1 HTTP/SSE. It exposes runs, task relations, agents, integration
+evidence, approvals, operational controls and live notifications. Runtime retains
+execution, scheduling, durable events and restricted-action policy. See
+`docs/swarm.md` and the v1 fixture for the consumer contract; live compatibility with
+the independently developed ai-factory-swarm must be verified before deployment.

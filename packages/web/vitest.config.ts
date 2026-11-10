@@ -26,6 +26,9 @@ export default defineConfig({
         "src/components/task/TaskLog.tsx",
         "src/components/task/TaskPlan.tsx",
         "src/lib/utils.ts",
+        "src/components/swarm/**/*.tsx",
+        "src/hooks/useSwarm.ts",
+        "src/lib/swarm.ts",
       ],
       thresholds: {
         lines: 70,

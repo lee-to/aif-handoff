@@ -1,4 +1,6 @@
 // Browser-safe exports — no Node.js dependencies (no better-sqlite3, pino, etc.)
+export * from "./swarm.js";
+export { readSwarmSse } from "./swarmSse.js";
 
 export {
   TASK_STATUSES,

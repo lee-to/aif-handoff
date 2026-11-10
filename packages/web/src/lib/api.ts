@@ -36,7 +36,13 @@ import type {
   GitHubEligibility,
   GitHubIssueLink,
   GitHubRepositoryConnection,
+  SwarmConnection,
+  SwarmRun,
+  SwarmSnapshot,
+  SwarmEvent,
+  CreateSwarmRunInput,
 } from "@aif/shared/browser";
+import { readSwarmSse, swarmEventSchema } from "@aif/shared/browser";
 
 export class ApiError extends Error {
   status: number;
@@ -442,6 +448,80 @@ function listTasks(projectId: string): Promise<TaskListItem[]> {
 }
 
 export const api = {
+  getSwarmConnection(): Promise<SwarmConnection> {
+    return request("/swarm/connection");
+  },
+  listSwarmRuns(): Promise<{ schema_version: 1; runs: SwarmRun[] }> {
+    return request("/swarm/runs");
+  },
+  getSwarmSnapshot(runId: string): Promise<SwarmSnapshot> {
+    return request(`/swarm/runs/${encodeURIComponent(runId)}`);
+  },
+  getSwarmEvents(
+    runId: string,
+    after: number,
+  ): Promise<{ schema_version: 1; events: SwarmEvent[] }> {
+    return request(`/swarm/runs/${encodeURIComponent(runId)}/events?after=${after}`);
+  },
+  createSwarmRun(input: CreateSwarmRunInput): Promise<{ run_id: string }> {
+    return request("/swarm/runs", { method: "POST", body: JSON.stringify(input) });
+  },
+  controlSwarmRun(
+    runId: string,
+    action: "pause" | "resume" | "cancel",
+    commandId: string,
+  ): Promise<unknown> {
+    return request(`/swarm/runs/${encodeURIComponent(runId)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ command_id: commandId, confirmed: true }),
+    });
+  },
+  decideSwarmApproval(
+    runId: string,
+    approvalId: string,
+    input: {
+      command_id: string;
+      decision: "approve" | "reject" | "request_changes";
+      reason: string;
+    },
+  ): Promise<unknown> {
+    return request(
+      `/swarm/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({ ...input, confirmed: true }),
+      },
+    );
+  },
+  instructSwarmLead(runId: string, commandId: string, instruction: string): Promise<unknown> {
+    return request(`/swarm/runs/${encodeURIComponent(runId)}/instructions`, {
+      method: "POST",
+      body: JSON.stringify({ command_id: commandId, instruction, confirmed: true }),
+    });
+  },
+  async streamSwarmEvents(
+    runId: string,
+    after: number,
+    signal: AbortSignal,
+    onEvent: (event: SwarmEvent) => void,
+    onOpen: () => void,
+  ): Promise<void> {
+    const response = await fetch(
+      `${API_PREFIX}/swarm/runs/${encodeURIComponent(runId)}/events/stream?after=${after}`,
+      {
+        credentials: "include",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
+      },
+    );
+    if (response.status === 401) forgetAuthSession(true);
+    if (!response.ok) throw new ApiError("Swarm event connection failed", response.status);
+    if (!response.body || !response.headers.get("content-type")?.startsWith("text/event-stream")) {
+      throw new Error("Invalid Swarm event stream");
+    }
+    onOpen();
+    for await (const data of readSwarmSse(response.body))
+      onEvent(swarmEventSchema.parse(JSON.parse(data)));
+  },
   getAuthSession(): Promise<AuthSessionState> {
     return refreshAuthSession();
   },

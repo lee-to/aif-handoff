@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "@aif/shared/server";
 import { projects } from "@aif/shared";
 import type { ParticipantApiEnv } from "../middleware/participantAuth.js";
+import * as projectData from "@aif/data";
 
 const db = { current: createTestDb() };
 const config = vi.hoisted(() => ({
@@ -128,11 +129,22 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", runtimeFetch);
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 describe("Swarm control plane API", () => {
+  it("resolves the project once when listing multiple native runs", async () => {
+    runtimeFetch.mockResolvedValueOnce(
+      json({ schema_version: 1, runs: [fixture, { ...fixture, id: "run-2" }] }),
+    );
+    const lookup = vi.spyOn(projectData, "findProjectById");
+    const response = await app.request("/swarm/runs", { headers: viewer });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ runs: [{ id: "run-1" }, { id: "run-2" }] });
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
   it("keeps a configured Runtime dormant while the rollout flag is off", async () => {
     config.AIF_SWARM_CONTROL_PLANE_ENABLED = false;
     const connection = await app.request("/swarm/connection", { headers: owner });

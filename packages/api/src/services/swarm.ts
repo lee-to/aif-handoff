@@ -6,6 +6,7 @@ import {
   readSwarmSse,
   redactProviderTextForLogs,
   swarmSnapshotSchema,
+  swarmRunSchema,
   swarmEventSchema,
   createSwarmRunSchema,
   type SwarmEvent,
@@ -17,6 +18,7 @@ import {
   runtimeEventSchema,
   runtimeDecisionSchema,
   normalizeSwarmSnapshot,
+  normalizeSwarmRun,
   normalizeSwarmEvent,
 } from "./swarmContract.js";
 
@@ -149,10 +151,17 @@ async function runtimeJson<T>(path: string, schema: z.ZodType<T>, init?: Request
   }
 }
 
-function snapshotFromRuntime(run: z.infer<typeof runtimeRunSchema>) {
+function configuredProject() {
   const config = swarmConfiguration();
-  const project = config && findProjectById(config.projectId);
-  if (!project || run.project !== project.rootPath) throw new SwarmError("swarm_not_found", 404);
+  if (!config) throw new SwarmError("swarm_disabled", 503);
+  const project = findProjectById(config.projectId);
+  if (!project) throw new SwarmError("swarm_not_found", 404);
+  return project;
+}
+
+function snapshotFromRuntime(run: z.infer<typeof runtimeRunSchema>) {
+  const project = configuredProject();
+  if (run.project !== project.rootPath) throw new SwarmError("swarm_not_found", 404);
   try {
     return swarmSnapshotSchema.parse(normalizeSwarmSnapshot(run, project.id));
   } catch {
@@ -163,13 +172,21 @@ function snapshotFromRuntime(run: z.infer<typeof runtimeRunSchema>) {
 const runPath = (id: string) => `/runs/${encodeURIComponent(id)}`;
 
 export async function listSwarmRuns() {
-  const config = swarmConfiguration();
-  if (!config) throw new SwarmError("swarm_disabled", 503);
+  const project = configuredProject();
   const result = await runtimeJson("/runs", runtimeRunsSchema);
-  return {
-    schema_version: 1 as const,
-    runs: result.runs.map((run) => snapshotFromRuntime(run).run),
-  };
+  try {
+    return {
+      schema_version: 1 as const,
+      runs: result.runs.map((run) => {
+        if (run.project !== project.rootPath) throw new SwarmError("swarm_not_found", 404);
+        return swarmRunSchema.parse(normalizeSwarmRun(run, project.id));
+      }),
+    };
+  } catch (error) {
+    if (error instanceof SwarmError) throw error;
+    log.warn("Invalid normalized Swarm run list");
+    throw new SwarmError("swarm_contract_error", 502);
+  }
 }
 
 export async function getSwarmSnapshot(runId: string) {

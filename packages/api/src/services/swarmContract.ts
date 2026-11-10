@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { SwarmEvent, SwarmSnapshot } from "@aif/shared";
+import type { SwarmEvent, SwarmRun, SwarmSnapshot } from "@aif/shared";
 
 const id = z
   .string()
@@ -101,34 +101,38 @@ export const runtimeDecisionSchema = z.object({
 });
 type RuntimeRun = z.infer<typeof runtimeRunSchema>;
 
+export function normalizeSwarmRun(run: RuntimeRun, projectId: string): SwarmRun {
+  return {
+    id: run.id,
+    project_id: projectId,
+    goal: run.goal,
+    acceptance_criteria: run.spec.acceptanceCriteria,
+    status: run.status,
+    created_at: new Date(run.startedAt).toISOString(),
+    updated_at: null,
+    started_at: new Date(run.startedAt).toISOString(),
+    finished_at: run.finishedAt === undefined ? null : new Date(run.finishedAt).toISOString(),
+    agent_limit: run.spec.limits.maxAgents,
+    active_agents: run.agents.filter((entry) => entry.status === "running").length,
+    token_total: run.tokens,
+    cost_usd: null,
+    budget_tokens: run.spec.limits.budgetTokens,
+    completed_tasks: run.tasks.filter((entry) => entry.status === "done").length,
+    total_tasks: run.tasks.length,
+    policy: run.spec.approval,
+    sandbox: "Runtime-managed Git worktrees",
+    blockers: run.tasks
+      .filter((entry) => entry.status === "blocked" || entry.status === "failed")
+      .map((entry) => entry.report ?? entry.title),
+    last_event: null,
+  };
+}
+
 export function normalizeSwarmSnapshot(run: RuntimeRun, projectId: string): SwarmSnapshot {
   return {
     schema_version: 1,
     sequence: run.sequence,
-    run: {
-      id: run.id,
-      project_id: projectId,
-      goal: run.goal,
-      acceptance_criteria: run.spec.acceptanceCriteria,
-      status: run.status,
-      created_at: new Date(run.startedAt).toISOString(),
-      updated_at: null,
-      started_at: new Date(run.startedAt).toISOString(),
-      finished_at: run.finishedAt === undefined ? null : new Date(run.finishedAt).toISOString(),
-      agent_limit: run.spec.limits.maxAgents,
-      active_agents: run.agents.filter((entry) => entry.status === "running").length,
-      token_total: run.tokens,
-      cost_usd: null,
-      budget_tokens: run.spec.limits.budgetTokens,
-      completed_tasks: run.tasks.filter((entry) => entry.status === "done").length,
-      total_tasks: run.tasks.length,
-      policy: run.spec.approval,
-      sandbox: "Runtime-managed Git worktrees",
-      blockers: run.tasks
-        .filter((entry) => entry.status === "blocked" || entry.status === "failed")
-        .map((entry) => entry.report ?? entry.title),
-      last_event: null,
-    },
+    run: normalizeSwarmRun(run, projectId),
     tasks: run.tasks.map((entry) => ({
       id: entry.id,
       title: entry.title,

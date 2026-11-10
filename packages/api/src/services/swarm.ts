@@ -31,6 +31,7 @@ export class SwarmError extends Error {
 
 export function swarmConfiguration() {
   const env = getEnv();
+  if (!env.AIF_SWARM_CONTROL_PLANE_ENABLED) return null;
   if (!env.SWARM_RUNTIME_URL || !env.SWARM_PROJECT_ID || !env.SWARM_RUNTIME_TOKEN) return null;
   const url = new URL(env.SWARM_RUNTIME_URL);
   const localHosts = new Set(["localhost", "127.0.0.1", "[::1]", "host.docker.internal", "swarm"]);

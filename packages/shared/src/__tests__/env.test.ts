@@ -16,6 +16,17 @@ describe("env validation", () => {
     ).toBe(false);
   });
 
+  it("defaults the Swarm control plane off and accepts explicit rollout values", () => {
+    expect(validateEnv({}).AIF_SWARM_CONTROL_PLANE_ENABLED).toBe(false);
+    expect(
+      validateEnv({ AIF_SWARM_CONTROL_PLANE_ENABLED: "true" }).AIF_SWARM_CONTROL_PLANE_ENABLED,
+    ).toBe(true);
+    expect(
+      validateEnv({ AIF_SWARM_CONTROL_PLANE_ENABLED: "false" }).AIF_SWARM_CONTROL_PLANE_ENABLED,
+    ).toBe(false);
+    expect(() => validateEnv({ AIF_SWARM_CONTROL_PLANE_ENABLED: "maybe" })).toThrow();
+  });
+
   it("should pass with valid config", () => {
     const result = validateEnv({
       ANTHROPIC_API_KEY: "sk-ant-test-key",

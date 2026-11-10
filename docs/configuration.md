@@ -801,6 +801,13 @@ The `getProjectConfig(projectRoot)` utility in `@aif/shared` reads and caches co
 
 ## Swarm Runtime connection
 
+`AIF_SWARM_CONTROL_PLANE_ENABLED` is a boolean rollout/kill switch, default `false`.
+While off, `/swarm/connection` reports disabled and Swarm reads/commands return
+`503 swarm_disabled` without contacting Runtime, even when connection settings are
+populated. Set it to `true` to opt in, or back to `false` to disable the integration
+without removing credentials. It is read through the cached, validated `getEnv()`
+accessor; restart the API after changing the flag.
+
 Optional server settings connect the Swarm tab to one separately managed Runtime:
 `SWARM_RUNTIME_URL`, `SWARM_RUNTIME_TOKEN`, `SWARM_PROJECT_ID` and comma-separated
 `SWARM_OPERATOR_IDS`. URL/token/project are required together; credentials are

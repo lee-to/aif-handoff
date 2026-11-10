@@ -11,13 +11,17 @@ stops the Runtime process. Closing the UI does not cancel a run.
 Configure the **API server**, then restart it:
 
 ```dotenv
+AIF_SWARM_CONTROL_PLANE_ENABLED=true
 SWARM_RUNTIME_URL=http://localhost:4010
 SWARM_RUNTIME_TOKEN=your-runtime-service-credential
 SWARM_PROJECT_ID=an-existing-handoff-project-id
 SWARM_OPERATOR_IDS=participant-id-1,participant-id-2
 ```
 
-All of URL, token and project ID are required to enable the connection. The URL
+The rollout flag defaults to `false`, independently of connection settings. Set it
+to `true` to opt in; setting it back to `false` disables reads and commands without
+contacting Runtime. The validated environment is cached until API restart.
+URL, token and project ID are still required when the flag is on. The URL
 is an origin with no path, credentials, query or fragment. Remote connections
 require HTTPS. Local HTTP accepts `localhost`, `127.0.0.1`, `[::1]`,
 `host.docker.internal` or the Docker service name `swarm`. In Docker, localhost

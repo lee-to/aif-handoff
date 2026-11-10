@@ -1810,3 +1810,7 @@ Structured errors include `swarm_disabled`/`swarm_unavailable` (503),
 `swarm_not_found` (404), `swarm_conflict` (409, including expired replay cursor),
 `swarm_forbidden`/`forbidden` (403). A stale UI must not issue controls. Swarm uses
 its own SSE stream; no new Kanban WebSocket event is introduced.
+
+`AIF_SWARM_CONTROL_PLANE_ENABLED` defaults to `false`. With the flag off, discovery
+reports `enabled:false` and reads/commands return `503 swarm_disabled` without
+Runtime network calls. Enabling the flag still requires URL, token and project ID.

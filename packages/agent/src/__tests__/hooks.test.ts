@@ -45,6 +45,7 @@ function makeEnv(overrides: Record<string, unknown> = {}) {
     OPENAI_BASE_URL: undefined,
     CODEX_CLI_PATH: undefined,
     SWARM_OPERATOR_IDS: "",
+    AIF_SWARM_CONTROL_PLANE_ENABLED: false,
     AIF_RUNTIME_MODULES: [],
     AIF_DEFAULT_RUNTIME_ID: "claude",
     AIF_DEFAULT_PROVIDER_ID: "anthropic",

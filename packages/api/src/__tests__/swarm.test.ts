@@ -7,6 +7,7 @@ import type { ParticipantApiEnv } from "../middleware/participantAuth.js";
 
 const db = { current: createTestDb() };
 const config = vi.hoisted(() => ({
+  AIF_SWARM_CONTROL_PLANE_ENABLED: true,
   SWARM_RUNTIME_URL: "http://localhost:4010" as string | undefined,
   SWARM_RUNTIME_TOKEN: "runtime-private-credential-123456",
   SWARM_PROJECT_ID: "project-1",
@@ -95,6 +96,7 @@ const sse = (...events: unknown[]) =>
 
 beforeEach(async () => {
   db.current = createTestDb();
+  config.AIF_SWARM_CONTROL_PLANE_ENABLED = true;
   config.SWARM_RUNTIME_URL = "http://localhost:4010";
   config.SWARM_PROJECT_ID = "project-1";
   const admin = await credentials("admin");
@@ -133,6 +135,48 @@ afterEach(() => {
 });
 
 describe("Swarm control plane API", () => {
+  it("keeps a configured Runtime dormant while the rollout flag is off", async () => {
+    config.AIF_SWARM_CONTROL_PLANE_ENABLED = false;
+    const connection = await app.request("/swarm/connection", { headers: owner });
+    expect(await connection.json()).toMatchObject({ enabled: false, projectId: null });
+    for (const path of [
+      "/runs",
+      "/runs/run-1",
+      "/runs/run-1/events",
+      "/runs/run-1/events/stream",
+    ]) {
+      expect((await app.request(`/swarm${path}`, { headers: owner })).status).toBe(503);
+    }
+    const control = { command_id: crypto.randomUUID(), confirmed: true };
+    for (const action of ["pause", "resume", "cancel"]) {
+      expect((await post(`/runs/run-1/${action}`, control)).status).toBe(503);
+    }
+    expect(
+      (await post("/runs/run-1/instructions", { ...control, instruction: "Check links" })).status,
+    ).toBe(503);
+    expect(
+      (
+        await post("/runs/run-1/approvals/approval-1/decision", {
+          ...control,
+          decision: "approve",
+          reason: "Checked",
+        })
+      ).status,
+    ).toBe(503);
+    expect(
+      (
+        await post("/runs", {
+          command_id: control.command_id,
+          goal: "Clean docs",
+          acceptance_criteria: ["Links pass"],
+          worker_limit: 2,
+          budget_usd: null,
+          policy: "integration",
+        })
+      ).status,
+    ).toBe(503);
+    expect(runtimeFetch).not.toHaveBeenCalled();
+  });
   it("requires authentication and exposes only safe connection configuration", async () => {
     expect((await app.request("/swarm/runs")).status).toBe(401);
     const response = await app.request("/swarm/connection", { headers: viewer });

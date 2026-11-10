@@ -6,12 +6,7 @@ import { appendAuditEvent, findProjectById, resolveParticipantSession } from "@a
 import { getEnv, logger, type AuditActor, type SwarmRole } from "@aif/shared";
 import { getParticipantAuth, type ParticipantApiEnv } from "../middleware/participantAuth.js";
 import { jsonValidator, queryValidator } from "../middleware/zodValidator.js";
-import {
-  createSwarmRunSchema,
-  swarmControlSchema,
-  swarmDecisionSchema,
-  swarmInstructionSchema,
-} from "../schemas.js";
+import { createSwarmRunSchema, swarmControlSchema, swarmDecisionSchema } from "../schemas.js";
 import {
   SwarmError,
   swarmConfiguration,
@@ -20,6 +15,7 @@ import {
   getSwarmEvents,
   streamSwarmEvents,
   sendSwarmCommand,
+  sanitizeSwarmValue,
 } from "../services/swarm.js";
 
 const log = logger("swarm-routes");
@@ -68,16 +64,18 @@ async function command(
     entityType: "swarm_run",
     entityId: input.runId ?? null,
     actor,
-    metadata: { commandId: input.body.command_id, projectId: config.projectId },
+    metadata: {
+      commandId: input.body.command_id,
+      projectId: config.projectId,
+      ...(input.action === "decision"
+        ? { decision: input.body.decision, reason: sanitizeSwarmValue(input.body.reason) }
+        : {}),
+    },
   };
   // Persist intent before dispatch so a database failure cannot create unaudited commands.
   appendAuditEvent({ ...audit, action: `swarm.${input.action}.requested` });
   try {
-    const result = await sendSwarmCommand(input.path, {
-      ...input.body,
-      project_id: config.projectId,
-      actor: { id: actor.id, role: roleFor(c) },
-    });
+    const result = await sendSwarmCommand(input.path, input.body);
     if (input.runId && result.run_id !== input.runId)
       throw new SwarmError("swarm_contract_error", 502);
     appendAuditEvent({
@@ -145,7 +143,7 @@ swarmRouter.post("/runs", jsonValidator(createSwarmRunSchema), async (c) => {
   return command(c, {
     path: "/runs",
     action: "create",
-    body: { ...c.req.valid("json"), project_path: project.rootPath },
+    body: c.req.valid("json"),
   });
 });
 
@@ -167,32 +165,13 @@ for (const action of ["pause", "resume", "cancel"] as const) {
   );
 }
 swarmRouter.post(
-  "/runs/:runId/instructions",
-  runParam,
-  jsonValidator(swarmInstructionSchema),
-  async (c) => {
-    const { runId } = c.req.valid("param");
-    await getSwarmSnapshot(runId);
-    return command(c, {
-      path: `/runs/${encodeURIComponent(runId)}/instructions`,
-      action: "instruction",
-      runId,
-      body: c.req.valid("json"),
-    });
-  },
-);
-swarmRouter.post(
   "/runs/:runId/approvals/:approvalId/decision",
   approvalParam,
   jsonValidator(swarmDecisionSchema),
   async (c) => {
     const { runId, approvalId } = c.req.valid("param");
     const snapshot = await getSwarmSnapshot(runId);
-    if (
-      !snapshot.approvals.some(
-        (approval) => approval.id === approvalId && approval.status === "pending",
-      )
-    ) {
+    if (!snapshot.approvals.some((approval) => approval.id === approvalId)) {
       throw new SwarmError("swarm_conflict", 409);
     }
     return command(c, {

@@ -25,7 +25,7 @@ const collect = async (chunks: string[]) => {
 };
 
 describe("Swarm v1 compatibility contract", () => {
-  it("accepts the published runtime fixture and preserves unknown cost as null", () => {
+  it("accepts the published browser fixture and preserves unknown cost as null", () => {
     expect(swarmSnapshotSchema.parse(fixture).run.cost_usd).toBeNull();
   });
   it("rejects incompatible versions, missing snapshot data and invalid metrics", () => {
@@ -43,13 +43,38 @@ describe("Swarm v1 compatibility contract", () => {
         command_id: crypto.randomUUID(),
         goal: "clean docs",
         acceptance_criteria: ["links pass"],
-        worker_limit: 5,
-        budget_usd: null,
+        agent_limit: 5,
+        budget_tokens: 1000000,
+        checks: [["npm", "test"]],
+        provider: "codex",
         policy: "integration",
         project_id: "injected",
       }).success,
     ).toBe(false);
     expect(swarmEventSchema.safeParse(null).success).toBe(false);
+  });
+  it("validates native agent limits, token budgets, providers and explicit checks", () => {
+    const input = {
+      command_id: crypto.randomUUID(),
+      goal: "Check links",
+      acceptance_criteria: ["Links pass"],
+      agent_limit: 5,
+      budget_tokens: 1000000,
+      checks: [["npm", "test"]],
+      provider: "codex",
+      policy: "integration",
+    };
+    expect(createSwarmRunSchema.safeParse(input).success).toBe(true);
+    for (const change of [
+      { agent_limit: 6 },
+      { budget_tokens: 0 },
+      { budget_tokens: 1.5 },
+      { checks: [] },
+      { checks: [[""]] },
+      { provider: "unknown" },
+    ]) {
+      expect(createSwarmRunSchema.safeParse({ ...input, ...change }).success).toBe(false);
+    }
   });
 });
 

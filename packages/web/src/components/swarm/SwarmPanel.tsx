@@ -25,7 +25,10 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
   const [goal, setGoal] = useState("");
   const [criteria, setCriteria] = useState("");
   const [workers, setWorkers] = useState("5");
-  const [budget, setBudget] = useState("");
+  const [budget, setBudget] = useState("1000000");
+  const [checks, setChecks] = useState("");
+  const [provider, setProvider] = useState("codex");
+  const [model, setModel] = useState("");
   const [policy, setPolicy] = useState("integration");
   const [commandId, setCommandId] = useState("");
   const [validationError, setValidationError] = useState<string>();
@@ -130,14 +133,14 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
             <Badge>{run.status}</Badge>
           </div>
           <p className="text-sm">
-            Workers {run.active_workers} / {run.worker_limit} · Tasks {run.completed_tasks} /{" "}
+            Agents {run.active_agents} / {run.agent_limit} · Tasks {run.completed_tasks} /{" "}
             {run.total_tasks} · Tokens {run.token_total.toLocaleString()} · Cost{" "}
-            {run.cost_usd === null ? "unknown" : `$${run.cost_usd.toFixed(2)}`} · Budget{" "}
-            {run.budget_usd === null ? "no limit" : `$${run.budget_usd}`}
+            {run.cost_usd === null ? "unknown" : `$${run.cost_usd.toFixed(2)}`} · Token budget{" "}
+            {run.budget_tokens.toLocaleString()}
           </p>
           <p className="text-xs text-muted-foreground">
             Created {new Date(run.created_at).toLocaleString()} · Updated{" "}
-            {new Date(run.updated_at).toLocaleTimeString()}
+            {run.updated_at ? new Date(run.updated_at).toLocaleTimeString() : "unknown"}
           </p>
           <p className="text-xs text-muted-foreground">
             Last event: {run.last_event?.type ?? "None"}
@@ -170,6 +173,13 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
             <Button
               disabled={create.isPending || runs.isError}
               onClick={() => {
+                let verification: unknown;
+                try {
+                  verification = JSON.parse(checks);
+                } catch {
+                  setValidationError('Checks must be JSON command arrays, e.g. [["npm", "test"]]');
+                  return;
+                }
                 const result = createSwarmRunSchema.safeParse({
                   command_id: commandId,
                   goal,
@@ -177,8 +187,11 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
                     .split("\n")
                     .map((line) => line.trim())
                     .filter(Boolean),
-                  worker_limit: Number(workers),
-                  budget_usd: budget.trim() ? Number(budget) : null,
+                  agent_limit: Number(workers),
+                  budget_tokens: Number(budget),
+                  checks: verification,
+                  provider,
+                  ...(model.trim() ? { model: model.trim() } : {}),
                   policy,
                 });
                 if (!result.success) {
@@ -218,16 +231,51 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
               disabled={attempted}
             />
           </div>
+          <div>
+            <label htmlFor="swarm-checks" className="text-sm">
+              Verification checks (JSON command arrays)
+            </label>
+            <Textarea
+              id="swarm-checks"
+              placeholder={'[["npm", "test"]]'}
+              value={checks}
+              onChange={(event) => setChecks(event.target.value)}
+              disabled={attempted}
+            />
+          </div>
+          <div>
+            <p className="text-sm">Provider for Lead and workers</p>
+            <Select
+              value={provider}
+              options={[
+                { value: "codex", label: "Codex" },
+                { value: "claude", label: "Claude" },
+              ]}
+              onChange={(event) => setProvider(event.target.value)}
+              disabled={attempted}
+            />
+          </div>
+          <div>
+            <label htmlFor="swarm-model" className="text-sm">
+              Model (optional)
+            </label>
+            <Input
+              id="swarm-model"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              disabled={attempted}
+            />
+          </div>
           <div className="flex gap-3">
             <div>
               <label htmlFor="swarm-workers" className="text-sm">
-                Worker limit
+                Agent limit (all roles)
               </label>
               <Input
                 id="swarm-workers"
                 type="number"
                 min={1}
-                max={32}
+                max={5}
                 value={workers}
                 onChange={(event) => setWorkers(event.target.value)}
                 disabled={attempted}
@@ -235,13 +283,13 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
             </div>
             <div>
               <label htmlFor="swarm-budget" className="text-sm">
-                Budget USD (optional)
+                Token budget
               </label>
               <Input
                 id="swarm-budget"
                 type="number"
-                min={0.01}
-                step="0.01"
+                min={1}
+                step="1"
                 value={budget}
                 onChange={(event) => setBudget(event.target.value)}
                 disabled={attempted}
@@ -262,8 +310,8 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            Runtime enforces budgets, sandbox restrictions and approval policy. Closing this page
-            leaves the run active.
+            Runtime enforces a token budget, a shared agent limit and approval policy. Closing this
+            page leaves the run active.
           </p>
         </div>
       </FormDialog>

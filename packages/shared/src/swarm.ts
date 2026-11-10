@@ -28,14 +28,14 @@ export const swarmRunSchema = z.object({
   acceptance_criteria: z.array(z.string()),
   status: z.enum(SWARM_RUN_STATUSES),
   created_at: timestamp,
-  updated_at: timestamp,
+  updated_at: timestamp.nullable(),
   started_at: timestamp.nullable(),
   finished_at: timestamp.nullable(),
-  worker_limit: count,
-  active_workers: count,
+  agent_limit: count,
+  active_agents: count,
   token_total: count,
   cost_usd: z.number().nonnegative().nullable(),
-  budget_usd: z.number().positive().nullable(),
+  budget_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   completed_tasks: count,
   total_tasks: count,
   policy: z.enum(["manual", "integration", "restricted-actions"]),
@@ -122,8 +122,25 @@ export const createSwarmRunSchema = z
     command_id: z.string().uuid(),
     goal: z.string().trim().min(1).max(10000),
     acceptance_criteria: z.array(z.string().trim().min(1).max(2000)).min(1).max(100),
-    worker_limit: z.number().int().min(1).max(32),
-    budget_usd: z.number().positive().max(100000).nullable(),
+    agent_limit: z.number().int().min(1).max(5),
+    budget_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    checks: z
+      .array(
+        z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(2000)
+              .refine((value) => value.trim().length > 0),
+          )
+          .min(1)
+          .max(100),
+      )
+      .min(1)
+      .max(20),
+    provider: z.enum(["codex", "claude"]),
+    model: z.string().trim().min(1).max(200).optional(),
     policy: z.enum(["manual", "integration", "restricted-actions"]),
   })
   .strict();
@@ -135,16 +152,10 @@ export const swarmControlSchema = z
   .strict();
 export const swarmDecisionSchema = swarmControlSchema
   .extend({
-    decision: z.enum(["approve", "reject", "request_changes"]),
+    decision: z.enum(["approve", "reject"]),
     reason: z.string().trim().min(1).max(2000),
   })
   .strict();
-export const swarmInstructionSchema = swarmControlSchema
-  .extend({
-    instruction: z.string().trim().min(1).max(10000),
-  })
-  .strict();
-
 export type SwarmRun = z.infer<typeof swarmRunSchema>;
 export type SwarmSnapshot = z.infer<typeof swarmSnapshotSchema>;
 export type SwarmEvent = z.infer<typeof swarmEventSchema>;

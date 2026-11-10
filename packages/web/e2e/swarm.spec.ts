@@ -67,6 +67,17 @@ for (const theme of ["light", "dark"] as const) {
         return route.fulfill({
           json: { enabled: true, projectId: "project-1", role: "owner", schemaVersion: 1 },
         });
+      if (path === "/swarm/runs" && request.method() === "POST") {
+        expect(request.postDataJSON()).toMatchObject({
+          goal: "Wire protocol check",
+          acceptance_criteria: ["Tests pass"],
+          agent_limit: 2,
+          budget_tokens: 100000,
+          provider: "codex",
+          checks: [["npm", "test"]],
+        });
+        return route.fulfill({ status: 202, json: { run_id: "run-1" } });
+      }
       if (path === "/swarm/runs")
         return route.fulfill({ json: { schema_version: 1, runs: [snapshot.run] } });
       if (path === "/swarm/runs/run-1")
@@ -94,8 +105,16 @@ for (const theme of ["light", "dark"] as const) {
     });
     await page.goto("/project/project-1");
     await page.getByRole("tab", { name: "Swarm", exact: true }).click();
-    await page.getByRole("button", { name: "Documentation cleanup" }).click();
+    await page.getByRole("button", { name: "New Swarm run", exact: true }).click();
+    await page.getByLabel("Goal", { exact: true }).fill("Wire protocol check");
+    await page.getByLabel(/Acceptance criteria/).fill("Tests pass");
+    await page.getByLabel(/Verification checks/).fill('[["npm", "test"]]');
+    await page.getByLabel("Agent limit (all roles)").fill("2");
+    await page.getByLabel("Token budget").fill("100000");
+    await page.screenshot({ path: info.outputPath(`swarm-create-${theme}.png`), fullPage: true });
+    await page.getByRole("button", { name: "Start run", exact: true }).click();
     await expect(page.getByText("Global acceptance criteria")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Instruct Lead", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
     await page.getByRole("button", { name: "Pause", exact: true }).click();
     expect(commands).toBe(0);
@@ -106,6 +125,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.getByRole("button", { name: "task-1: Check documentation" }).click();
     await expect(page.getByText("Updated links")).toBeVisible();
     await page.getByRole("tab", { name: "Integration & review" }).click();
+    await expect(page.getByRole("button", { name: "Request changes", exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Open diff" }).click();
     await expect(page.getByText(/old link/)).toBeVisible();
     await page.screenshot({ path: info.outputPath(`swarm-${theme}.png`), fullPage: true });

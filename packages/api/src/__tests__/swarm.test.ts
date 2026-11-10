@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "@aif/shared/server";
-import { projects, type SwarmSnapshot } from "@aif/shared";
+import { projects } from "@aif/shared";
 import type { ParticipantApiEnv } from "../middleware/participantAuth.js";
 
 const db = { current: createTestDb() };
@@ -38,8 +38,8 @@ const { participantRouteAuthorization } = await import("../middleware/requireRol
 const { swarmRouter } = await import("../routes/swarm.js");
 const { getSwarmSnapshot, streamSwarmEvents, sanitizeSwarmValue } =
   await import("../services/swarm.js");
-const fixture: SwarmSnapshot = JSON.parse(
-  readFileSync(new URL("../../../../docs/swarm-v1.snapshot.json", import.meta.url), "utf8"),
+const fixture = JSON.parse(
+  readFileSync(new URL("../../../../docs/swarm-runtime-v1.snapshot.json", import.meta.url), "utf8"),
 );
 const runtimeFetch = vi.fn<typeof fetch>();
 const app = new Hono<ParticipantApiEnv>();
@@ -82,9 +82,7 @@ function event(sequence: number, payload: Record<string, unknown> = {}) {
     run_id: "run-1",
     type: "run.started",
     timestamp: "2026-11-10T09:00:00Z",
-    actor: { id: null, role: "lead" },
-    task_id: null,
-    agent_id: null,
+    actor: "lead",
     payload,
   };
 }
@@ -110,21 +108,21 @@ beforeEach(async () => {
     .insert(projects)
     .values({ id: "project-1", name: "Project", rootPath: "/tmp/swarm-project" })
     .run();
+  fixture.approvals[0].status = "pending";
   runtimeFetch.mockReset();
   runtimeFetch.mockImplementation(async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (init?.method === "POST") {
-      const body = JSON.parse(String(init.body));
-      return json({
-        schema_version: 1,
-        command_id: body.command_id,
-        run_id: "run-1",
-        accepted: true,
-      });
+      if (path.endsWith("/decision")) {
+        fixture.approvals[0].status =
+          JSON.parse(String(init.body)).decision === "approve" ? "approved" : "rejected";
+        return json({ schema_version: 1, ok: true });
+      }
+      return json(fixture);
     }
     if (path.endsWith("/events/stream")) return sse(event(1), event(2));
     if (path.endsWith("/events")) return json({ schema_version: 1, events: [event(1), event(2)] });
-    if (path.endsWith("/runs")) return json({ schema_version: 1, runs: [fixture.run] });
+    if (path.endsWith("/runs")) return json({ schema_version: 1, runs: [fixture] });
     return json(fixture);
   });
   vi.stubGlobal("fetch", runtimeFetch);
@@ -153,7 +151,7 @@ describe("Swarm control plane API", () => {
     }
     expect(
       (await post("/runs/run-1/instructions", { ...control, instruction: "Check links" })).status,
-    ).toBe(503);
+    ).toBe(404);
     expect(
       (
         await post("/runs/run-1/approvals/approval-1/decision", {
@@ -169,8 +167,10 @@ describe("Swarm control plane API", () => {
           command_id: control.command_id,
           goal: "Clean docs",
           acceptance_criteria: ["Links pass"],
-          worker_limit: 2,
-          budget_usd: null,
+          agent_limit: 2,
+          budget_tokens: 1000000,
+          checks: [["npm", "test"]],
+          provider: "codex",
           policy: "integration",
         })
       ).status,
@@ -197,11 +197,14 @@ describe("Swarm control plane API", () => {
     const response = await app.request("/swarm/runs", { headers: viewer });
     expect(await response.json()).toMatchObject({ runs: [{ id: "run-1" }] });
     const [url, init] = runtimeFetch.mock.calls[0];
-    expect(String(url)).toContain("project_id=project-1");
+    expect(String(url)).toBe("http://localhost:4010/v1/swarm/runs");
     expect(new Headers(init?.headers).get("authorization")).toBe(
       `Bearer ${config.SWARM_RUNTIME_TOKEN}`,
     );
-    expect(await getSwarmSnapshot("run-1")).toMatchObject(fixture);
+    expect(await getSwarmSnapshot("run-1")).toMatchObject({
+      run: { id: "run-1", project_id: "project-1", budget_tokens: 1000000, cost_usd: null },
+      tasks: [{ result: "Updated links" }],
+    });
     config.SWARM_PROJECT_ID = "another-project";
     expect((await app.request("/swarm/runs/run-1", { headers: viewer })).status).toBe(404);
   });
@@ -211,18 +214,23 @@ describe("Swarm control plane API", () => {
       command_id,
       goal: "Clean docs",
       acceptance_criteria: ["Links pass"],
-      worker_limit: 2,
-      budget_usd: null,
+      agent_limit: 2,
+      budget_tokens: 1000000,
+      checks: [["npm", "test"]],
+      provider: "codex",
       policy: "integration",
     });
     expect(response.status).toBe(202);
-    const init = runtimeFetch.mock.calls[0][1];
+    const init = runtimeFetch.mock.calls.find(([, init]) => init?.method === "POST")?.[1];
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      project_id: "project-1",
-      project_path: "/tmp/swarm-project",
-      schema_version: 1,
-      actor: { role: "owner" },
+      goal: "Clean docs",
+      acceptanceCriteria: ["Links pass"],
+      lead: { provider: "codex" },
+      workers: [{ provider: "codex" }],
+      limits: { maxAgents: 2, budgetTokens: 1000000 },
     });
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("command_id");
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("project_id");
     expect(new Headers(init?.headers).get("idempotency-key")).toBe(command_id);
     expect(listAuditEvents({}).map((entry) => entry.action)).toContain("swarm.create.accepted");
   });
@@ -254,25 +262,46 @@ describe("Swarm control plane API", () => {
     expect((await post(path, body)).status).toBe(202);
     expect((await post("/runs/run-1/approvals/unknown/decision", body)).status).toBe(409);
     const sent = runtimeFetch.mock.calls.find(([, init]) => init?.method === "POST");
-    expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({
-      run_id: "run-1",
-      approval_id: "approval-1",
-    });
+    expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ decision: "approve" });
   });
-  it("records Lead instructions through Runtime without storing their text in audit", async () => {
-    const response = await post(
-      "/runs/run-1/instructions",
-      {
-        command_id: crypto.randomUUID(),
-        confirmed: true,
-        instruction: "Check broken links first",
-      },
-      operator,
-    );
-    expect(response.status).toBe(202);
-    const audit = listAuditEvents({}).filter((entry) => entry.entityType === "swarm_run");
-    expect(audit.map((entry) => entry.action)).toContain("swarm.instruction.accepted");
-    expect(JSON.stringify(audit)).not.toContain("broken links");
+  it("does not dispatch unsupported instructions or request_changes", async () => {
+    expect(
+      (
+        await post("/runs/run-1/instructions", {
+          command_id: crypto.randomUUID(),
+          confirmed: true,
+          instruction: "Check links",
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await post("/runs/run-1/approvals/approval-1/decision", {
+          command_id: crypto.randomUUID(),
+          confirmed: true,
+          decision: "request_changes",
+          reason: "Change",
+        })
+      ).status,
+    ).toBe(400);
+    expect(runtimeFetch).not.toHaveBeenCalled();
+  });
+  it("reconciles approval retries after completion and rejects conflicting decisions", async () => {
+    fixture.approvals[0].status = "approved";
+    const completed = { ...fixture, status: "completed" };
+    runtimeFetch.mockImplementation(async () => json(completed));
+    const input = {
+      command_id: crypto.randomUUID(),
+      confirmed: true,
+      decision: "approve",
+      reason: "Checked",
+    };
+    expect((await post("/runs/run-1/approvals/approval-1/decision", input)).status).toBe(202);
+    expect(runtimeFetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    expect(
+      (await post("/runs/run-1/approvals/approval-1/decision", { ...input, decision: "reject" }))
+        .status,
+    ).toBe(409);
   });
   it("validates confirmations, IDs, cursors and CSRF before dispatch", async () => {
     expect((await post("/runs/run-1/pause", { command_id: crypto.randomUUID() })).status).toBe(400);
@@ -301,6 +330,7 @@ describe("Swarm control plane API", () => {
     expect(runtimeFetch).not.toHaveBeenCalled();
   });
   it.each([
+    [400, 409],
     [404, 404],
     [409, 409],
     [410, 409],
@@ -313,25 +343,16 @@ describe("Swarm control plane API", () => {
     expect(response.status).toBe(expected);
     expect(await response.text()).not.toContain("secret upstream body");
   });
-  it("rejects contract drift, foreign run/approval IDs and mismatched command acknowledgements", async () => {
+  it("rejects contract drift, foreign project/run IDs and wrong command responses", async () => {
     runtimeFetch.mockResolvedValueOnce(json({ ...fixture, schema_version: 2 }));
     await expect(getSwarmSnapshot("run-1")).rejects.toMatchObject({ code: "swarm_contract_error" });
-    runtimeFetch.mockResolvedValueOnce(
-      json({ ...fixture, approvals: [{ ...fixture.approvals[0], run_id: "foreign" }] }),
-    );
+    runtimeFetch.mockResolvedValueOnce(json({ ...fixture, project: "/tmp/foreign" }));
+    await expect(getSwarmSnapshot("run-1")).rejects.toMatchObject({ code: "swarm_not_found" });
+    runtimeFetch.mockResolvedValueOnce(json({ ...fixture, id: "foreign" }));
     await expect(getSwarmSnapshot("run-1")).rejects.toMatchObject({ code: "swarm_contract_error" });
-    runtimeFetch.mockResolvedValueOnce(
-      json({ ...fixture, run: { ...fixture.run, id: "foreign" } }),
-    );
-    await expect(getSwarmSnapshot("run-1")).rejects.toMatchObject({ code: "swarm_contract_error" });
-    runtimeFetch.mockResolvedValueOnce(json(fixture)).mockResolvedValueOnce(
-      json({
-        schema_version: 1,
-        command_id: crypto.randomUUID(),
-        run_id: "run-1",
-        accepted: true,
-      }),
-    );
+    runtimeFetch
+      .mockResolvedValueOnce(json(fixture))
+      .mockResolvedValueOnce(json({ ...fixture, id: "foreign" }));
     expect(
       (await post("/runs/run-1/pause", { command_id: crypto.randomUUID(), confirmed: true }))
         .status,

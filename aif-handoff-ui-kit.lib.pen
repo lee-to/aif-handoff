@@ -15570,7 +15570,7 @@
               "id": "E5OuH",
               "name": "Run row",
               "fill": "$foreground",
-              "content": "Documentation Cleanup     RUNNING     18 / 31 tasks     5 / 5 workers",
+              "content": "Documentation Cleanup     RUNNING     18 / 31 tasks     5 / 5 agents",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -15580,7 +15580,7 @@
               "id": "H9CLt0",
               "name": "Run metrics",
               "fill": "$foreground",
-              "content": "Started 09:00  ·  Tokens 1.2M  ·  Cost unknown  ·  Budget $5",
+              "content": "Started 09:00  ·  Tokens 120K  ·  Cost unknown  ·  Token budget 1M",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -15625,7 +15625,7 @@
               "id": "ole6I",
               "name": "Overview metrics",
               "fill": "$foreground",
-              "content": "Workers 5 / 5   Tasks 18 / 31   Elapsed 24m   Tokens 1.2M   Cost unknown",
+              "content": "Agents 5 / 5   Tasks 18 / 31   Elapsed 24m   Tokens 120K   Budget 1M",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -15833,7 +15833,7 @@
               "id": "vfdhr",
               "name": "Approval decisions",
               "fill": "$foreground",
-              "content": "[Approve]  [Reject]  [Request changes]  →  Confirm with reason",
+              "content": "[Approve]  [Reject]  →  Confirm with reason",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -15892,7 +15892,7 @@
               "id": "Re39e",
               "name": "Create fields",
               "fill": "$foreground",
-              "content": "NEW RUN: Goal / Acceptance criteria / Workers / Budget / Approval policy",
+              "content": "NEW RUN: Goal / Acceptance criteria / Checks: [[\"npm\",\"test\"]]\nProvider: Codex or Claude / Optional model / Agent limit 1–5 / Token budget / Approval policy",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -15985,7 +15985,7 @@
               "id": "w8tUa",
               "name": "Run row",
               "fill": "$foreground",
-              "content": "Documentation Cleanup     RUNNING     18 / 31 tasks     5 / 5 workers",
+              "content": "Documentation Cleanup     RUNNING     18 / 31 tasks     5 / 5 agents",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -15995,7 +15995,7 @@
               "id": "VK3YF",
               "name": "Run metrics",
               "fill": "$foreground",
-              "content": "Started 09:00  ·  Tokens 1.2M  ·  Cost unknown  ·  Budget $5",
+              "content": "Started 09:00  ·  Tokens 120K  ·  Cost unknown  ·  Token budget 1M",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -16040,7 +16040,7 @@
               "id": "KbqDw",
               "name": "Overview metrics",
               "fill": "$foreground",
-              "content": "Workers 5 / 5   Tasks 18 / 31   Elapsed 24m   Tokens 1.2M   Cost unknown",
+              "content": "Agents 5 / 5   Tasks 18 / 31   Elapsed 24m   Tokens 120K   Budget 1M",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -16248,7 +16248,7 @@
               "id": "duyp9",
               "name": "Approval decisions",
               "fill": "$foreground",
-              "content": "[Approve]  [Reject]  [Request changes]  →  Confirm with reason",
+              "content": "[Approve]  [Reject]  →  Confirm with reason",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"
@@ -16307,7 +16307,7 @@
               "id": "K3HvE",
               "name": "Create fields",
               "fill": "$foreground",
-              "content": "NEW RUN: Goal / Acceptance criteria / Workers / Budget / Approval policy",
+              "content": "NEW RUN: Goal / Acceptance criteria / Checks: [[\"npm\",\"test\"]]\nProvider: Codex or Claude / Optional model / Agent limit 1–5 / Token budget / Approval policy",
               "fontFamily": "IBM Plex Mono",
               "fontSize": 13,
               "fontWeight": "normal"

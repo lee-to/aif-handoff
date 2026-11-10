@@ -1791,19 +1791,22 @@ in [Swarm](swarm.md). Only the server-configured project is accessible.
 | POST   | `/swarm/runs/:runId/pause`                          | Operator/owner; `{command_id,confirmed:true}`                     |
 | POST   | `/swarm/runs/:runId/resume`                         | Operator/owner; `{command_id,confirmed:true}`                     |
 | POST   | `/swarm/runs/:runId/cancel`                         | Operator/owner; `{command_id,confirmed:true}`                     |
-| POST   | `/swarm/runs/:runId/instructions`                   | Operator/owner; control input + `instruction`                     |
 | POST   | `/swarm/runs/:runId/approvals/:approvalId/decision` | Owner; control input + `decision`, `reason`                       |
 | GET    | `/swarm/runs/:runId/events?after=0`                 | Viewer; ordered v1 events                                         |
 | GET    | `/swarm/runs/:runId/events/stream?after=0`          | Viewer; SSE, numeric `Last-Event-ID` overrides query cursor       |
 
 Create input: UUID `command_id`, nonempty `goal`, nonempty `acceptance_criteria[]`,
-`worker_limit` (1–32), nullable positive `budget_usd`, and
-`policy` (`manual|integration|restricted-actions`). Project/path/actor are resolved
-on the server. Decision is `approve|reject|request_changes`; reason is mandatory.
+`agent_limit` (1–5, all roles), positive integer `budget_tokens`, nonempty `checks`
+(JSON arrays of command argv), `provider` (`codex|claude`), optional `model`, and
+`policy` (`manual|integration|restricted-actions`). URL/token are deployment-bound
+to one Runtime; returned project paths must match the stored project root.
+Decision is `approve|reject`; reason is mandatory and retained in Handoff audit.
 Commands return `{schema_version:1,command_id,run_id,accepted:true}` with HTTP 202.
 Audit persists `swarm.<action>.requested`, `.accepted` or `.unconfirmed`; denied
 roles persist `swarm.command.denied`. An unconfirmed command may have executed:
-retry the same command ID. Runtime owns durable idempotency and final outcomes.
+retry the same command ID. Runtime owns durable create/control idempotency and final
+outcomes. Approval retries reconcile the target status before dispatch, including
+terminal runs. Native wire responses are normalized as described in [Swarm](swarm.md).
 
 Structured errors include `swarm_disabled`/`swarm_unavailable` (503),
 `swarm_contract_error` (502, or 503 for invalid server configuration),

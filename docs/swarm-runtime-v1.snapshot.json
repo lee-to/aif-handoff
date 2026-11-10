@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "run-1",
+  "project": "/tmp/swarm-project",
+  "goal": "Documentation cleanup",
+  "status": "running",
+  "spec": {
+    "goal": "Documentation cleanup",
+    "acceptanceCriteria": ["Documentation links pass"],
+    "checks": [["npm", "test"]],
+    "lead": {
+      "provider": "codex"
+    },
+    "workers": [
+      {
+        "provider": "codex"
+      }
+    ],
+    "approval": "integration",
+    "limits": {
+      "maxAgents": 5,
+      "maxTasks": 100,
+      "maxDepth": 4,
+      "maxAttempts": 3,
+      "leaseMs": 30000,
+      "timeoutMs": 600000,
+      "runTimeoutMs": 3600000,
+      "budgetTokens": 1000000,
+      "tokensPerAttempt": 100000
+    },
+    "allowedTools": []
+  },
+  "baseRef": "base-commit",
+  "integrationRef": "integration-commit",
+  "startedAt": 1794301200000,
+  "sequence": 3,
+  "tokens": 120,
+  "reservedTokens": 0,
+  "planned": true,
+  "tasks": [
+    {
+      "id": "task-1",
+      "title": "Check documentation",
+      "description": "Check links",
+      "acceptanceCriteria": ["Links pass"],
+      "dependsOn": [],
+      "depth": 0,
+      "priority": 0,
+      "status": "submitted",
+      "attempts": 1,
+      "assignedAgentId": "worker-1",
+      "gitRef": "worker-commit",
+      "report": "Updated links"
+    }
+  ],
+  "agents": [
+    {
+      "id": "worker-1",
+      "provider": "codex",
+      "role": "worker",
+      "status": "idle",
+      "heartbeatAt": 1794301200000,
+      "tokens": 120,
+      "reservation": 0
+    }
+  ],
+  "approvals": [
+    {
+      "id": "approval-1",
+      "taskId": "task-1",
+      "gitRef": "worker-commit",
+      "kind": "integration",
+      "status": "pending"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "artifact-1",
+      "taskId": "task-1",
+      "type": "integration",
+      "git_ref": "worker-commit",
+      "metadata": {
+        "checks": "pass",
+        "report": "Checks passed"
+      }
+    }
+  ],
+  "messages": [],
+  "context": []
+}

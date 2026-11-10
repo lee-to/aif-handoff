@@ -17,9 +17,9 @@ import { SwarmTaskGraph } from "./SwarmTaskGraph";
 type Command = {
   id: string;
   label: string;
-  action: "pause" | "resume" | "cancel" | "instruction" | "decision";
+  action: "pause" | "resume" | "cancel" | "decision";
   approvalId?: string;
-  decision?: "approve" | "reject" | "request_changes";
+  decision?: "approve" | "reject";
   text: string;
   attempted: boolean;
 };
@@ -51,8 +51,6 @@ export function SwarmRunDetail({
           reason: command.text,
         });
       }
-      if (command.action === "instruction")
-        return api.instructSwarmLead(runId, command.id, command.text);
       if (command.action === "pause" || command.action === "resume" || command.action === "cancel")
         return api.controlSwarmRun(runId, command.action, command.id);
       throw new Error("Invalid command");
@@ -83,14 +81,14 @@ export function SwarmRunDetail({
   const { run, tasks, agents, artifacts, approvals } = snapshot;
   const terminal = ["completed", "failed", "cancelled"].includes(run.status);
   const canControl = role !== "viewer" && !query.stale && !terminal;
-  const requiresText = pending?.action === "decision" || pending?.action === "instruction";
+  const requiresText = pending?.action === "decision";
   const elapsed = run.started_at
     ? Math.max(
         0,
         Math.round(
           ((run.finished_at
             ? Date.parse(run.finished_at)
-            : (query.lastSyncedAt ?? Date.parse(run.updated_at))) -
+            : (query.lastSyncedAt ?? Date.parse(run.updated_at ?? run.created_at))) -
             Date.parse(run.started_at)) /
             60000,
         ),
@@ -125,9 +123,9 @@ export function SwarmRunDetail({
         </div>
         <dl className="grid grid-cols-2 gap-4 text-sm md:grid-cols-5">
           <div>
-            <dt className="text-muted-foreground">Workers</dt>
+            <dt className="text-muted-foreground">Agents</dt>
             <dd>
-              {run.active_workers} / {run.worker_limit}
+              {run.active_agents} / {run.agent_limit}
             </dd>
           </div>
           <div>
@@ -145,11 +143,8 @@ export function SwarmRunDetail({
             <dd>{run.token_total.toLocaleString()}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">Cost / budget</dt>
-            <dd>
-              {run.cost_usd === null ? "Unknown" : `$${run.cost_usd.toFixed(2)}`} /{" "}
-              {run.budget_usd === null ? "No limit" : `$${run.budget_usd}`}
-            </dd>
+            <dt className="text-muted-foreground">Token budget</dt>
+            <dd>{run.budget_tokens.toLocaleString()}</dd>
           </div>
         </dl>
         <p className="text-xs text-muted-foreground">
@@ -184,14 +179,6 @@ export function SwarmRunDetail({
               onClick={() => request({ action: "cancel", label: "Cancel run" })}
             >
               Cancel run
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!canControl}
-              onClick={() => request({ action: "instruction", label: "Send instruction to Lead" })}
-            >
-              Instruct Lead
             </Button>
           </div>
         )}
@@ -388,7 +375,6 @@ export function SwarmRunDetail({
                     [
                       ["approve", "Approve"],
                       ["reject", "Reject"],
-                      ["request_changes", "Request changes"],
                     ] as const
                   ).map(([decision, label]) => (
                     <Button
@@ -482,12 +468,10 @@ export function SwarmRunDetail({
         </p>
         {requiresText && (
           <Textarea
-            aria-label={pending?.action === "instruction" ? "Lead instruction" : "Decision reason"}
-            placeholder={
-              pending?.action === "instruction" ? "Instruction to Lead" : "Reason for this decision"
-            }
+            aria-label="Decision reason"
+            placeholder="Reason for this decision"
             value={pending?.text ?? ""}
-            maxLength={pending?.action === "instruction" ? 10000 : 2000}
+            maxLength={2000}
             disabled={pending?.attempted}
             onChange={(event) =>
               setPending((current) => (current ? { ...current, text: event.target.value } : null))

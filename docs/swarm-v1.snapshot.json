@@ -11,11 +11,8 @@
     "updated_at": "2026-11-10T09:01:00Z",
     "started_at": "2026-11-10T09:00:00Z",
     "finished_at": null,
-    "worker_limit": 5,
-    "active_workers": 1,
     "token_total": 1200,
     "cost_usd": null,
-    "budget_usd": 5,
     "completed_tasks": 0,
     "total_tasks": 1,
     "policy": "integration",
@@ -25,7 +22,10 @@
       "type": "approval.requested",
       "timestamp": "2026-11-10T09:01:00Z",
       "sequence": 2
-    }
+    },
+    "agent_limit": 5,
+    "active_agents": 1,
+    "budget_tokens": 1000000
   },
   "tasks": [
     {

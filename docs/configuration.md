@@ -811,6 +811,10 @@ accessor; restart the API after changing the flag.
 Optional server settings connect the Swarm tab to one separately managed Runtime:
 `SWARM_RUNTIME_URL`, `SWARM_RUNTIME_TOKEN`, `SWARM_PROJECT_ID` and comma-separated
 `SWARM_OPERATOR_IDS`. URL/token/project are required together; credentials are
-server-only. Use HTTPS remotely or local HTTP. Administrators are Swarm owners;
+server-only. The Runtime owner token (`AIF_SWARM_OWNER_TOKEN`, at least 32 characters)
+is the backend credential; default Runtime port is 4317. The returned Runtime project
+path must match the Handoff project root, including Docker mount paths. The URL/token
+binding must be correct before first creation because an empty Runtime list has no
+project identity. Use HTTPS remotely or local HTTP. Administrators are Swarm owners;
 named members are operators; other members are viewers. See [Swarm](swarm.md) for
 Docker addresses, permissions, reconnection behavior and the v1 contract fixture.

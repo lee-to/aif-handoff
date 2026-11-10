@@ -1,16 +1,24 @@
 import { z } from "zod";
+import { findProjectById } from "@aif/data";
 import {
   getEnv,
   logger,
   readSwarmSse,
   redactProviderTextForLogs,
-  swarmRunsSchema,
   swarmSnapshotSchema,
-  swarmEventsSchema,
   swarmEventSchema,
-  swarmCommandResultSchema,
+  createSwarmRunSchema,
   type SwarmEvent,
 } from "@aif/shared";
+import {
+  runtimeRunSchema,
+  runtimeRunsSchema,
+  runtimeEventsSchema,
+  runtimeEventSchema,
+  runtimeDecisionSchema,
+  normalizeSwarmSnapshot,
+  normalizeSwarmEvent,
+} from "./swarmContract.js";
 
 const log = logger("swarm-runtime");
 type SwarmErrorCode =
@@ -23,7 +31,7 @@ type SwarmErrorCode =
 export class SwarmError extends Error {
   constructor(
     public code: SwarmErrorCode,
-    public status: 403 | 404 | 409 | 502 | 503,
+    public status: 400 | 403 | 404 | 409 | 502 | 503,
   ) {
     super(code);
   }
@@ -103,6 +111,7 @@ async function runtimeResponse(path: string, init: RequestInit = {}, stream = fa
       throw new SwarmError("swarm_conflict", 409);
     if (response.status === 401 || response.status === 403)
       throw new SwarmError("swarm_forbidden", 403);
+    if (response.status === 400) throw new SwarmError("swarm_conflict", 409);
     throw new SwarmError("swarm_unavailable", 503);
   }
   if (stream && !response.headers.get("content-type")?.startsWith("text/event-stream")) {
@@ -140,36 +149,45 @@ async function runtimeJson<T>(path: string, schema: z.ZodType<T>, init?: Request
   }
 }
 
-function assertProject(projectId: string) {
-  if (projectId !== swarmConfiguration()?.projectId) throw new SwarmError("swarm_not_found", 404);
+function snapshotFromRuntime(run: z.infer<typeof runtimeRunSchema>) {
+  const config = swarmConfiguration();
+  const project = config && findProjectById(config.projectId);
+  if (!project || run.project !== project.rootPath) throw new SwarmError("swarm_not_found", 404);
+  try {
+    return swarmSnapshotSchema.parse(normalizeSwarmSnapshot(run, project.id));
+  } catch {
+    log.warn({ runId: run.id }, "Invalid normalized Swarm snapshot");
+    throw new SwarmError("swarm_contract_error", 502);
+  }
 }
 const runPath = (id: string) => `/runs/${encodeURIComponent(id)}`;
 
 export async function listSwarmRuns() {
   const config = swarmConfiguration();
   if (!config) throw new SwarmError("swarm_disabled", 503);
-  const result = await runtimeJson(
-    `/runs?project_id=${encodeURIComponent(config.projectId)}`,
-    swarmRunsSchema,
-  );
-  result.runs.forEach((run) => assertProject(run.project_id));
-  return result;
+  const result = await runtimeJson("/runs", runtimeRunsSchema);
+  return {
+    schema_version: 1 as const,
+    runs: result.runs.map((run) => snapshotFromRuntime(run).run),
+  };
 }
 
 export async function getSwarmSnapshot(runId: string) {
-  const result = await runtimeJson(runPath(runId), swarmSnapshotSchema);
-  assertProject(result.run.project_id);
-  if (result.run.id !== runId || result.approvals.some((approval) => approval.run_id !== runId)) {
+  const result = snapshotFromRuntime(await runtimeJson(runPath(runId), runtimeRunSchema));
+  if (result.run.id !== runId) {
     throw new SwarmError("swarm_contract_error", 502);
   }
   return result;
 }
 
 export async function getSwarmEvents(runId: string, after: number) {
-  const result = await runtimeJson(`${runPath(runId)}/events?after=${after}`, swarmEventsSchema);
+  const result = await runtimeJson(`${runPath(runId)}/events?after=${after}`, runtimeEventsSchema);
   if (result.events.some((event) => event.run_id !== runId))
     throw new SwarmError("swarm_contract_error", 502);
-  return result;
+  return {
+    schema_version: 1 as const,
+    events: result.events.map((event) => swarmEventSchema.parse(normalizeSwarmEvent(event))),
+  };
 }
 
 export async function* streamSwarmEvents(
@@ -186,7 +204,8 @@ export async function* streamSwarmEvents(
   let sequence = after;
   try {
     for await (const data of readSwarmSse(response.body)) {
-      const event = swarmEventSchema.parse(sanitizeSwarmValue(JSON.parse(data)));
+      const native = runtimeEventSchema.parse(sanitizeSwarmValue(JSON.parse(data)));
+      const event = swarmEventSchema.parse(normalizeSwarmEvent(native));
       if (event.run_id !== runId) throw new SwarmError("swarm_contract_error", 502);
       if (event.sequence <= sequence) continue;
       if (event.sequence !== sequence + 1) throw new SwarmError("swarm_conflict", 409);
@@ -200,11 +219,56 @@ export async function* streamSwarmEvents(
 }
 
 export async function sendSwarmCommand(path: string, body: Record<string, unknown>) {
-  const result = await runtimeJson(path, swarmCommandResultSchema, {
+  const init = (input: unknown): RequestInit => ({
     method: "POST",
     headers: { "Idempotency-Key": String(body.command_id) },
-    body: JSON.stringify({ ...body, schema_version: 1 }),
+    body: JSON.stringify(input),
   });
-  if (result.command_id !== body.command_id) throw new SwarmError("swarm_contract_error", 502);
-  return result;
+  let runId: string;
+  if (path === "/runs") {
+    const input = createSwarmRunSchema.parse(body);
+    // A Runtime URL/token is bound to one project by deployment, not by request fields.
+    await listSwarmRuns();
+    const provider = { provider: input.provider, ...(input.model ? { model: input.model } : {}) };
+    const native = {
+      goal: input.goal,
+      acceptanceCriteria: input.acceptance_criteria,
+      checks: input.checks,
+      lead: provider,
+      workers: [provider],
+      approval: input.policy,
+      limits: {
+        maxAgents: input.agent_limit,
+        budgetTokens: input.budget_tokens,
+        tokensPerAttempt: Math.min(100000, input.budget_tokens),
+      },
+    };
+    runId = snapshotFromRuntime(await runtimeJson(path, runtimeRunSchema, init(native))).run.id;
+  } else if (path.startsWith("/approvals/")) {
+    runId = String(body.run_id);
+    const before = await getSwarmSnapshot(runId);
+    const approval = before.approvals.find((entry) => entry.id === body.approval_id);
+    const desired = body.decision === "approve" ? "approved" : "rejected";
+    if (!approval || (approval.status !== "pending" && approval.status !== desired))
+      throw new SwarmError("swarm_conflict", 409);
+    // Completion can make a run terminal; reconcile a lost response before retrying.
+    if (approval.status === "pending") {
+      await runtimeJson(path, runtimeDecisionSchema, init({ decision: body.decision }));
+      const after = await getSwarmSnapshot(runId);
+      if (after.approvals.find((entry) => entry.id === body.approval_id)?.status !== desired)
+        throw new SwarmError("swarm_contract_error", 502);
+    }
+  } else {
+    const expectedRunId = path.split("/")[2];
+    const result = snapshotFromRuntime(await runtimeJson(path, runtimeRunSchema, init({})));
+    if (result.run.id !== expectedRunId) throw new SwarmError("swarm_contract_error", 502);
+    runId = result.run.id;
+  }
+  log.debug({ path, runId }, "Swarm Runtime command response validated");
+  return {
+    schema_version: 1 as const,
+    command_id: String(body.command_id),
+    run_id: runId,
+    accepted: true as const,
+  };
 }

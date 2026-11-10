@@ -114,8 +114,11 @@ describe("Swarm runs UI", () => {
     fireEvent.change(screen.getByLabelText(/Acceptance criteria/), {
       target: { value: "Links pass\nTests pass" },
     });
-    fireEvent.change(screen.getByLabelText("Worker limit"), { target: { value: "2" } });
-    fireEvent.change(screen.getByLabelText(/Budget USD/), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText(/Verification checks/), {
+      target: { value: '[["npm", "test"]]' },
+    });
+    fireEvent.change(screen.getByLabelText("Agent limit (all roles)"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Token budget"), { target: { value: "500000" } });
     fireEvent.click(screen.getByRole("button", { name: "Start run" }));
     await screen.findByRole("button", { name: "Retry creation" });
     expect(screen.getByLabelText("Goal")).toBeDisabled();
@@ -123,8 +126,10 @@ describe("Swarm runs UI", () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create.mock.calls[0][0]).toEqual(create.mock.calls[1][0]);
     expect(create.mock.calls[0][0]).toMatchObject({
-      worker_limit: 2,
-      budget_usd: 5,
+      agent_limit: 2,
+      budget_tokens: 500000,
+      checks: [["npm", "test"]],
+      provider: "codex",
       acceptance_criteria: ["Links pass", "Tests pass"],
     });
     await screen.findByText("Global acceptance criteria");
@@ -200,18 +205,11 @@ describe("Swarm run details", () => {
       ),
     );
   });
-  it("sends audited Lead instructions and hides approvals for operators", async () => {
-    const instruct = vi.spyOn(api, "instructSwarmLead").mockResolvedValue({});
+  it("hides unsupported instructions and approval decisions from operators", () => {
     show(<SwarmRunDetail runId="run-1" role="operator" onBack={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Instruct Lead" }));
-    fireEvent.change(screen.getByLabelText("Lead instruction"), {
-      target: { value: "Prioritize links" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Confirm Send instruction to Lead" }));
-    await waitFor(() =>
-      expect(instruct).toHaveBeenCalledWith("run-1", expect.any(String), "Prioritize links"),
-    );
+    expect(screen.queryByRole("button", { name: "Instruct Lead" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Integration & review" }));
+    expect(screen.queryByRole("button", { name: "Request changes" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
   it("keeps hierarchy separate from the dependency graph and selects task evidence", () => {

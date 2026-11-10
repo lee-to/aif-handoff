@@ -481,7 +481,7 @@ export const api = {
     approvalId: string,
     input: {
       command_id: string;
-      decision: "approve" | "reject" | "request_changes";
+      decision: "approve" | "reject";
       reason: string;
     },
   ): Promise<unknown> {
@@ -492,12 +492,6 @@ export const api = {
         body: JSON.stringify({ ...input, confirmed: true }),
       },
     );
-  },
-  instructSwarmLead(runId: string, commandId: string, instruction: string): Promise<unknown> {
-    return request(`/swarm/runs/${encodeURIComponent(runId)}/instructions`, {
-      method: "POST",
-      body: JSON.stringify({ command_id: commandId, instruction, confirmed: true }),
-    });
   },
   async streamSwarmEvents(
     runId: string,

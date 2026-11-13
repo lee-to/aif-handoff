@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "project": "/tmp/swarm-project",
+  "runs": [
+    {
+      "id": "run-1",
+      "project": "/tmp/swarm-project",
+      "goal": "Documentation cleanup",
+      "status": "running",
+      "startedAt": 1794301200000,
+      "finishedAt": null,
+      "tokens": 120,
+      "budgetTokens": 1000000,
+      "agentLimit": 5,
+      "activeAgents": 0,
+      "totalTasks": 2,
+      "completedTasks": 1,
+      "blockedTasks": 0,
+      "approval": "integration"
+    }
+  ],
+  "next_cursor": null
+}

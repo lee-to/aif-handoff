@@ -97,6 +97,18 @@ packages/
 
 ## Dependency Rules
 
+### External Swarm control plane
+
+`shared/src/swarm.ts` owns browser-safe, versioned Swarm DTOs and Zod schemas.
+`api/src/services/swarm.ts` calls the independently managed Runtime via authenticated
+HTTP/SSE, validates contracts and redacts secrets. `api/src/routes/swarm.ts` fences
+access to one configured project, applies owner/operator/viewer roles and writes
+command audit via `@aif/data`. `web/src/components/swarm/` and `hooks/useSwarm.ts`
+provide observation, replay/reconciliation and confirmed controls. Runtime remains
+the source of truth; the coordinator and Kanban state machine do not schedule Swarm
+work. No Runtime DB access or new inter-package dependency is introduced.
+
+
 Module dependency graph (arrows = "depends on"):
 
 ```

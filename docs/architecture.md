@@ -547,3 +547,13 @@ The shared schema stores `chat_sessions.status`, `thread_objectives`, and `threa
 `@aif/data` enforces objective closure and project boundaries; API routes validate requests and
 require administrators for task-link changes in Participants Mode.
 `chat:workspace_updated` and task lifecycle events invalidate workspace queries in the web client.
+
+## External Swarm Runtime
+
+The project Swarm tab is a control plane for an independently managed Runtime.
+Handoff calls a versioned HTTP/SSE API, checks project/run scope, applies roles and
+persists command audit through `@aif/data`. Runtime owns task execution, scheduling,
+integration, policy enforcement and durable events. Swarm runs are not Kanban tasks
+and do not enter the coordinator's state machine. Shared schemas validate snapshots
+and events before the UI receives them. See [Swarm](swarm.md) for the contract and
+configuration.

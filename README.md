@@ -376,14 +376,15 @@ AGENT_BYPASS_PERMISSIONS=true
 
 ## Documentation
 
-| Guide                                      | Description                                   |
-| ------------------------------------------ | --------------------------------------------- |
-| [Getting Started](docs/getting-started.md) | Installation, setup, first steps              |
-| [Architecture](docs/architecture.md)       | Agent pipeline, state machine, data flow      |
-| [API Reference](docs/api.md)               | REST endpoints, WebSocket events              |
-| [Configuration](docs/configuration.md)     | Environment variables, logging, auth          |
-| [Providers](docs/providers.md)             | Runtime profiles, adapters, capability matrix |
-| [MCP Sync](docs/mcp-sync.md)               | MCP tools, transports, and authentication     |
+| Guide                                      | Description                                       |
+| ------------------------------------------ | ------------------------------------------------- |
+| [Getting Started](docs/getting-started.md) | Installation, setup, first steps                  |
+| [Architecture](docs/architecture.md)       | Agent pipeline, state machine, data flow          |
+| [API Reference](docs/api.md)               | REST endpoints, WebSocket events                  |
+| [Configuration](docs/configuration.md)     | Environment variables, logging, auth              |
+| [Providers](docs/providers.md)             | Runtime profiles, adapters, capability matrix     |
+| [MCP Sync](docs/mcp-sync.md)               | MCP tools, transports, and authentication         |
+| [Swarm](docs/swarm.md)                     | Runtime control plane and v1 integration contract |
 
 ![ui-light](https://github.com/lee-to/aif-handoff/blob/main/art/ui-light.png)
 ![ui-dark](https://github.com/lee-to/aif-handoff/blob/main/art/ui-dark.png)

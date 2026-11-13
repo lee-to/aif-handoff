@@ -67,6 +67,7 @@ packages/
 │       ├── index.ts         # Server entry point
 │       ├── routes/          # tasks/projects/chat/runtime profiles plus auth/participants
 │       ├── services/        # runtime.ts, codexIndex.ts, fastFix.ts, roadmapGeneration.ts
+│       │                    # swarm.ts validates/redacts the external Swarm Runtime API
 │       │                    # github.ts provides the GitHub REST client
 │       ├── middleware/      # logger.ts, rateLimit.ts, zodValidator.ts
 │       ├── schemas.ts       # Zod request validation
@@ -82,6 +83,7 @@ packages/
 │       │   ├── layout/      # Header, CommandPalette
 │       │   ├── project/     # ProjectSelector, ProjectRuntimeSettings
 │       │   ├── settings/    # RuntimeProfileForm
+│       │   ├── swarm/       # Runs, control/approvals, agents, events and separate graph relations
 │       │   └── ui/          # Reusable UI primitives (badge, button, dialog, etc.)
 │       ├── hooks/           # useTasks, useProjects, useWebSocket, useTheme, useRuntimeProfiles
 │       └── lib/             # api.ts, notifications.ts, utils.ts
@@ -107,30 +109,33 @@ data/                    # SQLite database files (gitignored)
 
 ## Key Entry Points
 
-| File                                    | Purpose                               |
-| --------------------------------------- | ------------------------------------- |
-| `packages/api/src/index.ts`             | API server entry (Hono, port 3009)    |
-| `packages/web/src/main.tsx`             | Web app entry (React, port 5180)      |
-| `packages/agent/src/index.ts`           | Agent coordinator entry               |
-| `packages/agent/src/autoQueueCommit.ts` | Auto-queue completion commit gate     |
-| `packages/agent/src/subagentQuery.ts`   | Runtime-aware subagent execution path |
-| `packages/runtime/src/index.ts`         | Shared runtime/provider contracts     |
-| `packages/data/src/index.ts`            | Centralized data-access API           |
-| `packages/shared/src/schema.ts`         | Database schema (drizzle-orm)         |
-| `packages/shared/src/stateMachine.ts`   | Task state transitions                |
-| `turbo.json`                            | Turborepo task definitions            |
+| File                                    | Purpose                                |
+| --------------------------------------- | -------------------------------------- |
+| `packages/api/src/index.ts`             | API server entry (Hono, port 3009)     |
+| `packages/web/src/main.tsx`             | Web app entry (React, port 5180)       |
+| `packages/agent/src/index.ts`           | Agent coordinator entry                |
+| `packages/agent/src/autoQueueCommit.ts` | Auto-queue completion commit gate      |
+| `packages/agent/src/subagentQuery.ts`   | Runtime-aware subagent execution path  |
+| `packages/runtime/src/index.ts`         | Shared runtime/provider contracts      |
+| `packages/data/src/index.ts`            | Centralized data-access API            |
+| `packages/api/src/routes/swarm.ts`      | Project-scoped Swarm API and SSE proxy |
+| `packages/shared/src/swarm.ts`          | Versioned external Swarm contract      |
+| `packages/shared/src/schema.ts`         | Database schema (drizzle-orm)          |
+| `packages/shared/src/stateMachine.ts`   | Task state transitions                 |
+| `turbo.json`                            | Turborepo task definitions             |
 
 ## Documentation
 
-| Document        | Path                    | Description                               |
-| --------------- | ----------------------- | ----------------------------------------- |
-| README          | README.md               | Project landing page                      |
-| Getting Started | docs/getting-started.md | Installation, setup, first steps          |
-| Architecture    | docs/architecture.md    | Agent pipeline, state machine, data flow  |
-| API Reference   | docs/api.md             | REST endpoints, WebSocket events          |
-| Configuration   | docs/configuration.md   | Environment variables, logging, auth      |
-| Providers       | docs/providers.md       | Runtime profiles and adapter capabilities |
-| MCP Sync        | docs/mcp-sync.md        | MCP tools, transports, and authentication |
+| Document        | Path                    | Description                                  |
+| --------------- | ----------------------- | -------------------------------------------- |
+| README          | README.md               | Project landing page                         |
+| Getting Started | docs/getting-started.md | Installation, setup, first steps             |
+| Architecture    | docs/architecture.md    | Agent pipeline, state machine, data flow     |
+| API Reference   | docs/api.md             | REST endpoints, WebSocket events             |
+| Configuration   | docs/configuration.md   | Environment variables, logging, auth         |
+| Providers       | docs/providers.md       | Runtime profiles and adapter capabilities    |
+| MCP Sync        | docs/mcp-sync.md        | MCP tools, transports, and authentication    |
+| Swarm           | docs/swarm.md           | Control plane, roles and Runtime v1 contract |
 
 ## AI Context Files
 

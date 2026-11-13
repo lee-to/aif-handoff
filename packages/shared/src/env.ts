@@ -79,6 +79,11 @@ const exactOriginSchema = z.string().transform((value, context) => {
 });
 
 const envSchema = z.object({
+  AIF_SWARM_CONTROL_PLANE_ENABLED: booleanEnvSchema.default(false),
+  SWARM_RUNTIME_URL: z.url().optional(),
+  SWARM_RUNTIME_TOKEN: z.string().min(1).optional(),
+  SWARM_PROJECT_ID: z.string().min(1).optional(),
+  SWARM_OPERATOR_IDS: z.string().default(""),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_AUTH_TOKEN: z.string().optional(),
   ANTHROPIC_BASE_URL: z.string().optional(),

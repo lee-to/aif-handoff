@@ -798,3 +798,24 @@ The `getProjectConfig(projectRoot)` utility in `@aif/shared` reads and caches co
 
 - [Getting Started](getting-started.md) — installation and first run
 - [Architecture](architecture.md) — how the agent pipeline uses these settings
+
+## Swarm Runtime connection
+
+`AIF_SWARM_CONTROL_PLANE_ENABLED` is a boolean rollout/kill switch, default `false`.
+While off, `/swarm/connection` reports disabled and Swarm reads/commands return
+`503 swarm_disabled` without contacting Runtime, even when connection settings are
+populated. Set it to `true` to opt in, or back to `false` to disable the integration
+without removing credentials. It is read through the cached, validated `getEnv()`
+accessor; restart the API after changing the flag.
+
+Optional server settings connect the Swarm tab to one separately managed Runtime:
+`SWARM_RUNTIME_URL`, `SWARM_RUNTIME_TOKEN`, `SWARM_PROJECT_ID` and comma-separated
+`SWARM_OPERATOR_IDS`. URL/token/project are required together; credentials are
+server-only. The Runtime owner token (`AIF_SWARM_OWNER_TOKEN`, at least 32 characters)
+is the backend credential; default Runtime port is 4317. The returned Runtime project
+path must match the Handoff project root, including Docker mount paths. The URL/token
+binding is verified through `/v1/swarm/project` before creation, including for an
+empty Runtime. Deploy a Runtime with that identity endpoint and bounded
+`/v1/swarm/runs?view=summary` pages before this Handoff version. Use HTTPS remotely or local HTTP. Administrators are Swarm owners;
+named members are operators; other members are viewers. See [Swarm](swarm.md) for
+Docker addresses, permissions, reconnection behavior and the v1 contract fixture.

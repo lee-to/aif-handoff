@@ -1,4 +1,6 @@
 // Schema
+export * from "./swarm.js";
+export { readSwarmSse } from "./swarmSse.js";
 export {
   projects,
   appSettings,

@@ -405,3 +405,9 @@ export const runtimeProfileListQuerySchema = z.object({
   enabledOnly: z.string().optional(),
   scope: z.enum(["global", "project", "visible"]).optional(),
 });
+export {
+  createSwarmRunSchema,
+  swarmControlSchema,
+  swarmDecisionSchema,
+  swarmRunsQuerySchema,
+} from "@aif/shared";

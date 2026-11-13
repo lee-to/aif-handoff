@@ -9,5 +9,6 @@ Run through this list whenever you touch anything under `packages/api/`.
 - [ ] Runtime execution goes through `@aif/runtime` — no direct provider SDK calls from routes or services.
 - [ ] Validate every new request body/query with Zod via the `zodValidator` middleware.
 - [ ] Add integration tests for new routes (happy path + one error path minimum).
+- [ ] External Runtime contracts → test native wire fixtures separately from browser DTOs; verify a nonempty run and command round trip against the actual Runtime. List/history APIs must project bounded pages before loading payloads, and creation must not scan history; cover historical state above the consumer body limit.
 - [ ] `npm run lint`
 - [ ] `npm test`

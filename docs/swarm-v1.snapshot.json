@@ -13,8 +13,8 @@
     "finished_at": null,
     "token_total": 1200,
     "cost_usd": null,
-    "completed_tasks": 0,
-    "total_tasks": 1,
+    "completed_tasks": 1,
+    "total_tasks": 2,
     "policy": "integration",
     "sandbox": "workspace-write",
     "blockers": ["Approval required"],
@@ -40,6 +40,19 @@
       "git_ref": "refs/heads/swarm/task-1",
       "tests": ["links: passed"],
       "duration_ms": 60000
+    },
+    {
+      "id": "task-completed",
+      "parent_id": null,
+      "depends_on": [],
+      "title": "Earlier documentation update",
+      "status": "done",
+      "agent_id": "worker-2",
+      "blocked_reason": null,
+      "result": "Earlier update integrated",
+      "git_ref": "integration-commit",
+      "tests": [],
+      "duration_ms": 60000
     }
   ],
   "agents": [
@@ -59,13 +72,13 @@
   "artifacts": [
     {
       "id": "artifact-1",
-      "task_id": "task-1",
+      "task_id": "task-completed",
       "title": "Documentation patch",
-      "git_ref": "refs/heads/swarm/task-1",
+      "git_ref": "integration-commit",
       "diff": "- old link\n+ new link",
       "tests": ["links: passed"],
       "ci_status": "passed",
-      "status": "pending",
+      "status": "integrated",
       "conflicts": [],
       "review": "Ready for review"
     }
@@ -74,7 +87,7 @@
     {
       "id": "approval-1",
       "run_id": "run-1",
-      "artifact_id": "artifact-1",
+      "artifact_id": null,
       "kind": "integration",
       "summary": "Integrate documentation patch",
       "status": "pending"

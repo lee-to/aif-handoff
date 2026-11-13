@@ -1785,7 +1785,7 @@ in [Swarm](swarm.md). Only the server-configured project is accessible.
 | Method | Path                                                | Role / response                                                   |
 | ------ | --------------------------------------------------- | ----------------------------------------------------------------- |
 | GET    | `/swarm/connection`                                 | Viewer; `{enabled,projectId,role,schemaVersion}` (no credentials) |
-| GET    | `/swarm/runs`                                       | Viewer; v1 run list                                               |
+| GET    | `/swarm/runs`                                       | Viewer; bounded v1 summary page                                   |
 | GET    | `/swarm/runs/:runId`                                | Viewer; v1 atomic snapshot                                        |
 | POST   | `/swarm/runs`                                       | Owner; validated create input; 202 command acknowledgement        |
 | POST   | `/swarm/runs/:runId/pause`                          | Operator/owner; `{command_id,confirmed:true}`                     |
@@ -1794,6 +1794,13 @@ in [Swarm](swarm.md). Only the server-configured project is accessible.
 | POST   | `/swarm/runs/:runId/approvals/:approvalId/decision` | Owner; control input + `decision`, `reason`                       |
 | GET    | `/swarm/runs/:runId/events?after=0`                 | Viewer; ordered v1 events                                         |
 | GET    | `/swarm/runs/:runId/events/stream?after=0`          | Viewer; SSE, numeric `Last-Event-ID` overrides query cursor       |
+
+List query: optional opaque `cursor`, `limit` (1–50, default 20), `search` (goal
+substring, at most 200 characters), and `status`
+(`running|paused|needs_attention|completed|failed|cancelled`). Filters apply before
+paging. Response: `{schema_version:1,runs:[summary],next_cursor:string|null}`.
+Summaries omit acceptance criteria, start/finish timestamps, policy and sandbox;
+open the atomic snapshot for these details.
 
 Create input: UUID `command_id`, nonempty `goal`, nonempty `acceptance_criteria[]`,
 `agent_limit` (1–5, all roles), positive integer `budget_tokens`, nonempty `checks`

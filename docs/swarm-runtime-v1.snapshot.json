@@ -51,6 +51,21 @@
       "assignedAgentId": "worker-1",
       "gitRef": "worker-commit",
       "report": "Updated links"
+    },
+    {
+      "id": "task-completed",
+      "title": "Earlier documentation update",
+      "description": "Check links",
+      "acceptanceCriteria": ["Links pass"],
+      "dependsOn": [],
+      "depth": 0,
+      "priority": 0,
+      "status": "done",
+      "attempts": 1,
+      "assignedAgentId": "worker-2",
+      "gitRef": "earlier-commit",
+      "report": "Earlier update integrated",
+      "integratedRef": "integration-commit"
     }
   ],
   "agents": [
@@ -58,9 +73,18 @@
       "id": "worker-1",
       "provider": "codex",
       "role": "worker",
-      "status": "idle",
+      "status": "stopped",
       "heartbeatAt": 1794301200000,
-      "tokens": 120,
+      "tokens": 30,
+      "reservation": 0
+    },
+    {
+      "id": "worker-2",
+      "provider": "codex",
+      "role": "worker",
+      "status": "stopped",
+      "heartbeatAt": 1794301200000,
+      "tokens": 90,
       "reservation": 0
     }
   ],
@@ -76,9 +100,9 @@
   "artifacts": [
     {
       "id": "artifact-1",
-      "taskId": "task-1",
+      "taskId": "task-completed",
       "type": "integration",
-      "git_ref": "worker-commit",
+      "git_ref": "integration-commit",
       "metadata": {
         "checks": "pass",
         "report": "Checks passed"

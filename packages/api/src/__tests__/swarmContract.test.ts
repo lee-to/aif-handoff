@@ -42,7 +42,7 @@ describe("native Swarm Runtime v1 normalization", () => {
       ci_status: null,
       review: "Checks passed",
     });
-    expect(result.approvals[0]).toMatchObject({ run_id: "run-1", artifact_id: "artifact-1" });
+    expect(result.approvals[0]).toMatchObject({ run_id: "run-1", artifact_id: null });
     expect(result).not.toHaveProperty("context");
     expect(result).not.toHaveProperty("messages");
   });

@@ -201,10 +201,10 @@ export function SwarmRunDetail({
             ))}
           </ul>
           <p className="text-sm">
-            Integration: {artifacts.filter((artifact) => artifact.status === "pending").length}{" "}
-            pending · {artifacts.filter((artifact) => artifact.conflicts.length).length} with
-            conflicts · {approvals.filter((approval) => approval.status === "pending").length}{" "}
-            approvals
+            Integration: {tasks.filter((task) => task.status === "submitted").length} pending ·{" "}
+            {tasks.filter((task) => task.status === "verifying").length} in progress ·{" "}
+            {artifacts.filter((artifact) => artifact.conflicts.length).length} with conflicts ·{" "}
+            {approvals.filter((approval) => approval.status === "pending").length} approvals
           </p>
           <p className="text-xs text-muted-foreground">
             Runtime determines completion after global verification and integration.

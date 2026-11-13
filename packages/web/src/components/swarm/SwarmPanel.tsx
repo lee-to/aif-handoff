@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createSwarmRunSchema } from "@aif/shared/browser";
+import { createSwarmRunSchema, type SwarmRunsQuery } from "@aif/shared/browser";
 import { useSwarmConnection, useSwarmRuns } from "@/hooks/useSwarm";
 import { api } from "@/lib/api";
 import { randomUUID } from "@/lib/uuid";
@@ -16,11 +16,12 @@ import { SwarmRunDetail } from "./SwarmRunDetail";
 export function SwarmPanel({ projectId }: { projectId: string }) {
   const connection = useSwarmConnection();
   const enabled = connection.data?.enabled === true && connection.data.projectId === projectId;
-  const runs = useSwarmRuns(enabled);
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<SwarmRunsQuery["status"]>();
   const [search, setSearch] = useState("");
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const runs = useSwarmRuns(enabled, { cursor: cursors.at(-1), search, status, limit: 20 });
   const [creating, setCreating] = useState(false);
   const [goal, setGoal] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -69,10 +70,7 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
         onBack={() => setSelectedRunId(null)}
       />
     );
-  const visible = (runs.data?.runs ?? []).filter(
-    (run) =>
-      (!status || run.status === status) && run.goal.toLowerCase().includes(search.toLowerCase()),
-  );
+  const visible = runs.data?.runs ?? [];
   const attempted = !create.isIdle;
   return (
     <section className="space-y-4" aria-label="Swarm runs">
@@ -110,18 +108,28 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
           placeholder="Search goals"
           className="max-w-sm"
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setCursors([undefined]);
+          }}
         />
         <Select
-          value={status}
+          value={status ?? ""}
           options={[
             { value: "", label: "All run statuses" },
-            ...Array.from(new Set(runs.data?.runs.map((run) => run.status) ?? [])).map((value) => ({
-              value,
-              label: value,
-            })),
+            ...["running", "paused", "needs_attention", "completed", "failed", "cancelled"].map(
+              (value) => ({
+                value,
+                label: value,
+              }),
+            ),
           ]}
-          onChange={(event) => setStatus(event.target.value)}
+          onChange={(event) => {
+            setStatus(
+              event.target.value ? (event.target.value as SwarmRunsQuery["status"]) : undefined,
+            );
+            setCursors([undefined]);
+          }}
         />
       </div>
       {visible.map((run) => (
@@ -153,6 +161,26 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
       {!runs.isPending && !runs.isError && !visible.length && (
         <p className="text-sm text-muted-foreground">No matching Swarm runs.</p>
       )}
+      <div className="flex items-center gap-3">
+        <Button
+          variant="outline"
+          disabled={cursors.length === 1 || runs.isPending}
+          onClick={() => setCursors((current) => current.slice(0, -1))}
+        >
+          Previous page
+        </Button>
+        <span className="text-xs text-muted-foreground">Page {cursors.length}</span>
+        <Button
+          variant="outline"
+          disabled={!runs.data?.next_cursor || runs.isPending || runs.isError}
+          onClick={() => {
+            const next = runs.data?.next_cursor;
+            if (next) setCursors((current) => [...current, next]);
+          }}
+        >
+          Next page
+        </Button>
+      </div>
       <FormDialog
         open={creating}
         onOpenChange={(open) => {

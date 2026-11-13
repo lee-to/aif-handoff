@@ -100,6 +100,51 @@ try {
   assert.equal(created.run_id, (await call("/runs", input)).run_id);
   assert.equal((await call("/runs")).runs.length, 1);
   check("create through Handoff and durable idempotency");
+  const initial = await engine.get(created.run_id);
+  for (let i = 0; i < 10; i++) {
+    const historical = await engine.create(
+      { ...initial.spec, goal: `History probe ${i}` },
+      initial.baseRef,
+    );
+    await store.mutate(project, historical.id, (run) => {
+      run.startedAt = 1700000000000 + Math.floor(i / 2);
+      run.messages = Array.from({ length: 80 }, (_, index) => ({
+        id: String(index),
+        sender: "fixture",
+        topic: "history",
+        body: "x".repeat(16000),
+      }));
+    });
+    await engine.control(historical.id, "cancel");
+  }
+  const historicalBody = await (
+    await fetch(`${runtime.url}/v1/swarm/runs`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+  ).text();
+  assert(Buffer.byteLength(historicalBody) > 10000000);
+  const listHistory = store.list.bind(store);
+  store.list = async () => {
+    throw new Error("Summary/create must not load full history");
+  };
+  let cursor;
+  const historyIds = [];
+  do {
+    const page = await call(
+      `/runs?limit=3&search=HISTORY&status=cancelled${cursor ? `&cursor=${cursor}` : ""}`,
+    );
+    assert(page.runs.length <= 3);
+    historyIds.push(...page.runs.map((run) => run.id));
+    cursor = page.next_cursor;
+  } while (cursor);
+  assert.equal(historyIds.length, 10);
+  assert.equal(new Set(historyIds).size, 10);
+  const afterHistory = { ...input, command_id: randomUUID(), goal: "Create after large history" };
+  const fresh = await call("/runs", afterHistory);
+  assert.equal(fresh.run_id, (await call("/runs", afterHistory)).run_id);
+  await call(`/runs/${fresh.run_id}/cancel`, { command_id: randomUUID(), confirmed: true });
+  store.list = listHistory;
+  check("bounded global search/paging and create over >10MB history without loading snapshots");
   const id = created.run_id;
   const snapshot = swarmSnapshotSchema.parse(await call(`/runs/${id}`));
   assert.equal(snapshot.run.project_id, localProject.id);

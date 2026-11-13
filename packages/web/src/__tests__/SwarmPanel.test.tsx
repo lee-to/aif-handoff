@@ -34,7 +34,17 @@ beforeEach(() => {
     refetch: vi.fn(),
   }));
   mocks.runs.mockImplementation(() => ({
-    data: { schema_version: 1, runs: [snapshot.run] },
+    data: {
+      schema_version: 1,
+      runs: [snapshot.run].filter((run) => {
+        const q = mocks.runs.mock.calls.at(-1)?.[1];
+        return (
+          (!q?.search || run.goal.toLowerCase().includes(q.search.toLowerCase())) &&
+          (!q?.status || run.status === q.status)
+        );
+      }),
+      next_cursor: null,
+    },
     isPending: false,
     isError: false,
     dataUpdatedAt: Date.now(),
@@ -66,6 +76,28 @@ afterEach(() => {
 });
 
 describe("Swarm runs UI", () => {
+  it("pages summaries and resets the cursor on global search", () => {
+    mocks.runs.mockImplementation((_enabled, query) => ({
+      data: { runs: [snapshot.run], next_cursor: query.cursor ? null : "next-cursor" },
+      isPending: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    }));
+    show();
+    expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(mocks.runs).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({ cursor: "next-cursor" }),
+    );
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Search Swarm runs"), { target: { value: "older" } });
+    expect(mocks.runs).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({ cursor: undefined, search: "older" }),
+    );
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+  });
   it("shows connection loading, failure and unconfigured projects", () => {
     mocks.connection.mockReturnValueOnce({ isPending: true });
     const view = show();
@@ -137,6 +169,20 @@ describe("Swarm runs UI", () => {
 });
 
 describe("Swarm run details", () => {
+  it.each([
+    ["submitted", 1, 0],
+    ["verifying", 0, 1],
+    ["integrated", 0, 0],
+    ["done", 0, 0],
+  ])("counts integration state %s from tasks, not artifacts", (status, pending, active) => {
+    snapshot.tasks[0].status = String(status);
+    snapshot.artifacts = [];
+    snapshot.approvals[0].status = "pending";
+    show(<SwarmRunDetail runId="run-1" role="owner" onBack={vi.fn()} />);
+    expect(
+      screen.getByText(new RegExp(`Integration: ${pending} pending · ${active} in progress`)),
+    ).toBeInTheDocument();
+  });
   it("requires confirmation before controlling Runtime and retries the same command", async () => {
     const control = vi
       .spyOn(api, "controlSwarmRun")

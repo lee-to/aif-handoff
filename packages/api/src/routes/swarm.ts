@@ -6,7 +6,12 @@ import { appendAuditEvent, findProjectById, resolveParticipantSession } from "@a
 import { getEnv, logger, type AuditActor, type SwarmRole } from "@aif/shared";
 import { getParticipantAuth, type ParticipantApiEnv } from "../middleware/participantAuth.js";
 import { jsonValidator, queryValidator } from "../middleware/zodValidator.js";
-import { createSwarmRunSchema, swarmControlSchema, swarmDecisionSchema } from "../schemas.js";
+import {
+  createSwarmRunSchema,
+  swarmControlSchema,
+  swarmDecisionSchema,
+  swarmRunsQuerySchema,
+} from "../schemas.js";
 import {
   SwarmError,
   swarmConfiguration,
@@ -130,7 +135,9 @@ swarmRouter.get("/connection", (c) => {
     schemaVersion: 1,
   });
 });
-swarmRouter.get("/runs", async (c) => c.json(await listSwarmRuns()));
+swarmRouter.get("/runs", queryValidator(swarmRunsQuerySchema), async (c) =>
+  c.json(await listSwarmRuns(c.req.valid("query"))),
+);
 swarmRouter.get("/runs/:runId", runParam, async (c) =>
   c.json(await getSwarmSnapshot(c.req.valid("param").runId)),
 );

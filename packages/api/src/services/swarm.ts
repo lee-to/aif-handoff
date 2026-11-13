@@ -6,7 +6,9 @@ import {
   readSwarmSse,
   redactProviderTextForLogs,
   swarmSnapshotSchema,
-  swarmRunSchema,
+  swarmRunSummarySchema,
+  swarmRunsQuerySchema,
+  type SwarmRunsQuery,
   swarmEventSchema,
   createSwarmRunSchema,
   type SwarmEvent,
@@ -14,11 +16,12 @@ import {
 import {
   runtimeRunSchema,
   runtimeRunsSchema,
+  runtimeProjectSchema,
   runtimeEventsSchema,
   runtimeEventSchema,
   runtimeDecisionSchema,
   normalizeSwarmSnapshot,
-  normalizeSwarmRun,
+  normalizeSwarmSummary,
   normalizeSwarmEvent,
 } from "./swarmContract.js";
 
@@ -171,16 +174,28 @@ function snapshotFromRuntime(run: z.infer<typeof runtimeRunSchema>) {
 }
 const runPath = (id: string) => `/runs/${encodeURIComponent(id)}`;
 
-export async function listSwarmRuns() {
+export async function listSwarmRuns(input: Partial<SwarmRunsQuery> = {}) {
   const project = configuredProject();
-  const result = await runtimeJson("/runs", runtimeRunsSchema);
+  const query = swarmRunsQuerySchema.parse(input);
+  const params = new URLSearchParams({ view: "summary", limit: String(query.limit) });
+  if (query.cursor) params.set("cursor", query.cursor);
+  if (query.search) params.set("search", query.search);
+  if (query.status) params.set("status", query.status);
+  const result = await runtimeJson(`/runs?${params}`, runtimeRunsSchema);
+  if (result.project !== project.rootPath) throw new SwarmError("swarm_not_found", 404);
+  if (result.runs.length > query.limit) throw new SwarmError("swarm_contract_error", 502);
   try {
+    log.debug(
+      { count: result.runs.length, hasNextPage: result.next_cursor !== null },
+      "[FIX:swarm-history] Read bounded run summaries",
+    );
     return {
       schema_version: 1 as const,
       runs: result.runs.map((run) => {
         if (run.project !== project.rootPath) throw new SwarmError("swarm_not_found", 404);
-        return swarmRunSchema.parse(normalizeSwarmRun(run, project.id));
+        return swarmRunSummarySchema.parse(normalizeSwarmSummary(run, project.id));
       }),
+      next_cursor: result.next_cursor,
     };
   } catch (error) {
     if (error instanceof SwarmError) throw error;
@@ -244,8 +259,9 @@ export async function sendSwarmCommand(path: string, body: Record<string, unknow
   let runId: string;
   if (path === "/runs") {
     const input = createSwarmRunSchema.parse(body);
-    // A Runtime URL/token is bound to one project by deployment, not by request fields.
-    await listSwarmRuns();
+    const project = configuredProject();
+    const identity = await runtimeJson("/project", runtimeProjectSchema);
+    if (identity.project !== project.rootPath) throw new SwarmError("swarm_not_found", 404);
     const provider = { provider: input.provider, ...(input.model ? { model: input.model } : {}) };
     const native = {
       goal: input.goal,

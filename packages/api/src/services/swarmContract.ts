@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { SwarmEvent, SwarmRun, SwarmSnapshot } from "@aif/shared";
+import type { SwarmEvent, SwarmRun, SwarmRunSummary, SwarmSnapshot } from "@aif/shared";
 
 const id = z
   .string()
@@ -77,9 +77,34 @@ export const runtimeRunSchema = z.object({
     }),
   ),
 });
-export const runtimeRunsSchema = z.object({
+export const runtimeProjectSchema = z.object({
   schema_version: z.literal(1),
-  runs: z.array(runtimeRunSchema),
+  project: z.string().min(1),
+});
+export const runtimeSummarySchema = z.object({
+  id,
+  project: z.string().min(1),
+  goal: z.string().max(2000),
+  status: runtimeRunSchema.shape.status,
+  startedAt: count,
+  finishedAt: count.nullable(),
+  tokens: count,
+  budgetTokens: count.positive(),
+  agentLimit: count.min(1).max(5),
+  activeAgents: count,
+  totalTasks: count,
+  completedTasks: count,
+  blockedTasks: count,
+  approval: runtimeRunSchema.shape.spec.shape.approval,
+});
+export const runtimeRunsSchema = runtimeProjectSchema.extend({
+  runs: z.array(runtimeSummarySchema).max(50),
+  next_cursor: z
+    .string()
+    .min(1)
+    .max(400)
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .nullable(),
 });
 export const runtimeEventSchema = z.object({
   schema_version: z.literal(1),
@@ -100,6 +125,29 @@ export const runtimeDecisionSchema = z.object({
   ok: z.literal(true),
 });
 type RuntimeRun = z.infer<typeof runtimeRunSchema>;
+
+export function normalizeSwarmSummary(
+  run: z.infer<typeof runtimeSummarySchema>,
+  projectId: string,
+): SwarmRunSummary {
+  return {
+    id: run.id,
+    project_id: projectId,
+    goal: run.goal,
+    status: run.status,
+    created_at: new Date(run.startedAt).toISOString(),
+    updated_at: null,
+    agent_limit: run.agentLimit,
+    active_agents: run.activeAgents,
+    token_total: run.tokens,
+    cost_usd: null,
+    budget_tokens: run.budgetTokens,
+    completed_tasks: run.completedTasks,
+    total_tasks: run.totalTasks,
+    blockers: run.blockedTasks ? [`${run.blockedTasks} blocked/failed tasks`] : [],
+    last_event: null,
+  };
+}
 
 export function normalizeSwarmRun(run: RuntimeRun, projectId: string): SwarmRun {
   return {

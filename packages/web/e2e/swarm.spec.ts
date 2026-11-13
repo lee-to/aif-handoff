@@ -78,8 +78,21 @@ for (const theme of ["light", "dark"] as const) {
         });
         return route.fulfill({ status: 202, json: { run_id: "run-1" } });
       }
-      if (path === "/swarm/runs")
-        return route.fulfill({ json: { schema_version: 1, runs: [snapshot.run] } });
+      if (path === "/swarm/runs") {
+        const cursor = new URL(request.url()).searchParams.get("cursor");
+        return route.fulfill({
+          json: {
+            schema_version: 1,
+            runs: [
+              {
+                ...snapshot.run,
+                ...(cursor ? { id: "older-run", goal: "Older documentation run" } : {}),
+              },
+            ],
+            next_cursor: cursor ? null : "older",
+          },
+        });
+      }
       if (path === "/swarm/runs/run-1")
         return route.fulfill({
           status: offline ? 503 : 200,
@@ -105,6 +118,13 @@ for (const theme of ["light", "dark"] as const) {
     });
     await page.goto("/project/project-1");
     await page.getByRole("tab", { name: "Swarm", exact: true }).click();
+    await expect(page.getByText("Page 1", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Next page", exact: true }).click();
+    await expect(page.getByText("Older documentation run", { exact: true })).toBeVisible();
+    await expect(page.getByText("Page 2", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Next page", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: "Previous page", exact: true }).click();
+    await expect(page.getByText("Page 1", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "New Swarm run", exact: true }).click();
     await page.getByLabel("Goal", { exact: true }).fill("Wire protocol check");
     await page.getByLabel(/Acceptance criteria/).fill("Tests pass");
@@ -114,6 +134,11 @@ for (const theme of ["light", "dark"] as const) {
     await page.screenshot({ path: info.outputPath(`swarm-create-${theme}.png`), fullPage: true });
     await page.getByRole("button", { name: "Start run", exact: true }).click();
     await expect(page.getByText("Global acceptance criteria")).toBeVisible();
+    await expect(
+      page.getByText("Integration: 1 pending · 0 in progress · 0 with conflicts · 1 approvals", {
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Instruct Lead", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
     await page.getByRole("button", { name: "Pause", exact: true }).click();

@@ -49,10 +49,11 @@ These roles apply only to the configured project. Other projects show a disconne
 panel. Run snapshots are checked against the configured project before reads or
 mutations. Runtime authenticates the backend with its owner token; individual participant
 permissions are enforced by Handoff. Runtime still enforces its execution policies.
-The URL/token deployment binds one Runtime to one project. A nonempty list and all
-run responses are fenced by `run.project`; foreign paths fail closed. The current
-Runtime API exposes no project identity when the list is empty, so it cannot verify
-a misconfigured binding before the first create. Configure this pair carefully.
+The URL/token deployment binds one Runtime to one project. Every summary page
+(including an empty page), run response and the lightweight `/project` identity
+check before creation must match the stored project root; foreign paths fail closed.
+Deploy a Runtime supporting `/project` and `view=summary` before enabling this
+Handoff version. Older full-history-only runtimes fail closed.
 
 ## Use
 
@@ -63,6 +64,9 @@ provider/model applies to Lead and workers. The agent limit includes all roles.
 The backend caps the per-attempt reservation at the smaller of 100,000 tokens and
 the run budget. Runtime owns the remaining native defaults; no USD cap is implied.
 Unknown cost (including subscription CLI runs) stays **Unknown**, never zero.
+The run list shows 20 summaries per page with previous/next navigation. Goal search
+and status filters apply to the entire history before paging; changing a filter
+returns to the first page. Lists never download historical snapshots.
 Overview shows Runtime's final status, progress, elapsed time, sandbox, blockers,
 tokens and cost per integrated task. No active workers does not mean completed.
 
@@ -73,7 +77,10 @@ view; at most 200 matching tasks/nodes are rendered. A cycle is reported explici
 Agents expose provider/model, heartbeats and current task associations. The native
 API does not expose full logs or assignment history. Integration & review shows refs,
 metadata checks/reports and approve/reject decisions. Unavailable diffs and CI stay
-unknown. Run update time and last-event summary are also unknown in list snapshots.
+unknown. Integration pending counts `submitted` tasks; `verifying` tasks are shown
+separately as in progress. Pending approvals are counted independently. Successful
+integration artifacts stay integrated while final completion awaits approval.
+Run update time and last-event summary are also unknown in list summaries.
 
 Pause, resume, cancel and approval decisions require confirmation. Lead instructions
 and request-changes are not supported by this Runtime and are not offered.
@@ -119,7 +126,8 @@ sensitive values redacted before browser exposure.
 
 | Runtime endpoint                                | Native response                                                    |
 | ----------------------------------------------- | ------------------------------------------------------------------ |
-| `GET /v1/swarm/runs`                            | `{schema_version:1,runs:[publicRun]}`                              |
+| `GET /v1/swarm/project`                         | `{schema_version:1,project}`; checked before create                |
+| `GET /v1/swarm/runs?view=summary&limit=20`      | `{schema_version:1,project,runs:[summary],next_cursor}`            |
 | `GET /v1/swarm/runs/{id}`                       | Atomic top-level `publicRun`, including `sequence` and collections |
 | `POST /v1/swarm/runs`                           | Created/existing `publicRun`                                       |
 | `POST /v1/swarm/runs/{id}/pause`                | Updated `publicRun`                                                |
@@ -128,6 +136,13 @@ sensitive values redacted before browser exposure.
 | `POST /v1/swarm/approvals/{id}/decision`        | `{schema_version:1,ok:true}`                                       |
 | `GET /v1/swarm/runs/{id}/events?after=N`        | `{schema_version:1,events:[...]}`                                  |
 | `GET /v1/swarm/runs/{id}/events/stream?after=N` | SSE replay and live events                                         |
+
+Summary pages accept `limit` (1–50, default 20), opaque `cursor`, optional `status`
+and `search` (at most 200 characters). They sort by descending start time and ID.
+Runtime projects scalar summary fields in SQL; messages, task reports and operation
+results are never loaded for the list. See the [native page fixture](swarm-runtime-v1.page.json).
+Legacy full `GET /runs` remains a Runtime compatibility endpoint and is not used by Handoff.
+Creation checks `/project` without downloading runs, then uses a direct idempotency lookup.
 
 Create sends only native SwarmSpec fields: `goal`, `acceptanceCriteria`, `checks`,
 `lead`, `workers`, `approval`, `limits`. UUID `command_id` goes in `Idempotency-Key`,
@@ -171,7 +186,8 @@ node --import tsx scripts/check-swarm-runtime.mjs /path/to/ai-factory
 
 The probe starts real Runtime and Handoff HTTP servers on ephemeral loopback ports,
 creates a disposable Git project/SQLite stores, checks creation and stable retries,
-nonempty reads, pause/resume/cancel, SSE reconnect/replay, completion approval retries
+summary paging/filtering over more than 10 MB of historical state, creation without
+a history scan, pause/resume/cancel, SSE reconnect/replay, completion approval retries
 and audit. Approval evidence is seeded by the Runtime test driver. It runs no model
 processes, uses no production credentials and cleans up its servers and project.
 Actual model execution and browser workflows are separate checks.

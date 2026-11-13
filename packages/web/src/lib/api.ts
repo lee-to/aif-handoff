@@ -37,7 +37,8 @@ import type {
   GitHubIssueLink,
   GitHubRepositoryConnection,
   SwarmConnection,
-  SwarmRun,
+  SwarmRunPage,
+  SwarmRunsQuery,
   SwarmSnapshot,
   SwarmEvent,
   CreateSwarmRunInput,
@@ -451,8 +452,11 @@ export const api = {
   getSwarmConnection(): Promise<SwarmConnection> {
     return request("/swarm/connection");
   },
-  listSwarmRuns(): Promise<{ schema_version: 1; runs: SwarmRun[] }> {
-    return request("/swarm/runs");
+  listSwarmRuns(query: Partial<SwarmRunsQuery> = {}): Promise<SwarmRunPage> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query))
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    return request(`/swarm/runs${params.size ? `?${params}` : ""}`);
   },
   getSwarmSnapshot(runId: string): Promise<SwarmSnapshot> {
     return request(`/swarm/runs/${encodeURIComponent(runId)}`);

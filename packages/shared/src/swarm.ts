@@ -100,7 +100,31 @@ export const swarmEventSchema = z.object({
   agent_id: id.nullable(),
   payload: z.record(z.string(), z.unknown()),
 });
-export const swarmRunsSchema = z.object({ ...envelope, runs: z.array(swarmRunSchema) });
+export const swarmRunSummarySchema = swarmRunSchema.omit({
+  acceptance_criteria: true,
+  started_at: true,
+  finished_at: true,
+  policy: true,
+  sandbox: true,
+});
+const pageCursor = z
+  .string()
+  .min(1)
+  .max(400)
+  .regex(/^[A-Za-z0-9_-]+$/);
+export const swarmRunsQuerySchema = z.object({
+  cursor: pageCursor.optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  search: z.string().trim().max(200).default(""),
+  status: z
+    .enum(["running", "paused", "needs_attention", "completed", "failed", "cancelled"])
+    .optional(),
+});
+export const swarmRunsSchema = z.object({
+  ...envelope,
+  runs: z.array(swarmRunSummarySchema).max(50),
+  next_cursor: pageCursor.nullable(),
+});
 export const swarmSnapshotSchema = z.object({
   ...envelope,
   sequence: count,
@@ -157,6 +181,9 @@ export const swarmDecisionSchema = swarmControlSchema
   })
   .strict();
 export type SwarmRun = z.infer<typeof swarmRunSchema>;
+export type SwarmRunSummary = z.infer<typeof swarmRunSummarySchema>;
+export type SwarmRunPage = z.infer<typeof swarmRunsSchema>;
+export type SwarmRunsQuery = z.infer<typeof swarmRunsQuerySchema>;
 export type SwarmSnapshot = z.infer<typeof swarmSnapshotSchema>;
 export type SwarmEvent = z.infer<typeof swarmEventSchema>;
 export type SwarmTask = z.infer<typeof swarmTaskSchema>;

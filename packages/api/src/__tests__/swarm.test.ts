@@ -42,6 +42,9 @@ const { getSwarmSnapshot, streamSwarmEvents, sanitizeSwarmValue } =
 const fixture = JSON.parse(
   readFileSync(new URL("../../../../docs/swarm-runtime-v1.snapshot.json", import.meta.url), "utf8"),
 );
+const page = JSON.parse(
+  readFileSync(new URL("../../../../docs/swarm-runtime-v1.page.json", import.meta.url), "utf8"),
+);
 const runtimeFetch = vi.fn<typeof fetch>();
 const app = new Hono<ParticipantApiEnv>();
 app.use("*", participantAuth);
@@ -123,7 +126,8 @@ beforeEach(async () => {
     }
     if (path.endsWith("/events/stream")) return sse(event(1), event(2));
     if (path.endsWith("/events")) return json({ schema_version: 1, events: [event(1), event(2)] });
-    if (path.endsWith("/runs")) return json({ schema_version: 1, runs: [fixture] });
+    if (path.endsWith("/project")) return json({ schema_version: 1, project: fixture.project });
+    if (path.endsWith("/runs")) return json(page);
     return json(fixture);
   });
   vi.stubGlobal("fetch", runtimeFetch);
@@ -135,9 +139,69 @@ afterEach(() => {
 });
 
 describe("Swarm control plane API", () => {
+  it("reads a bounded summary page with global filters and validates its project even when empty", async () => {
+    const cursor = "eyJzdGFydGVkQXQiOjEsImlkIjoiYSJ9";
+    runtimeFetch.mockResolvedValueOnce(json({ ...page, next_cursor: cursor }));
+    const response = await app.request("/swarm/runs?limit=2&search=DOC&status=running", {
+      headers: viewer,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ next_cursor: cursor, runs: [{ id: "run-1" }] });
+    const url = new URL(String(runtimeFetch.mock.calls[0][0]));
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      view: "summary",
+      limit: "2",
+      search: "DOC",
+      status: "running",
+    });
+    runtimeFetch.mockResolvedValueOnce(json({ ...page, project: "/foreign", runs: [] }));
+    expect((await app.request("/swarm/runs", { headers: viewer })).status).toBe(404);
+  });
+  it("rejects create before dispatch when empty Runtime identity belongs to another project", async () => {
+    runtimeFetch.mockResolvedValueOnce(json({ schema_version: 1, project: "/foreign" }));
+    const response = await post("/runs", {
+      command_id: crypto.randomUUID(),
+      goal: "Fresh run",
+      acceptance_criteria: ["Works"],
+      agent_limit: 2,
+      budget_tokens: 1000000,
+      provider: "codex",
+      checks: [["npm", "test"]],
+      policy: "integration",
+    });
+    expect(response.status).toBe(404);
+    expect(runtimeFetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+  it("creates a run without downloading oversized historical snapshots", async () => {
+    runtimeFetch.mockImplementation(async (url, init) => {
+      if (init?.method === "POST") return json(fixture);
+      if (new URL(String(url)).pathname.endsWith("/project"))
+        return json({ schema_version: 1, project: "/tmp/swarm-project" });
+      return json({
+        schema_version: 1,
+        runs: [{ ...fixture, messages: ["x".repeat(10_000_001)] }],
+      });
+    });
+    const response = await post("/runs", {
+      command_id: crypto.randomUUID(),
+      goal: "Fresh run",
+      acceptance_criteria: ["Works"],
+      agent_limit: 2,
+      budget_tokens: 1000000,
+      provider: "codex",
+      checks: [["npm", "test"]],
+      policy: "integration",
+    });
+    expect(response.status).toBe(202);
+    expect(
+      runtimeFetch.mock.calls.some(
+        ([url, init]) => new URL(String(url)).pathname.endsWith("/runs") && init?.method !== "POST",
+      ),
+    ).toBe(false);
+  });
   it("resolves the project once when listing multiple native runs", async () => {
     runtimeFetch.mockResolvedValueOnce(
-      json({ schema_version: 1, runs: [fixture, { ...fixture, id: "run-2" }] }),
+      json({ ...page, runs: [page.runs[0], { ...page.runs[0], id: "run-2" }] }),
     );
     const lookup = vi.spyOn(projectData, "findProjectById");
     const response = await app.request("/swarm/runs", { headers: viewer });
@@ -209,13 +273,13 @@ describe("Swarm control plane API", () => {
     const response = await app.request("/swarm/runs", { headers: viewer });
     expect(await response.json()).toMatchObject({ runs: [{ id: "run-1" }] });
     const [url, init] = runtimeFetch.mock.calls[0];
-    expect(String(url)).toBe("http://localhost:4010/v1/swarm/runs");
+    expect(String(url)).toBe("http://localhost:4010/v1/swarm/runs?view=summary&limit=20");
     expect(new Headers(init?.headers).get("authorization")).toBe(
       `Bearer ${config.SWARM_RUNTIME_TOKEN}`,
     );
     expect(await getSwarmSnapshot("run-1")).toMatchObject({
       run: { id: "run-1", project_id: "project-1", budget_tokens: 1000000, cost_usd: null },
-      tasks: [{ result: "Updated links" }],
+      tasks: expect.arrayContaining([expect.objectContaining({ result: "Updated links" })]),
     });
     config.SWARM_PROJECT_ID = "another-project";
     expect((await app.request("/swarm/runs/run-1", { headers: viewer })).status).toBe(404);

@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { SWARM_NOTIFICATION_EVENTS, type SwarmEvent } from "@aif/shared/browser";
+import {
+  SWARM_NOTIFICATION_EVENTS,
+  type SwarmEvent,
+  type SwarmRunsQuery,
+} from "@aif/shared/browser";
 import { api, ApiError } from "@/lib/api";
 import { SwarmEventBuffer, SwarmReplayGapError, swarmRetryDelay } from "@/lib/swarm";
 import { useToast } from "@/components/ui/toast";
@@ -13,10 +17,10 @@ export function useSwarmConnection() {
     retry: false,
   });
 }
-export function useSwarmRuns(enabled: boolean) {
+export function useSwarmRuns(enabled: boolean, query: Partial<SwarmRunsQuery> = {}) {
   return useQuery({
-    queryKey: ["swarm", "runs"],
-    queryFn: api.listSwarmRuns,
+    queryKey: ["swarm", "runs", query],
+    queryFn: () => api.listSwarmRuns(query),
     enabled,
     refetchInterval: 10_000,
     retry: false,

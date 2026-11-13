@@ -814,7 +814,8 @@ Optional server settings connect the Swarm tab to one separately managed Runtime
 server-only. The Runtime owner token (`AIF_SWARM_OWNER_TOKEN`, at least 32 characters)
 is the backend credential; default Runtime port is 4317. The returned Runtime project
 path must match the Handoff project root, including Docker mount paths. The URL/token
-binding must be correct before first creation because an empty Runtime list has no
-project identity. Use HTTPS remotely or local HTTP. Administrators are Swarm owners;
+binding is verified through `/v1/swarm/project` before creation, including for an
+empty Runtime. Deploy a Runtime with that identity endpoint and bounded
+`/v1/swarm/runs?view=summary` pages before this Handoff version. Use HTTPS remotely or local HTTP. Administrators are Swarm owners;
 named members are operators; other members are viewers. See [Swarm](swarm.md) for
 Docker addresses, permissions, reconnection behavior and the v1 contract fixture.

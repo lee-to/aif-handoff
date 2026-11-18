@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 const snapshot = JSON.parse(
   readFileSync(new URL("../../../docs/swarm-v1.snapshot.json", import.meta.url), "utf8"),
 );
+const longGoal = `${snapshot.run.goal} ${"Detailed implementation and verification requirements. ".repeat(12)}${"x".repeat(140)}`;
 
 for (const theme of ["light", "dark"] as const) {
   test(`Swarm control plane shows evidence and stale state in ${theme} theme`, async ({
@@ -86,6 +87,7 @@ for (const theme of ["light", "dark"] as const) {
             runs: [
               {
                 ...snapshot.run,
+                goal: longGoal,
                 ...(cursor ? { id: "older-run", goal: "Older documentation run" } : {}),
               },
             ],
@@ -118,6 +120,24 @@ for (const theme of ["light", "dark"] as const) {
     });
     await page.goto("/project/project-1");
     await page.getByRole("tab", { name: "Swarm", exact: true }).click();
+    const goalButton = page.getByRole("button", { name: longGoal, exact: true });
+    await expect(goalButton).toBeVisible();
+    const originalViewport = page.viewportSize()!;
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const fits = await goalButton.evaluate((button) => {
+        const box = button.getBoundingClientRect();
+        const card = button.parentElement!.parentElement!.getBoundingClientRect();
+        return (
+          box.left >= card.left - 1 &&
+          box.right <= card.right + 1 &&
+          button.scrollWidth <= button.clientWidth + 1 &&
+          button.scrollHeight <= button.clientHeight + 1
+        );
+      });
+      expect(fits, `Long goal must fit its button and card at ${width}px`).toBe(true);
+    }
+    await page.setViewportSize(originalViewport);
     await expect(page.getByText("Page 1", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Next page", exact: true }).click();
     await expect(page.getByText("Older documentation run", { exact: true })).toBeVisible();

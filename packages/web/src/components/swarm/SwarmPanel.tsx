@@ -135,7 +135,11 @@ export function SwarmPanel({ projectId }: { projectId: string }) {
       {visible.map((run) => (
         <Card key={run.id} className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <Button variant="ghost" onClick={() => setSelectedRunId(run.id)}>
+            <Button
+              variant="ghost"
+              className="h-auto min-w-0 max-w-full whitespace-normal text-left [overflow-wrap:anywhere]"
+              onClick={() => setSelectedRunId(run.id)}
+            >
               {run.goal}
             </Button>
             <Badge>{run.status}</Badge>
